@@ -15,7 +15,8 @@ references (`scene-writer/authoring-runs`, `scene-writer/craft-and-voice`,
 `scene-writer/research-and-sources`); load them with
 `get_reference(name="spindle/setup")` or the equivalent
 `bible://references/spindle/setup` URI. Existing craft names and skill names remain
-valid. Lookups match exact embedded names, with no runtime filesystem access.
+valid. Lookups match exact compiled names; the text behind a name is read at
+runtime when a content directory is configured (see **Runtime markdown** below).
 
 The build checks TOML shape/version, names, duplicates, dependency cycles and
 reference confinement (including canonicalized paths). The skills crate retains
@@ -63,3 +64,55 @@ inspect the diff, and run the test without the update setting. Never hand edit
 generated metadata. Normal workspace CI runs all these tests; negative fixtures
 cover unavailable selection, missing offload dependency, typo, operator dependency,
 missing marker, and a newly added unowned tool.
+
+## Runtime markdown (edit without rebuilding)
+
+Skill **text** is read from disk on every call, so optimizing a skill needs no
+rebuild and no restart. The compiled manifests still decide what exists:
+a file on disk can change the text of a known unit but cannot add a skill, a
+reference or a tool.
+
+| Read at runtime | Still compiled |
+| --- | --- |
+| `skills/<name>/SKILL.md` | `manifest.toml` (tools, profiles, dependencies) |
+| `skills/<name>/references/*.md` | `profiles.toml` composition |
+| `references/*.md` (craft references) | the unit inventory and every tool name |
+| | the compiled fallback copy |
+
+Point a running server at a checkout with two environment variables, both
+relative to the server's working directory:
+
+```bash
+# defaults are exactly the repo layout, so a dev run from the repo needs neither
+SPINDLE_SKILLS_DIR=/path/to/spindle/skills \
+SPINDLE_REFERENCES_DIR=/path/to/spindle/references \
+  ./target/release/spindle-mcp
+```
+
+A directory that is not there means the compiled copy; that is silent for the
+default and a `/health` warning when the variable named a path that does not
+exist. Everything reads through the same source, so an edit shows up on the
+next `get_skill`, `get_reference`, `bible://skills/<name>` or
+`bible://references/<name>`.
+
+If a file is missing or unreadable, Spindle serves the compiled copy, logs a
+`skill content:` warning, and lists it in `GET /health`:
+
+```json
+"skills": { "reads_from_disk": true, "skills_dir": "skills", "references_dir": "references",
+            "warnings": ["skills/scene-writer/SKILL.md: No such file or directory …"] }
+```
+
+The warning clears on the next successful read. Paths are confined to the
+configured directory: `..`, absolute paths and symlinks that leave the root are
+refused and reported the same way.
+
+The edit loop:
+
+1. edit `skills/<name>/SKILL.md` or a reference;
+2. call `get_skill` / `get_reference` (or read the `bible://` resource) again;
+3. `curl -s localhost:4321/health` shows the content mode and any fallback.
+
+Rebuild when a `manifest.toml`, `profiles.toml`, reference declaration or tool
+list changes, and keep the compiled fallback copy current: it is what ships when
+no directory is configured.

@@ -282,7 +282,7 @@ fn main() {
                 declared_paths.insert(reference_path.clone()),
                 "duplicate reference path"
             );
-            references.push_str(&format!("EmbeddedReference {{ name: {:?}, markdown: include_str!({:?}), tools: &{:?}, profiles: &{:?}, trigger: {:?} }},", format!("{}/{}", manifest.name, reference.name), reference_path, reference.tools, supported_profiles(&format!("{}/{}", manifest.name, reference.name), &reference.profiles, &profiles), reference.trigger));
+            references.push_str(&format!("EmbeddedReference {{ name: {:?}, markdown: include_str!({:?}), markdown_path: {:?}, tools: &{:?}, profiles: &{:?}, trigger: {:?} }},", format!("{}/{}", manifest.name, reference.name), reference_path, reference.path, reference.tools, supported_profiles(&format!("{}/{}", manifest.name, reference.name), &reference.profiles, &profiles), reference.trigger));
         }
         let mut actual_paths = BTreeSet::new();
         markdown_files(&path.join("references"), &mut actual_paths);

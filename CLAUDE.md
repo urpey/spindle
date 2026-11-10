@@ -5,7 +5,9 @@
 - Keep `spindle-core` free of MCP transport concerns.
 - Keep public tool/resource DTOs in `spindle-core`; MCP should parse, invoke
   services, and serialize responses.
-- Keep root `skills/` as the source of truth for embedded skill assets.
+- Keep root `skills/` as the source of truth for skill assets: markdown is read
+  from disk at runtime, while manifests and `profiles.toml` stay compiled (see
+  `docs/skill-manifests.md`).
 - Keep SQLite migrations under `crates/spindle-adapters/migrations/`.
 - Prefer explicit typed contracts over loose JSON blobs.
 - Branch and revision workflows are public MCP surface area; keep docs, tests,

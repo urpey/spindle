@@ -134,7 +134,7 @@ async fn nested_skill_references_load_through_tools_and_resources() {
         else {
             panic!("expected Markdown text")
         };
-        assert_eq!(text, reference.markdown);
+        assert_eq!(text, &reference.markdown);
         assert!(
             spindle_adapters::list_references()
                 .iter()

@@ -534,6 +534,7 @@ fn skill_load_budgets() {
     );
 
     let scene_writer_refs: Vec<&str> = scene_writer
+        .skill
         .manifest
         .references
         .iter()

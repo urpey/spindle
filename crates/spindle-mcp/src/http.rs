@@ -285,6 +285,18 @@ async fn health(State(state): State<HttpState>) -> impl IntoResponse {
         "read_only_endpoints": ["/health", "/model-routes", "/events"],
         "console": "/console"
     });
+    let skills = spindle_adapters::skill_content_status();
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert(
+            "skills".to_string(),
+            serde_json::json!({
+                "reads_from_disk": skills.reads_from_disk(),
+                "skills_dir": skills.skills_dir,
+                "references_dir": skills.references_dir,
+                "warnings": skills.warnings,
+            }),
+        );
+    }
     if let Ok(Some(config_error)) = state.service.agent_config_error()
         && let Some(obj) = body.as_object_mut()
     {
@@ -866,6 +878,39 @@ mod tests {
                 .expect("endpoints")
                 .len(),
             3
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn health_reports_where_skill_markdown_is_read_from() {
+        let app = app().await;
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/health")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("health json");
+
+        let skills = &body["skills"];
+        assert!(
+            skills.is_object(),
+            "health must report where skill markdown is read from: {body}"
+        );
+        assert!(
+            skills["reads_from_disk"].is_boolean(),
+            "health states the content mode: {skills}"
+        );
+        assert!(
+            skills["warnings"].is_array(),
+            "unreadable skill files must surface here: {skills}"
         );
     }
 

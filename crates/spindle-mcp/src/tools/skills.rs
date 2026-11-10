@@ -142,10 +142,8 @@ impl ToolRouter {
         units.into_iter().collect()
     }
 
-    pub(super) fn resolve_skill_output(
-        &self,
-        skill: spindle_adapters::EmbeddedSkill,
-    ) -> GetSkillOutput {
+    pub(super) fn resolve_skill_output(&self, text: spindle_adapters::SkillText) -> GetSkillOutput {
+        let skill = text.skill;
         let skills = spindle_adapters::list_skills();
         let required = skill_required_tools(&skill, skills, &mut std::collections::BTreeSet::new());
         let missing_capabilities: Vec<String> = required
@@ -157,7 +155,7 @@ impl ToolRouter {
         let required_profile = smallest_covering_profile(skill.name, &required);
         let available_units = self.covered_units();
         let markdown = if covered {
-            skill.markdown.to_string()
+            text.markdown
         } else {
             uncovered_unit_message(
                 skill.name,
@@ -179,22 +177,23 @@ impl ToolRouter {
 
     pub(super) fn resolve_reference_output(
         &self,
-        reference: spindle_adapters::EmbeddedReference,
+        text: spindle_adapters::ReferenceText,
     ) -> GetReferenceOutput {
-        let required = reference_required_tools(reference.name);
+        let reference = text.name;
+        let required = reference_required_tools(reference);
         let missing_capabilities: Vec<String> = required
             .iter()
             .filter(|tool| !self.has_tool(tool))
             .map(|tool| (*tool).to_string())
             .collect();
         let covered = missing_capabilities.is_empty();
-        let required_profile = smallest_covering_profile(reference.name, &required);
+        let required_profile = smallest_covering_profile(reference, &required);
         let available_units = self.covered_units();
         let markdown = if covered {
-            reference.markdown.to_string()
+            text.markdown
         } else {
             uncovered_unit_message(
-                reference.name,
+                reference,
                 self.tool_profile.as_deref().unwrap_or("default"),
                 required_profile.as_deref().unwrap_or("default"),
                 &missing_capabilities,
@@ -202,7 +201,7 @@ impl ToolRouter {
             )
         };
         GetReferenceOutput {
-            name: reference.name.to_string(),
+            name: reference.to_string(),
             markdown,
             covered,
             required_profile,
