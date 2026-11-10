@@ -2761,7 +2761,7 @@ impl SqliteSpindleService {
                     standards.push_str(&packet_markdown);
                     standards.push_str("\n\n");
                 }
-                standards.push_str(crate::guidance::standards_text());
+                standards.push_str(&crate::guidance::standards_text());
                 standards
             } else {
                 String::new()

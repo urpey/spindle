@@ -19,6 +19,8 @@ pub struct SkillManifest {
 pub struct EmbeddedReference {
     pub name: &'static str,
     pub markdown: &'static str,
+    /// Path relative to the owning skill directory, e.g. `references/setup.md`.
+    pub markdown_path: &'static str,
     pub tools: &'static [&'static str],
     pub profiles: &'static [&'static str],
     pub trigger: &'static str,

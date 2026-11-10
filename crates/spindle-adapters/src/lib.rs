@@ -16,8 +16,9 @@ pub mod workspace;
 
 pub use ai::{DraftRoutePreflight, DraftRoutePreflightProblem, ModelRouter};
 pub use guidance::{
-    EmbeddedReference, EmbeddedSkill, get_reference, get_skill, list_references, list_skills,
-    standards_text,
+    EmbeddedReference, EmbeddedSkill, ReferenceText, SkillContent, SkillSourceStatus, SkillText,
+    TextSource, configure as configure_skill_content, get_reference, get_skill, list_references,
+    list_skills, standards_text, status as skill_content_status,
 };
 pub use workspace::{
     Workspace, default_config_path, default_data_dir, find_workspace_root, resolve_workspace,

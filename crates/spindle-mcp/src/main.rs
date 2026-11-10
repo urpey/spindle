@@ -162,6 +162,22 @@ enum McpCommand {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
+    // Only markdown is read from disk per call, so a skill or reference edit
+    // needs no rebuild; the compiled manifests still decide which units and
+    // tools exist. A directory that is missing means the compiled copy.
+    spindle_adapters::configure_skill_content(spindle_adapters::SkillContent::from_env());
+    let skill_source = spindle_adapters::skill_content_status();
+    tracing::info!(
+        skills_dir = skill_source.skills_dir.as_deref().unwrap_or("(compiled)"),
+        references_dir = skill_source
+            .references_dir
+            .as_deref()
+            .unwrap_or("(compiled)"),
+        "skill markdown source"
+    );
+    for warning in &skill_source.warnings {
+        tracing::warn!("skill content: {warning}");
+    }
 
     // Fast path: subcommands (e.g. `spindle-mcp init-grok-skills`)
     let cli = McpCli::parse();
