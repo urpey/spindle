@@ -7,7 +7,7 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::routing::get;
+use axum::routing::{get, post};
 use serde::Deserialize;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::IntervalStream;
@@ -84,6 +84,8 @@ pub fn mcp_router_with_public_origins(
             "/console/api/settings",
             get(console_settings).post(save_console_settings),
         )
+        // Operator-only: send one short prompt through an agent.
+        .route("/console/api/settings/test", post(test_console_agent))
         .with_state(state)
         .nest_service("/mcp", mcp_service)
         // The console's own MCP endpoint, with its fixed tool set (see
@@ -371,6 +373,86 @@ async fn save_console_settings(
         )
             .into_response(),
     }
+}
+
+/// Body of a console agent test: which agent to probe, optionally which route.
+#[derive(serde::Deserialize)]
+struct ConsoleAgentTestRequest {
+    agent_id: String,
+    #[serde(default)]
+    route: Option<String>,
+    #[serde(default)]
+    rating: Option<String>,
+}
+
+/// Send one short prompt through the configured agent and report the outcome:
+/// latency, the adapter and model that answered, a short excerpt, or a readable
+/// reason. Bounded so a hanging provider cannot pin the request.
+async fn test_console_agent(
+    State(state): State<HttpState>,
+    axum::Json(request): axum::Json<ConsoleAgentTestRequest>,
+) -> axum::response::Response {
+    // An unset key variable is reported before any provider call happens.
+    if let Ok(settings) = state.service.console_settings()
+        && let Some(agent) = settings
+            .agents
+            .iter()
+            .find(|agent| agent.id == request.agent_id)
+        && let Some(env_var) = agent.api_key_env.as_deref()
+        && !agent.api_key_set
+    {
+        return Json(serde_json::json!({
+            "ok": false,
+            "latency_ms": 0,
+            "error": format!("the API key environment variable {env_var} is not set; no request was sent"),
+        }))
+        .into_response();
+    }
+    let started = std::time::Instant::now();
+    let input = spindle_core::models::TestAgentInput {
+        agent_id: request.agent_id,
+        route: request.route,
+        rating: request.rating,
+        ..Default::default()
+    };
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        state.service.test_agent(input),
+    )
+    .await;
+    let latency_ms = started.elapsed().as_millis() as u64;
+    match outcome {
+        Ok(Ok(output)) => Json(serde_json::json!({
+            "ok": true,
+            "latency_ms": latency_ms,
+            "route_name": output.route_name,
+            "adapter_kind": output.adapter_kind,
+            "model_name": output.model_name,
+            "truncated": output.truncated,
+            "excerpt": excerpt(&output.output, 400),
+        }))
+        .into_response(),
+        Ok(Err(error)) => Json(serde_json::json!({
+            "ok": false,
+            "latency_ms": latency_ms,
+            "error": format!("{error:#}"),
+        }))
+        .into_response(),
+        Err(_) => Json(serde_json::json!({
+            "ok": false,
+            "latency_ms": latency_ms,
+            "error": "no answer within 20 seconds",
+        }))
+        .into_response(),
+    }
+}
+
+fn excerpt(text: &str, limit: usize) -> String {
+    let mut short: String = text.chars().take(limit).collect();
+    if short.chars().count() < text.chars().count() {
+        short.push('…');
+    }
+    short
 }
 
 /// Read-only model configuration for the Settings tab. Never carries a key.
@@ -1207,6 +1289,119 @@ agent = "test-agent"
         assert!(body["current_revision"].is_string(), "{body}");
     }
 
+    async fn post_settings_test(app: &Router, body: serde_json::Value) -> serde_json::Value {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(Method::POST)
+                    .uri("/console/api/settings/test")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        serde_json::from_slice(&body).expect("test json")
+    }
+
+    #[test]
+    fn console_settings_test_button_is_wired_with_cost_copy() {
+        for expected in [
+            r#"data-test-agent=""#,
+            r#"fetch("/console/api/settings/test""#,
+            r#"settings.testOk"#,
+            r#"settings.testFail"#,
+        ] {
+            assert!(CONSOLE_HTML.contains(expected), "missing {expected}");
+        }
+        assert!(
+            CONSOLE_HTML.contains("settings.test.body"),
+            "the test tutorial explains the call spends provider credit"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn console_settings_test_reports_a_missing_api_key_without_calling_out() {
+        let temp = tempdir().expect("temp dir");
+        let config = temp.path().join("spindle.toml");
+        write_agent_config(
+            &config,
+            r#"
+[[agents]]
+id = "keyed-agent"
+name = "Keyed Agent"
+provider = "openai-compatible"
+endpoint = "http://127.0.0.1:9/v1"
+model = "test-model"
+api_key_env = "SPINDLE_TEST_API_KEY_UNSET"
+ratings = ["general"]
+
+[[routing]]
+route = "review"
+agent = "keyed-agent"
+"#,
+        );
+        let app = app_with_agent_config(&config).await;
+        let body = post_settings_test(&app, serde_json::json!({"agent_id": "keyed-agent"})).await;
+        assert_eq!(body["ok"], false, "{body}");
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("SPINDLE_TEST_API_KEY_UNSET")),
+            "the reason must name the unset variable: {body}"
+        );
+        assert!(body["latency_ms"].is_number(), "{body}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn console_settings_test_reports_an_unreachable_endpoint() {
+        let temp = tempdir().expect("temp dir");
+        let config = temp.path().join("spindle.toml");
+        write_agent_config(
+            &config,
+            r#"
+[[agents]]
+id = "offline-agent"
+name = "Offline Agent"
+provider = "openai-compatible"
+endpoint = "http://127.0.0.1:9/v1"
+model = "test-model"
+ratings = ["general"]
+
+[[routing]]
+route = "review"
+agent = "offline-agent"
+"#,
+        );
+        let app = app_with_agent_config(&config).await;
+        let body = post_settings_test(&app, serde_json::json!({"agent_id": "offline-agent"})).await;
+        assert_eq!(body["ok"], false, "{body}");
+        assert!(
+            body["latency_ms"].as_u64().unwrap_or(u64::MAX) < 20_000,
+            "the probe is bounded: {body}"
+        );
+        assert!(
+            !body["error"].as_str().unwrap_or_default().is_empty(),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn console_settings_test_stays_operator_only() {
+        assert!(
+            crate::tools::is_operator_only("test_agent"),
+            "the console probe reuses the operator capability, never a model tool"
+        );
+        assert!(
+            !CONSOLE_HTML.contains("test_agent"),
+            "the page talks to the console route, not the operator tool"
+        );
+    }
+
     #[test]
     fn console_settings_editor_is_wired_for_editing_and_saving() {
         for expected in [
@@ -1894,6 +2089,7 @@ agent = "test-agent"
             "help.plan.amendment",
             "help.settings.routes",
             "help.settings.agents",
+            "help.settings.test",
         ] {
             for suffix in ["title", "body"] {
                 let full = format!("{key}.{suffix}");

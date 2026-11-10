@@ -399,7 +399,8 @@
     </div>
     <div id="settings-fields"></div>
     <h3><span data-i18n="settings.agents"></span>
-      <button type="button" class="help" data-help="help-settings-agents" aria-expanded="false" aria-controls="help-settings-agents" data-i18n-aria-label="help.settings.agents.title">!</button></h3>
+      <button type="button" class="help" data-help="help-settings-agents" aria-expanded="false" aria-controls="help-settings-agents" data-i18n-aria-label="help.settings.agents.title">!</button>
+      <button type="button" class="help" data-help="help-settings-test" aria-expanded="false" aria-controls="help-settings-test" data-i18n-aria-label="help.settings.test.title">!</button></h3>
     <p class="muted" data-i18n="settings.agentsHelp"></p>
     <div class="card" id="settings-agents"></div>
     <div class="help-popover" id="help-settings-routes" role="dialog" aria-labelledby="help-settings-routes-title" hidden>
@@ -410,6 +411,11 @@
     <div class="help-popover" id="help-settings-agents" role="dialog" aria-labelledby="help-settings-agents-title" hidden>
       <h2 id="help-settings-agents-title" data-i18n="help.settings.agents.title"></h2>
       <p data-i18n="help.settings.agents.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+    <div class="help-popover" id="help-settings-test" role="dialog" aria-labelledby="help-settings-test-title" hidden>
+      <h2 id="help-settings-test-title" data-i18n="help.settings.test.title"></h2>
+      <p data-i18n="help.settings.test.body"></p>
       <button type="button" class="help-close" data-i18n="help.close"></button>
     </div>
   </section>
@@ -750,7 +756,13 @@
     "settings.documentMissing": "沒有載入設定檔，無法編輯；請先建立 .spindle/config.toml。",
     "settings.field": "欄位",
     "settings.cancel": "還原修改",
-    "common.working": "處理中…"
+    "common.working": "處理中…",
+    "settings.test": "測試",
+    "settings.testing": "測試中…",
+    "settings.testOk": "成功 · {latency} ms · {model}（{route}）",
+    "settings.testFail": "失敗 · {latency} ms · {error}",
+    "help.settings.test.title": "測試 agent 連線",
+    "help.settings.test.body": "送出一個很短的提示，走跟正式呼叫相同的 route 機制，回報延遲、回答的模型與一小段回覆。會消耗供應商額度；API key 變數沒設定時不會送出，直接告訴你原因。"
   },
   "en": {
     "app.title": "Spindle Operator Console",
@@ -1085,7 +1097,13 @@
     "settings.documentMissing": "No config file loaded, so there is nothing to edit; create .spindle/config.toml first.",
     "settings.field": "Field",
     "settings.cancel": "Revert changes",
-    "common.working": "Working…"
+    "common.working": "Working…",
+    "settings.test": "Test",
+    "settings.testing": "Testing…",
+    "settings.testOk": "OK · {latency} ms · {model} ({route})",
+    "settings.testFail": "Failed · {latency} ms · {error}",
+    "help.settings.test.title": "Testing an agent connection",
+    "help.settings.test.body": "Sends one short prompt through the same route machinery a real call uses and reports latency, the answering model and a short excerpt. It spends provider credit; when the API-key variable is unset nothing is sent and you get the reason instead."
   }
 }
 </script>
@@ -1800,6 +1818,8 @@ function renderSettingsDocument() {
           <label>${esc(t("settings.ratings"))}</label><input data-field="ratings" data-list="true" data-index="${index}" value="${esc((agent.ratings || []).join(", "))}">
           <label>${esc(t("settings.quality"))}</label><input data-field="quality_tier" data-index="${index}" value="${esc(agent.quality_tier || "")}">
           <label>${esc(t("settings.notes"))}</label><input data-field="notes" data-index="${index}" value="${esc(agent.notes || "")}" style="min-width:220px">
+          <button class="refresh" data-test-agent="${index}">${esc(t("settings.test"))}</button>
+          <span class="muted" id="agent-test-${index}"></span>
           <button class="refresh" data-remove-agent="${index}">${esc(t("settings.remove"))}</button>
         </div>
       </article>`).join("")
@@ -1872,6 +1892,27 @@ function updateRoutingFromSelect(event) {
 document.addEventListener("input", updateSettingsFromInputs);
 document.addEventListener("change", updateRoutingFromSelect);
 document.addEventListener("click", (event) => {
+  const testButton = event.target.closest("[data-test-agent]");
+  if (testButton && settingsState) {
+    const index = Number(testButton.dataset.testAgent);
+    const agent = (settingsState.document.agents || [])[index];
+    const out = $(`agent-test-${index}`);
+    if (!agent) return;
+    perform(testButton, async () => {
+      out.textContent = t("settings.testing");
+      const response = await fetch("/console/api/settings/test", {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({agent_id: agent.id}),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `Test failed (${response.status})`);
+      out.innerHTML = body.ok
+        ? `<span class="pill complete">${esc(tf("settings.testOk", {latency: body.latency_ms, model: body.model_name, route: body.route_name}))}</span> <span class="muted">${esc(body.excerpt || "")}</span>`
+        : `<span class="err">${esc(tf("settings.testFail", {latency: body.latency_ms, error: body.error}))}</span>`;
+    });
+    return;
+  }
   const remove = event.target.closest("[data-remove-agent]");
   if (!remove || !settingsState || !settingsState.document) return;
   const index = Number(remove.dataset.removeAgent);

@@ -132,17 +132,16 @@ impl SqliteSpindleService {
             .as_ref()
             .map(|loaded| loaded.agents.clone())
             .unwrap_or_default();
-        let document = loaded
-            .and_then(|loaded| {
-                let file = crate::agent_config::SpindleConfigFile {
-                    agents: loaded.agents,
-                    routing: loaded.routing,
-                    health_check: Some(loaded.health_check),
-                    route_import_to_explicit: loaded.route_import_to_explicit,
-                    anti_slop: loaded.anti_slop,
-                };
-                serde_json::to_value(file).ok()
-            });
+        let document = loaded.and_then(|loaded| {
+            let file = crate::agent_config::SpindleConfigFile {
+                agents: loaded.agents,
+                routing: loaded.routing,
+                health_check: Some(loaded.health_check),
+                route_import_to_explicit: loaded.route_import_to_explicit,
+                anti_slop: loaded.anti_slop,
+            };
+            serde_json::to_value(file).ok()
+        });
         let revision = agents
             .source_path
             .as_deref()

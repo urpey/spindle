@@ -616,7 +616,13 @@ stale `expected_revision` is refused with 409, the previous file is copied to
 `config.toml.bak` next to it, and the running server reloads the file — so a new
 agent or a reassigned route takes effect on the next call with no restart. The
 write is operator-only and stays on the console HTTP surface: no MCP tool exists
-for it, so model transports cannot change agent configuration. Each feature's `!` tutorial is
+for it, so model transports cannot change agent configuration.
+
+`POST /console/api/settings/test` probes one agent through the same route
+machinery a real call uses: it reports latency, the answering adapter and model,
+a short excerpt, or a readable reason. An unset API-key variable is reported
+before any provider call is made, and the whole probe is bounded to twenty
+seconds. Each feature's `!` tutorial is
 attached by delegation, so rows, groups and checkpoints rendered later open their
 own tutorial too.
 
