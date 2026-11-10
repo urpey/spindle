@@ -43,6 +43,15 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 
+[profile.dev]
+# Keep line numbers for backtraces but skip full debuginfo: much faster linking.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+# Dependencies rarely change; light optimization keeps tests and local runs quick.
+opt-level = 1
+debug = false
+
 [profile.release]
 codegen-units = 1
 lto = true
