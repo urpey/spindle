@@ -194,36 +194,100 @@
 </header>
 <main>
   <p id="feedback" role="status" aria-live="polite"></p>
-  <section id="pane-series" class="pane active" aria-label="Series">
+  <section id="pane-series" class="pane active" data-i18n-aria-label="nav.series" aria-label="Series">
     <div class="row">
-      <label for="series-project">Project</label><select id="series-project"></select>
-      <button class="refresh" id="series-refresh">Refresh series</button>
+      <label for="series-project" data-i18n="common.project"></label><select id="series-project"></select>
+      <button class="refresh" id="series-refresh" data-i18n="series.refresh"></button>
+      <button type="button" class="help" data-help="help-series-episodes" aria-expanded="false" aria-controls="help-series-episodes" data-i18n-aria-label="help.series.episodes.title">!</button>
     </div>
-    <h2>Episodes</h2>
-    <p class="muted">One chapter, one episode. Review the exact prose before recording a local release.</p>
+    <h2 data-i18n="series.title"></h2>
+    <p class="muted" data-i18n="series.intro"></p>
     <div id="series-out" aria-live="polite"></div>
     <div id="episode-detail"></div>
-    <details id="usage"><summary>Model usage</summary><div id="usage-out"></div></details>
-  </section>
-  <section id="pane-editorial" class="pane" aria-label="Editorial">
-    <div class="row">
-      <label for="editorial-project">Project</label><select id="editorial-project"></select>
-      <label for="editorial-filter">Show</label><select id="editorial-filter">
-        <option value="">Unresolved work</option><option value="open">New concerns</option>
-        <option value="accepted">Accepted revisions</option><option value="deferred">Deferred</option>
-        <option value="resolved">Resolved</option><option value="dismissed">Dismissed</option>
-      </select><button class="refresh" id="editorial-refresh">Refresh queue</button>
+    <details id="usage"><summary><span data-i18n="series.usage"></span>
+      <button type="button" class="help" data-help="help-series-usage" aria-expanded="false" aria-controls="help-series-usage" data-i18n-aria-label="help.series.usage.title">!</button>
+    </summary><div id="usage-out"></div></details>
+    <div class="help-popover" id="help-series-episodes" role="dialog" aria-labelledby="help-series-episodes-title" hidden>
+      <h2 id="help-series-episodes-title" data-i18n="help.series.episodes.title"></h2>
+      <p data-i18n="help.series.episodes.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
     </div>
-    <h2>Editorial work</h2>
-    <p class="muted">Reader concerns are suggestions. Accepted revisions guide future drafting until you resolve them.</p>
-    <div id="editorial-out" aria-live="polite"></div>
+    <div class="help-popover" id="help-series-release" role="dialog" aria-labelledby="help-series-release-title" hidden>
+      <h2 id="help-series-release-title" data-i18n="help.series.release.title"></h2>
+      <p data-i18n="help.series.release.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+    <div class="help-popover" id="help-series-review" role="dialog" aria-labelledby="help-series-review-title" hidden>
+      <h2 id="help-series-review-title" data-i18n="help.series.review.title"></h2>
+      <p data-i18n="help.series.review.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+    <div class="help-popover" id="help-series-usage" role="dialog" aria-labelledby="help-series-usage-title" hidden>
+      <h2 id="help-series-usage-title" data-i18n="help.series.usage.title"></h2>
+      <p data-i18n="help.series.usage.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
   </section>
-  <section id="pane-threads" class="pane" aria-label="Threads">
-    <div class="row"><label for="threads-project">Project</label><select id="threads-project"></select>
-      <button class="refresh" id="threads-refresh">Refresh threads</button></div>
-    <h2>Threads across the series</h2>
-    <p class="muted">Keep long promises visible while the next episode takes shape. Planned payoffs and recorded events are shown separately.</p>
+  <section id="pane-editorial" class="pane" data-i18n-aria-label="nav.editorial" aria-label="Editorial">
+    <div class="row">
+      <label for="editorial-project" data-i18n="common.project"></label><select id="editorial-project"></select>
+      <label for="editorial-filter" data-i18n="editorial.filterLabel"></label><select id="editorial-filter">
+        <option value="" data-i18n="editorial.filterAll"></option>
+        <option value="open" data-i18n="editorial.filterOpen"></option>
+        <option value="accepted" data-i18n="editorial.filterAccepted"></option>
+        <option value="deferred" data-i18n="editorial.filterDeferred"></option>
+        <option value="resolved" data-i18n="editorial.filterResolved"></option>
+        <option value="dismissed" data-i18n="editorial.filterDismissed"></option>
+      </select><button class="refresh" id="editorial-refresh" data-i18n="editorial.refresh"></button>
+      <button type="button" class="help" data-help="help-editorial-queue" aria-expanded="false" aria-controls="help-editorial-queue" data-i18n-aria-label="help.editorial.queue.title">!</button>
+    </div>
+    <h2><span data-i18n="editorial.title"></span>
+      <button type="button" class="help" data-help="help-editorial-decisions" aria-expanded="false" aria-controls="help-editorial-decisions" data-i18n-aria-label="help.editorial.decisions.title">!</button></h2>
+    <p class="muted" data-i18n="editorial.intro"></p>
+    <div id="editorial-out" aria-live="polite"></div>
+    <div class="help-popover" id="help-editorial-queue" role="dialog" aria-labelledby="help-editorial-queue-title" hidden>
+      <h2 id="help-editorial-queue-title" data-i18n="help.editorial.queue.title"></h2>
+      <p data-i18n="help.editorial.queue.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+    <div class="help-popover" id="help-editorial-decisions" role="dialog" aria-labelledby="help-editorial-decisions-title" hidden>
+      <h2 id="help-editorial-decisions-title" data-i18n="help.editorial.decisions.title"></h2>
+      <p data-i18n="help.editorial.decisions.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+  </section>
+  <section id="pane-threads" class="pane" data-i18n-aria-label="nav.threads" aria-label="Threads">
+    <div class="row"><label for="threads-project" data-i18n="common.project"></label><select id="threads-project"></select>
+      <button class="refresh" id="threads-refresh" data-i18n="threads.refresh"></button>
+      <button type="button" class="help" data-help="help-threads-payoffs" aria-expanded="false" aria-controls="help-threads-payoffs" data-i18n-aria-label="help.threads.payoffs.title">!</button></div>
+    <h2 data-i18n="threads.title"></h2>
+    <p class="muted" data-i18n="threads.intro"></p>
     <div id="threads-out" aria-live="polite"></div>
+    <div class="help-popover" id="help-threads-promises" role="dialog" aria-labelledby="help-threads-promises-title" hidden>
+      <h2 id="help-threads-promises-title" data-i18n="help.threads.promises.title"></h2>
+      <p data-i18n="help.threads.promises.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+    <div class="help-popover" id="help-threads-plotlines" role="dialog" aria-labelledby="help-threads-plotlines-title" hidden>
+      <h2 id="help-threads-plotlines-title" data-i18n="help.threads.plotLines.title"></h2>
+      <p data-i18n="help.threads.plotLines.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+    <div class="help-popover" id="help-threads-arcs" role="dialog" aria-labelledby="help-threads-arcs-title" hidden>
+      <h2 id="help-threads-arcs-title" data-i18n="help.threads.arcs.title"></h2>
+      <p data-i18n="help.threads.arcs.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+    <div class="help-popover" id="help-threads-motifs" role="dialog" aria-labelledby="help-threads-motifs-title" hidden>
+      <h2 id="help-threads-motifs-title" data-i18n="help.threads.motifs.title"></h2>
+      <p data-i18n="help.threads.motifs.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+    <div class="help-popover" id="help-threads-payoffs" role="dialog" aria-labelledby="help-threads-payoffs-title" hidden>
+      <h2 id="help-threads-payoffs-title" data-i18n="help.threads.payoffs.title"></h2>
+      <p data-i18n="help.threads.payoffs.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
   </section>
 
   <!-- ── Runs ─────────────────────────────────────────────────────────── -->
@@ -303,7 +367,148 @@
     "help.nav.runs": "章節與場景的進度格、檢查點狀態，以及即時事件時間軸。",
     "help.nav.manuscript": "編譯書稿；尚未寫成的場景會被標示出來。",
     "help.nav.canon": "已暫存的設定變更：讀證據，決定加入設定或拒絕。",
-    "help.nav.plan": "已暫存的大綱變更；已寫的章節保留原本的保護。"
+    "help.nav.plan": "已暫存的大綱變更；已寫的章節保留原本的保護。",
+    "common.project": "專案",
+    "common.pickProject": "請選擇專案。",
+    "common.loading": "載入中…",
+    "common.previous": "上一頁",
+    "common.next": "下一頁",
+    "common.bookChapter": "第 {book} 本，第 {chapter} 章",
+    "common.words": "{count} 字",
+    "common.revision": "第 {revision} 版",
+    "common.errorPrefix": "載入「{where}」失敗：{error}",
+    "series.refresh": "重新整理集數",
+    "series.title": "集數",
+    "series.intro": "一章一集。記錄本機版本前，先確認實際文字。",
+    "series.usage": "模型用量",
+    "series.loading": "正在載入集數…",
+    "series.emptyNoProject": "先用你的寫作代理建立專案，再重新整理頁面。",
+    "series.emptyNoEpisodes": "規劃第一章，開始建立集數佇列。",
+    "series.summary": "已發布 {released} 集 · 可發布 {ready} 集 · 已寫未發布 {draft} 集",
+    "series.noContiguousRelease": "尚無連續發布",
+    "series.colEpisode": "集",
+    "series.colManuscript": "書稿",
+    "series.colRelease": "發布",
+    "series.colActions": "本集操作",
+    "series.ready": "就緒",
+    "series.unreleased": "未發布",
+    "series.draftChanged": "草稿已變更",
+    "series.preview": "預覽發布",
+    "series.previewCorrection": "預覽修正",
+    "series.readerReview": "執行讀者審閱",
+    "series.readReleased": "讀取已發布版本",
+    "series.retryHint": "用上方的集數操作重試。若連線已過期，先重新整理頁面。",
+    "series.loadError": "集數詳情",
+    "release.previewTitle": "{title} · 發布預覽",
+    "release.previewBody": "{count} 字。這會在您的工作區留下一份完全相同的副本。",
+    "release.correctionNote": "修正說明",
+    "release.noteLabel": "發布備註（選填）",
+    "release.notePlaceholder": "這一版改了什麼？",
+    "release.recordCorrection": "記錄修正版本",
+    "release.recordRelease": "記錄本機版本",
+    "release.correctionRequired": "記錄新版本前，請先寫修正說明。",
+    "release.recorded": "已記錄本機版本第 {revision} 版，文字已保留。",
+    "release.preparing": "正在準備發布預覽…",
+    "release.loading": "正在載入已發布版本…",
+    "release.title": "{title} · 第 {revision} 版",
+    "release.releasedAt": "發布於 {at} · {count} 字",
+    "release.download": "下載 Markdown",
+    "release.previous": "讀取上一版",
+    "review.loading": "讀者正在用你設定的模型審閱這一集…",
+    "review.title": "讀者審閱 · {title}",
+    "review.cached": "先前的閱讀紀錄",
+    "review.fresh": "新的閱讀",
+    "review.unread": "{count} 個先前章節尚未審閱，這次閱讀有缺口。",
+    "review.stale": "已排除 {count} 筆過期閱讀。",
+    "review.openQuestions": "讀者提出的問題",
+    "review.openEditorial": "開啟編輯佇列",
+    "review.rerun": "重新審閱",
+    "usage.loading": "正在載入用量紀錄…",
+    "usage.summary": "{calls} 次呼叫 · 回報輸入 {input} token · 回報輸出 {output} token · {seconds} 秒",
+    "usage.note": "{unknown} 次呼叫沒有 token 用量；{unattributed} 次缺少專案關聯而未列入。token 總計只含回報值。",
+    "editorial.refresh": "重新整理佇列",
+    "editorial.title": "編輯工作",
+    "editorial.intro": "讀者顧慮只是建議。已接受的修訂會引導後續寫作，直到你標記解決。",
+    "editorial.filterLabel": "顯示",
+    "editorial.filterAll": "未處理的工作",
+    "editorial.filterOpen": "新顧慮",
+    "editorial.filterAccepted": "已接受的修訂",
+    "editorial.filterDeferred": "已延後",
+    "editorial.filterResolved": "已解決",
+    "editorial.filterDismissed": "已忽略",
+    "editorial.loading": "正在載入編輯工作…",
+    "editorial.emptyNoProject": "選擇專案以檢視它的編輯工作。",
+    "editorial.count": "這個檢視有 {count} 項",
+    "editorial.empty": "這個檢視沒有項目。從「連載」執行讀者審閱以收集顧慮。",
+    "editorial.itemTitle": "第 {book} 本，第 {chapter} 章",
+    "editorial.sourceChanged": "這個顧慮提出後來源已變更。決定前先讀目前的章節。",
+    "editorial.evidence": "章節證據與決定紀錄",
+    "editorial.evidenceNote": "這是章節層級的顧慮；場景參照指出當時讀了哪些場景。",
+    "editorial.inspect": "讀取目前章節",
+    "editorial.noteLabel": "修訂要求或決定備註",
+    "editorial.notePlaceholder": "應該改什麼，或這件事如何處理？",
+    "editorial.decision": "決定",
+    "editorial.decisionAccepted": "接受修訂",
+    "editorial.decisionDeferred": "延後",
+    "editorial.decisionResolved": "解決",
+    "editorial.decisionDismissed": "忽略",
+    "editorial.decisionOpen": "重新開啟",
+    "editorial.save": "儲存決定",
+    "editorial.saved": "編輯項目已更新為 {status}。",
+    "editorial.loadError": "編輯佇列",
+    "threads.title": "連載中的伏筆",
+    "threads.intro": "下一集成形時，讓長期伏筆保持可見。計畫中的回收與已記錄的事件分開顯示。",
+    "threads.refresh": "重新整理伏筆",
+    "threads.emptyNoProject": "選擇專案以追蹤它的伏筆。",
+    "threads.loading": "正在載入伏筆、支線、角色弧與意象…",
+    "threads.groupPromises": "伏筆",
+    "threads.groupPlotLines": "支線",
+    "threads.groupArcs": "角色弧",
+    "threads.groupMotifs": "意象",
+    "threads.planted": "埋設：{at}",
+    "threads.plannedPayoff": "計畫回收：{at}",
+    "threads.unscheduled": "未排定",
+    "threads.unknown": "未知",
+    "threads.history": "已記錄的狀態歷史",
+    "threads.historyEmpty": "沒有已記錄的狀態事件；目前狀態沒有確認的實際日期。",
+    "threads.actualUnknown": "實際日期未知",
+    "threads.correction": "修正",
+    "threads.empty": "這裡還沒有記錄任何線索。隨著連載成形，用你的寫作代理建立它們。",
+    "threads.errorLabel": "伏筆",
+    "status.open": "待處理",
+    "status.accepted": "已接受",
+    "status.deferred": "已延後",
+    "status.resolved": "已解決",
+    "status.dismissed": "已忽略",
+    "status.planted": "已埋設",
+    "status.paid_off": "已回收",
+    "status.reinforced": "已強化",
+    "status.abandoned": "已放棄",
+    "status.active": "進行中",
+    "status.dormant": "休眠中",
+    "status.completed": "已完成",
+    "help.series.episodes.title": "集數清單與就緒狀態",
+    "help.series.episodes.body": "每一列是一個章節對應的一集。書稿欄顯示字數與是否就緒；阻擋發布的顧慮會列在這裡。文字未就緒時，發布按鈕不能使用。",
+    "help.series.release.title": "發布預覽與本機版本",
+    "help.series.release.body": "「預覽發布」會顯示實際要發布的文字，並在本機工作區記錄一份完全相同的副本。發布後再修改就產生新的修正版本，舊版仍保留。",
+    "help.series.review.title": "AI 讀者審閱",
+    "help.series.review.body": "用你設定的模型當讀者讀這一集，回報投入程度、顧慮與問題。顧慮會進入編輯佇列，不會自動改稿。",
+    "help.series.usage.title": "模型用量",
+    "help.series.usage.body": "顯示這個專案最近的模型呼叫次數、回報的 token 數與耗時。沒有回報 token 的呼叫會另外標示，不會被當成 0。",
+    "help.editorial.queue.title": "佇列與篩選",
+    "help.editorial.queue.body": "這裡收集讀者審閱提出的顧慮。用「顯示」切換未處理、已接受、已延後、已解決與已忽略的工作。",
+    "help.editorial.decisions.title": "四種決定",
+    "help.editorial.decisions.body": "接受：把這個修訂當成後續寫作的指引，直到你標記解決。延後：先擱著。解決：問題已處理。忽略：不採取行動。每次決定都會記錄在該項目的歷史中。",
+    "help.threads.promises.title": "伏筆",
+    "help.threads.promises.body": "跨集埋下、尚未回收的承諾。每筆記錄埋設位置、目前狀態與狀態歷史。",
+    "help.threads.plotLines.title": "支線",
+    "help.threads.plotLines.body": "跨章節發展的劇情線，用來確認每條線都有推進，而不是開了就忘。",
+    "help.threads.arcs.title": "角色弧",
+    "help.threads.arcs.body": "角色從起始狀態到結束狀態的變化路徑，顯示這條弧是否真的走完。",
+    "help.threads.motifs.title": "意象",
+    "help.threads.motifs.body": "重複出現的意象與象徵。用來看它們的分佈與密度，避免同一個意象被過度使用。",
+    "help.threads.payoffs.title": "計畫回收與實際事件",
+    "help.threads.payoffs.body": "「計畫回收」是規劃中的位置,可能還沒發生；已記錄的事件才是真的寫進章節的狀態變化。兩者分開顯示，才不會把計畫當成事實。"
   },
   "en": {
     "app.title": "Spindle Operator Console",
@@ -327,7 +532,148 @@
     "help.nav.runs": "The chapter and scene grid with its statuses, checkpoint states, and the live timeline.",
     "help.nav.manuscript": "Compile a book; undrafted scenes are flagged.",
     "help.nav.canon": "Staged canon deltas: read the evidence, then ratify or reject.",
-    "help.nav.plan": "Staged plan amendments; drafted chapters keep their protection."
+    "help.nav.plan": "Staged plan amendments; drafted chapters keep their protection.",
+    "common.project": "Project",
+    "common.pickProject": "Pick a project.",
+    "common.loading": "Loading…",
+    "common.previous": "Previous",
+    "common.next": "Next",
+    "common.bookChapter": "Book {book}, chapter {chapter}",
+    "common.words": "{count} words",
+    "common.revision": "Revision {revision}",
+    "common.errorPrefix": "Failed to load {where}: {error}",
+    "series.refresh": "Refresh series",
+    "series.title": "Episodes",
+    "series.intro": "One chapter, one episode. Review the exact prose before recording a local release.",
+    "series.usage": "Model usage",
+    "series.loading": "Loading episodes…",
+    "series.emptyNoProject": "Create a project through your writing agent, then refresh the page.",
+    "series.emptyNoEpisodes": "Plan the first chapter to begin your episode backlog.",
+    "series.summary": "Released {released} · Ready to release {ready} · Drafted but unreleased {draft}",
+    "series.noContiguousRelease": "No contiguous release yet",
+    "series.colEpisode": "Episode",
+    "series.colManuscript": "Manuscript",
+    "series.colRelease": "Release",
+    "series.colActions": "Work on this episode",
+    "series.ready": "Ready",
+    "series.unreleased": "Unreleased",
+    "series.draftChanged": "Draft changed",
+    "series.preview": "Preview release",
+    "series.previewCorrection": "Preview correction",
+    "series.readerReview": "Run reader review",
+    "series.readReleased": "Read released version",
+    "series.retryHint": "Use an episode action above to retry. If the connection expired, refresh the page first.",
+    "series.loadError": "episode details",
+    "release.previewTitle": "{title} · release preview",
+    "release.previewBody": "{count} words. This records an exact copy in your local workspace.",
+    "release.correctionNote": "Correction note",
+    "release.noteLabel": "Release note (optional)",
+    "release.notePlaceholder": "What changed in this revision?",
+    "release.recordCorrection": "Record correction revision",
+    "release.recordRelease": "Record local release",
+    "release.correctionRequired": "Add a correction note before recording the new revision.",
+    "release.recorded": "Local release revision {revision} recorded. Its prose is preserved.",
+    "release.preparing": "Preparing the release preview…",
+    "release.loading": "Loading the released version…",
+    "release.title": "{title} · revision {revision}",
+    "release.releasedAt": "Released {at} · {count} words",
+    "release.download": "Download Markdown",
+    "release.previous": "Read previous revision",
+    "review.loading": "The reader is reviewing this episode with your configured model…",
+    "review.title": "Reader review · {title}",
+    "review.cached": "Previously saved reading",
+    "review.fresh": "New reading",
+    "review.unread": "{count} earlier chapters have not been reviewed. This reading has gaps.",
+    "review.stale": "{count} outdated readings were excluded.",
+    "review.openQuestions": "Open reader questions",
+    "review.openEditorial": "Open editorial queue",
+    "review.rerun": "Run a fresh review",
+    "usage.loading": "Loading recorded usage…",
+    "usage.summary": "{calls} calls · {input} reported input tokens · {output} reported output tokens · {seconds} seconds",
+    "usage.note": "{unknown} calls have unknown token usage. {unattributed} calls lack a project association and are excluded here. Token totals include only reported values.",
+    "editorial.refresh": "Refresh queue",
+    "editorial.title": "Editorial work",
+    "editorial.intro": "Reader concerns are suggestions. Accepted revisions guide future drafting until you resolve them.",
+    "editorial.filterLabel": "Show",
+    "editorial.filterAll": "Unresolved work",
+    "editorial.filterOpen": "New concerns",
+    "editorial.filterAccepted": "Accepted revisions",
+    "editorial.filterDeferred": "Deferred",
+    "editorial.filterResolved": "Resolved",
+    "editorial.filterDismissed": "Dismissed",
+    "editorial.loading": "Loading editorial work…",
+    "editorial.emptyNoProject": "Choose a project to review its editorial work.",
+    "editorial.count": "Items in this view: {count}",
+    "editorial.empty": "No items in this view. Run a reader review from Series to gather concerns.",
+    "editorial.itemTitle": "Book {book}, chapter {chapter}",
+    "editorial.sourceChanged": "The source has changed since this concern was raised. Read the current chapter before deciding.",
+    "editorial.evidence": "Chapter evidence and decision history",
+    "editorial.evidenceNote": "This is a chapter-level concern; scene references identify what was read.",
+    "editorial.inspect": "Read current chapter",
+    "editorial.noteLabel": "Revision request or decision note",
+    "editorial.notePlaceholder": "What should change, or how was this addressed?",
+    "editorial.decision": "Decision",
+    "editorial.decisionAccepted": "Accept revision",
+    "editorial.decisionDeferred": "Defer",
+    "editorial.decisionResolved": "Resolve",
+    "editorial.decisionDismissed": "Dismiss",
+    "editorial.decisionOpen": "Reopen",
+    "editorial.save": "Save decision",
+    "editorial.saved": "Editorial item {status}.",
+    "editorial.loadError": "editorial queue",
+    "threads.title": "Threads across the series",
+    "threads.intro": "Keep long promises visible while the next episode takes shape. Planned payoffs and recorded events are shown separately.",
+    "threads.refresh": "Refresh threads",
+    "threads.emptyNoProject": "Choose a project to follow its threads.",
+    "threads.loading": "Loading promises, plot lines, character arcs and motifs…",
+    "threads.groupPromises": "Promises",
+    "threads.groupPlotLines": "Plot lines",
+    "threads.groupArcs": "Character arcs",
+    "threads.groupMotifs": "Motifs",
+    "threads.planted": "Planted: {at}",
+    "threads.plannedPayoff": "Planned payoff: {at}",
+    "threads.unscheduled": "unscheduled",
+    "threads.unknown": "unknown",
+    "threads.history": "Recorded status history",
+    "threads.historyEmpty": "No recorded status events; the current status has no confirmed actual date.",
+    "threads.actualUnknown": "actual date unknown",
+    "threads.correction": "correction",
+    "threads.empty": "No threads recorded here yet. Build these with your writing agent as the series takes shape.",
+    "threads.errorLabel": "threads",
+    "status.open": "open",
+    "status.accepted": "accepted",
+    "status.deferred": "deferred",
+    "status.resolved": "resolved",
+    "status.dismissed": "dismissed",
+    "status.planted": "planted",
+    "status.paid_off": "paid off",
+    "status.reinforced": "reinforced",
+    "status.abandoned": "abandoned",
+    "status.active": "active",
+    "status.dormant": "dormant",
+    "status.completed": "completed",
+    "help.series.episodes.title": "Episode list and readiness",
+    "help.series.episodes.body": "Each row is one chapter's episode. The manuscript column shows words and whether the episode is ready; blocking concerns are listed here. You cannot record a release while the text is not ready.",
+    "help.series.release.title": "Release preview and local recording",
+    "help.series.release.body": "Preview shows exactly what would be released and records an identical copy in your local workspace. Editing after a release creates a correction revision; earlier revisions stay preserved.",
+    "help.series.review.title": "AI reader review",
+    "help.series.review.body": "Your configured model reads one episode as a reader and reports engagement, concerns and open questions. Concerns go to the editorial queue; the text is never edited automatically.",
+    "help.series.usage.title": "Model usage",
+    "help.series.usage.body": "Recent model calls for this project with reported tokens and elapsed time. Calls that reported no token usage are counted separately, never as zero.",
+    "help.editorial.queue.title": "The queue and its filter",
+    "help.editorial.queue.body": "Reader concerns collect here. Use Show to switch between unresolved work, accepted revisions, deferred, resolved and dismissed items.",
+    "help.editorial.decisions.title": "What each decision does",
+    "help.editorial.decisions.body": "Accept: this revision guides future drafting until you resolve it. Defer: leave it for later. Resolve: the concern is handled. Dismiss: no action. Every decision is recorded in the item's history.",
+    "help.threads.promises.title": "Promises",
+    "help.threads.promises.body": "Long threads planted across episodes and not yet paid off. Each entry records where it was planted, its current status and its status history.",
+    "help.threads.plotLines.title": "Plot lines",
+    "help.threads.plotLines.body": "Storylines that develop across chapters, so you can confirm each one is moving rather than opened and forgotten.",
+    "help.threads.arcs.title": "Character arcs",
+    "help.threads.arcs.body": "A character's path from starting state to ending state, so you can see whether the arc actually completes.",
+    "help.threads.motifs.title": "Motifs",
+    "help.threads.motifs.body": "Recurring images and symbols. Watch their spread and density so one motif is not overused.",
+    "help.threads.payoffs.title": "Planned payoff vs recorded event",
+    "help.threads.payoffs.body": "A planned payoff is a scheduled position that may not have happened yet; a recorded event is a status change that is actually written into a chapter. They are shown apart so a plan is never mistaken for a fact."
   }
 }
 </script>
@@ -348,13 +694,26 @@ const esc = (s) => String(s == null ? "" : s)
 const DEFAULT_LANG = "zh-TW";
 const LANG_KEY = "spindle.console.lang";
 const CATALOG = JSON.parse($("i18n-catalog").textContent);
-let lang = DEFAULT_LANG;
+let lang = DEFAULT_LANG, booted = false;
 function t(key) {
   const active = CATALOG[lang] || {};
   const fallback = CATALOG.en || {};
   if (Object.prototype.hasOwnProperty.call(active, key)) return active[key];
   if (Object.prototype.hasOwnProperty.call(fallback, key)) return fallback[key];
   return key;
+}
+function tf(key, params) {
+  return t(key).replace(/\{(\w+)\}/g, (_, name) => String(params[name] == null ? "" : params[name]));
+}
+// Data values arrive in English enums; show the catalog label when we have one
+// and fall back to the value itself so unknown data is never hidden.
+function statusLabel(value) {
+  const key = "status." + String(value == null ? "" : value).toLowerCase();
+  const active = CATALOG[lang] || {};
+  const fallback = CATALOG.en || {};
+  if (Object.prototype.hasOwnProperty.call(active, key)) return active[key];
+  if (Object.prototype.hasOwnProperty.call(fallback, key)) return fallback[key];
+  return value;
 }
 function storedLang() {
   try {
@@ -374,6 +733,11 @@ function applyLanguage() {
     node.setAttribute("aria-pressed", String(node.dataset.lang === lang));
   });
   document.title = t("app.title");
+  // Already-rendered dynamic content must follow the switch too.
+  if (booted) {
+    const render = paneRenderers[activePane];
+    if (render) render();
+  }
 }
 function setLanguage(next) {
   if (!CATALOG[next] || next === lang) return;
@@ -398,9 +762,17 @@ function closeHelp(returnFocus = true) {
   openHelp = null;
   if (returnFocus) trigger.focus();
 }
-document.querySelectorAll("[data-help]").forEach((trigger) => {
-  const popover = $(trigger.dataset.help);
-  trigger.addEventListener("click", () => {
+// Delegated, because tutorials are attached to rows and groups that render later.
+function helpButton(id, labelKey) {
+  return `<button type="button" class="help" data-help="${id}" aria-expanded="false" aria-controls="${id}" aria-label="${esc(t(labelKey))}">!</button>`;
+}
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-help]");
+  if (trigger) {
+    event.preventDefault();
+    event.stopPropagation();
+    const popover = $(trigger.dataset.help);
+    if (!popover) return;
     if (openHelp && openHelp.popover === popover) { closeHelp(); return; }
     closeHelp(false);
     popover.hidden = false;
@@ -408,17 +780,17 @@ document.querySelectorAll("[data-help]").forEach((trigger) => {
     openHelp = { trigger, popover };
     const close = popover.querySelector(".help-close");
     (close || popover).focus();
-  });
-  popover.querySelectorAll(".help-close").forEach((button) =>
-    button.addEventListener("click", () => closeHelp()));
-});
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && openHelp) closeHelp();
-});
-document.addEventListener("click", (event) => {
+    return;
+  }
   if (!openHelp) return;
   if (openHelp.popover.contains(event.target) || openHelp.trigger.contains(event.target)) return;
   closeHelp(false);
+});
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".help-close")) closeHelp();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && openHelp) closeHelp();
 });
 
 // GET a JSON endpoint; throws on non-2xx so callers render an error state.
@@ -512,12 +884,13 @@ function loading(id, text) {
 }
 
 function errorHTML(where, err) {
-  return `<div class="err" role="alert">Failed to load ${esc(where)}: ${esc(err && err.message || err)}</div>`;
+  const detail = (err && err.message) || err;
+  return `<div class="err" role="alert">${esc(tf("common.errorPrefix", {where, error: detail}))}</div>`;
 }
 
 function pill(text) {
   const cls = String(text || "").toLowerCase().replace(/[^a-z_]/g, "");
-  return `<span class="pill ${esc(cls)}">${esc(text)}</span>`;
+  return `<span class="pill ${esc(cls)}">${esc(statusLabel(text))}</span>`;
 }
 
 // ── Project pickers (shared) ─────────────────────────────────────────────
@@ -777,13 +1150,16 @@ async function renderPlan() {
 }
 
 const number = n => Number(n || 0).toLocaleString();
-const placement = p => p ? `Book ${p.book_number}, chapter ${p.chapter_number}` : "No contiguous release yet";
+const placement = p => p ? tf("common.bookChapter", {book: p.book_number, chapter: p.chapter_number}) : t("series.noContiguousRelease");
 const episodeArgs = (pid, episode) => ({project_id:pid, book_number:episode.book_number, chapter_number:episode.chapter_number});
 function pager(box, offset, next, render) {
   const row = document.createElement("div"); row.className = "actions";
-  for (const [label, target] of [["Previous", Math.max(0, offset - 30)], ["Next", next]]) {
+  for (const [label, target, disabled] of [
+    [t("common.previous"), Math.max(0, offset - 30), offset === 0],
+    [t("common.next"), next, next == null],
+  ]) {
     const b = document.createElement("button"); b.textContent = label;
-    b.disabled = label === "Previous" ? offset === 0 : next == null;
+    b.disabled = disabled;
     b.onclick = () => render(target); row.append(b);
   }
   box.append(row);
@@ -791,26 +1167,29 @@ function pager(box, offset, next, render) {
 async function renderSeries(offset = seriesOffset) {
   seriesOffset = offset;
   const pid = $("series-project").value, box = $("series-out");
-  if (!pid) { box.innerHTML = '<p class="empty">Create a project through your writing agent, then refresh the page.</p>'; return; }
-  const current = loading("series-out", "Loading episodes…");
+  if (!pid) { box.innerHTML = `<p class="empty">${esc(t("series.emptyNoProject"))}</p>`; return; }
+  const current = loading("series-out", t("series.loading"));
   try {
     const data = await callTool("get_series_status", {project_id:pid, offset, limit:30});
     if (!current()) return;
     box.innerHTML = `<p class="series-summary"><strong>${esc(placement(data.published_through))}</strong><br>
-      Released: ${number(data.released_episodes)} · Ready to release: ${number(data.ready_backlog)} · Drafted but unreleased: ${number(data.draft_backlog)}</p>`;
-    if (!data.episodes.length) box.innerHTML += '<p class="empty">Plan the first chapter to begin your episode backlog.</p>';
-    else box.innerHTML += `<div class="table-scroll"><table class="episode-table"><thead><tr><th>Episode</th><th>Manuscript</th><th>Release</th><th>Work on this episode</th></tr></thead><tbody>${data.episodes.map((e, i) => `<tr>
-      <td class="episode-title"><strong>${esc(e.title)}</strong><br><span class="muted">Book ${e.book_number}, chapter ${e.chapter_number}</span></td>
-      <td>${number(e.word_count)} words<br>${e.ready ? "Ready" : esc(e.blocking_issues.join("; "))}</td>
-      <td>${e.release_revision ? `Revision ${e.release_revision}${e.changed_since_release ? '<br><span class="note-text">Draft changed</span>' : ''}` : "Unreleased"}</td>
-      <td><div class="actions"><button data-preview="${i}">${e.latest_release_id ? "Preview correction" : "Preview release"}</button>
-      <button data-read="${i}">Run reader review</button>${e.latest_release_id ? `<button data-release="${i}">Read released version</button>` : ''}</div></td></tr>`).join("")}</tbody></table></div>`;
+      ${esc(tf("series.summary", {released: number(data.released_episodes), ready: number(data.ready_backlog), draft: number(data.draft_backlog)}))}</p>`;
+    if (!data.episodes.length) box.innerHTML += `<p class="empty">${esc(t("series.emptyNoEpisodes"))}</p>`;
+    else box.innerHTML += `<div class="table-scroll"><table class="episode-table"><thead><tr>
+      <th>${esc(t("series.colEpisode"))}</th><th>${esc(t("series.colManuscript"))}</th>
+      <th>${esc(t("series.colRelease"))} ${helpButton("help-series-release", "help.series.release.title")}</th>
+      <th>${esc(t("series.colActions"))} ${helpButton("help-series-review", "help.series.review.title")}</th></tr></thead><tbody>${data.episodes.map((e, i) => `<tr>
+      <td class="episode-title"><strong>${esc(e.title)}</strong><br><span class="muted">${esc(tf("common.bookChapter", {book: e.book_number, chapter: e.chapter_number}))}</span></td>
+      <td>${esc(tf("common.words", {count: number(e.word_count)}))}<br>${e.ready ? esc(t("series.ready")) : esc(e.blocking_issues.join("; "))}</td>
+      <td>${e.release_revision ? `${esc(tf("common.revision", {revision: e.release_revision}))}${e.changed_since_release ? `<br><span class="note-text">${esc(t("series.draftChanged"))}</span>` : ''}` : esc(t("series.unreleased"))}</td>
+      <td><div class="actions"><button data-preview="${i}">${esc(e.latest_release_id ? t("series.previewCorrection") : t("series.preview"))}</button>
+      <button data-read="${i}">${esc(t("series.readerReview"))}</button>${e.latest_release_id ? `<button data-release="${i}">${esc(t("series.readReleased"))}</button>` : ''}</div></td></tr>`).join("")}</tbody></table></div>`;
     box.querySelectorAll("[data-preview]").forEach(b => b.onclick = () => perform(b, () => previewEpisode(pid, data.episodes[Number(b.dataset.preview)])));
     box.querySelectorAll("[data-release]").forEach(b => b.onclick = () => perform(b, () => showRelease(data.episodes[Number(b.dataset.release)].latest_release_id, pid)));
     box.querySelectorAll("[data-read]").forEach(b => b.onclick = () => perform(b, () => reviewEpisode(pid, data.episodes[Number(b.dataset.read)])));
     pager(box, offset, data.next_offset, renderSeries);
     if ($("usage").open) renderUsage();
-  } catch (err) { if (current()) box.innerHTML = errorHTML("series; refresh to retry", err); }
+  } catch (err) { if (current()) box.innerHTML = errorHTML(t("nav.series"), err); }
 }
 async function loadEpisodeDetail(pid, message, tool, args) {
   const box = $("episode-detail"); box.className = "episode-detail";
@@ -821,7 +1200,7 @@ async function loadEpisodeDetail(pid, message, tool, args) {
     return active() ? result : null;
   } catch (error) {
     if (active()) {
-      box.innerHTML = errorHTML("episode details", error) + '<p>Use an episode action above to retry. If the connection expired, refresh the page first.</p>';
+      box.innerHTML = errorHTML(t("series.loadError"), error) + `<p>${esc(t("series.retryHint"))}</p>`;
       box.scrollIntoView({block:"start"});
     }
     return null;
@@ -829,32 +1208,33 @@ async function loadEpisodeDetail(pid, message, tool, args) {
 }
 async function previewEpisode(pid, episode) {
   const args = episodeArgs(pid, episode);
-  const preview = await loadEpisodeDetail(pid, "Preparing the release preview…", "prepare_episode_release", args);
+  const preview = await loadEpisodeDetail(pid, t("release.preparing"), "prepare_episode_release", args);
   if (!preview) return;
   const box = $("episode-detail"); box.className = "episode-detail";
-  box.innerHTML = `<h2>${esc(preview.snapshot.title)} · release preview</h2><p>${number(preview.snapshot.word_count)} words. This records an exact copy in your local workspace.</p>
+  box.innerHTML = `<h2>${esc(tf("release.previewTitle", {title: preview.snapshot.title}))}</h2>
+    <p>${esc(tf("release.previewBody", {count: number(preview.snapshot.word_count)}))}</p>
     ${preview.blocking_issues.length ? `<p class="note">${esc(preview.blocking_issues.join("; "))}</p>` : ''}
     <div class="preview-prose"><div class="md">${renderMarkdown(preview.snapshot.markdown)}</div></div>
-    <label for="release-note">${preview.previous_release_id ? "Correction note" : "Release note (optional)"}</label>
-    <textarea id="release-note" maxlength="2000" placeholder="What changed in this revision?"></textarea>
-    <div class="actions"><button id="record-release" class="primary" ${preview.blocking_issues.length ? 'disabled' : ''}>${preview.previous_release_id ? "Record correction revision" : "Record local release"}</button></div>`;
+    <label for="release-note">${esc(preview.previous_release_id ? t("release.correctionNote") : t("release.noteLabel"))}</label>
+    <textarea id="release-note" maxlength="2000" placeholder="${esc(t("release.notePlaceholder"))}"></textarea>
+    <div class="actions"><button id="record-release" class="primary" ${preview.blocking_issues.length ? 'disabled' : ''}>${esc(preview.previous_release_id ? t("release.recordCorrection") : t("release.recordRelease"))}</button></div>`;
   $("record-release").onclick = event => perform(event.currentTarget, async () => {
     const note = $("release-note").value.trim();
-    if (preview.previous_release_id && !note) throw new Error("Add a correction note before recording the new revision.");
+    if (preview.previous_release_id && !note) throw new Error(t("release.correctionRequired"));
     const release = await callTool("release_episode", {...args, expected_source_hash:preview.source_hash, previous_release_id:preview.previous_release_id, note:note || null});
-    feedback(`Local release revision ${release.revision} recorded. Its prose is preserved.`);
+    feedback(tf("release.recorded", {revision: release.revision}));
     await renderSeries(); await showRelease(release.id, pid);
   });
   box.scrollIntoView({block:"start"});
 }
 async function showRelease(id, pid) {
-  const release = await loadEpisodeDetail(pid, "Loading the released version…", "get_episode_release", {release_id:id});
+  const release = await loadEpisodeDetail(pid, t("release.loading"), "get_episode_release", {release_id:id});
   if (!release) return;
   const box = $("episode-detail"); box.className = "episode-detail";
-  box.innerHTML = `<h2>${esc(release.snapshot.title)} · revision ${release.revision}</h2>
-    <p class="muted">Released ${esc(release.released_at)} · ${number(release.snapshot.word_count)} words</p>
+  box.innerHTML = `<h2>${esc(tf("release.title", {title: release.snapshot.title, revision: release.revision}))}</h2>
+    <p class="muted">${esc(tf("release.releasedAt", {at: release.released_at, count: number(release.snapshot.word_count)}))}</p>
     ${release.note ? `<p>${esc(release.note)}</p>` : ''}
-    <div class="actions"><button id="download-release">Download Markdown</button>${release.previous_release_id ? '<button id="previous-release">Read previous revision</button>' : ''}</div>
+    <div class="actions"><button id="download-release">${esc(t("release.download"))}</button>${release.previous_release_id ? `<button id="previous-release">${esc(t("release.previous"))}</button>` : ''}</div>
     <div class="preview-prose"><div class="md">${renderMarkdown(release.snapshot.markdown)}</div></div>`;
   $("download-release").onclick = () => {
     const url = URL.createObjectURL(new Blob([release.snapshot.markdown], {type:"text/markdown;charset=utf-8"}));
@@ -865,18 +1245,19 @@ async function showRelease(id, pid) {
   box.scrollIntoView({block:"start"});
 }
 async function reviewEpisode(pid, episode, force = false) {
-  const result = await loadEpisodeDetail(pid, "The reader is reviewing this episode with your configured model…", "read_episode", {...episodeArgs(pid, episode), force});
+  const result = await loadEpisodeDetail(pid, t("review.loading"), "read_episode", {...episodeArgs(pid, episode), force});
   if (!result) return;
   const {outcome, memory} = result;
-  $("episode-detail").innerHTML = `<h2>Reader review · ${esc(episode.title)}</h2><p>${pill(outcome.engagement)} ${memory.cached ? 'Previously saved reading' : 'New reading'}</p>
+  $("episode-detail").innerHTML = `<h2>${esc(tf("review.title", {title: episode.title}))}</h2>
+    <p>${pill(outcome.engagement)} ${esc(memory.cached ? t("review.cached") : t("review.fresh"))}</p>
     ${outcome.skip_reason ? `<p class="note">${esc(outcome.skip_reason)}</p>` : ''}
     ${memory.persistence_note ? `<p class="note">${esc(memory.persistence_note)}</p>` : ''}
-    ${memory.unread_prior_chapters.length ? `<p class="note">${memory.unread_prior_chapters.length} earlier chapters have not been reviewed. This reading has gaps.</p>` : ''}
-    ${memory.stale_records_ignored ? `<p class="muted">${memory.stale_records_ignored} outdated readings were excluded.</p>` : ''}
+    ${memory.unread_prior_chapters.length ? `<p class="note">${esc(tf("review.unread", {count: memory.unread_prior_chapters.length}))}</p>` : ''}
+    ${memory.stale_records_ignored ? `<p class="muted">${esc(tf("review.stale", {count: memory.stale_records_ignored}))}</p>` : ''}
     <p>${esc(outcome.notes)}</p>
-    ${(outcome.open_questions || []).length ? `<h3>Open reader questions</h3><ul>${outcome.open_questions.map(q => `<li>${esc(q)}</li>`).join("")}</ul>` : ''}
+    ${(outcome.open_questions || []).length ? `<h3>${esc(t("review.openQuestions"))}</h3><ul>${outcome.open_questions.map(q => `<li>${esc(q)}</li>`).join("")}</ul>` : ''}
     <ul>${(outcome.concerns || []).map(c => `<li>${esc(c.description)}</li>`).join("")}</ul>
-    <div class="actions"><button id="open-editorial">Open editorial queue</button><button id="reread-episode">Run a fresh review</button></div>`;
+    <div class="actions"><button id="open-editorial">${esc(t("review.openEditorial"))}</button><button id="reread-episode">${esc(t("review.rerun"))}</button></div>`;
   $("open-editorial").onclick = () => switchPane("editorial");
   $("reread-episode").onclick = e => perform(e.currentTarget, () => reviewEpisode(pid, episode, true));
   $("episode-detail").scrollIntoView({block:"start"});
@@ -884,35 +1265,35 @@ async function reviewEpisode(pid, episode, force = false) {
 async function renderUsage() {
   const pid = $("series-project").value;
   if (!pid) return;
-  const current = loading("usage-out", "Loading recorded usage…");
+  const current = loading("usage-out", t("usage.loading"));
   try {
     const data = await callTool("get_model_usage", {project_id:pid, limit:10});
     if (!current()) return;
-    $("usage-out").innerHTML = `<p>${number(data.total_calls)} calls · ${number(data.known_input_tokens)} reported input tokens · ${number(data.known_output_tokens)} reported output tokens · ${(data.elapsed_ms/1000).toFixed(1)} seconds</p>
-      <p class="muted">${number(data.calls_with_unknown_tokens)} calls have unknown token usage. ${number(data.unattributed_calls)} calls lack a project association and are excluded here. Token totals include only reported values.</p>`;
-  } catch (err) { if (current()) $("usage-out").innerHTML = errorHTML("usage", err); }
+    $("usage-out").innerHTML = `<p>${esc(tf("usage.summary", {calls: number(data.total_calls), input: number(data.known_input_tokens), output: number(data.known_output_tokens), seconds: (data.elapsed_ms/1000).toFixed(1)}))}</p>
+      <p class="muted">${esc(tf("usage.note", {unknown: number(data.calls_with_unknown_tokens), unattributed: number(data.unattributed_calls)}))}</p>`;
+  } catch (err) { if (current()) $("usage-out").innerHTML = errorHTML(t("series.usage"), err); }
 }
 async function renderEditorial(offset = editorialOffset) {
   editorialOffset = offset;
   const pid = $("editorial-project").value, box = $("editorial-out");
-  if (!pid) { box.innerHTML = '<p class="empty">Choose a project to review its editorial work.</p>'; return; }
-  const current = loading("editorial-out", "Loading editorial work…");
+  if (!pid) { box.innerHTML = `<p class="empty">${esc(t("editorial.emptyNoProject"))}</p>`; return; }
+  const current = loading("editorial-out", t("editorial.loading"));
   try {
     const data = await callTool("get_editorial_queue", {project_id:pid, status:$("editorial-filter").value || null, offset, limit:30});
     if (!current()) return;
-    box.innerHTML = data.items.length ? `<p class="muted">Items in this view: ${number(data.total)}</p>` : '<p class="empty">No items in this view. Run a reader review from Series to gather concerns.</p>';
+    box.innerHTML = data.items.length ? `<p class="muted">${esc(tf("editorial.count", {count: number(data.total)}))}</p>` : `<p class="empty">${esc(t("editorial.empty"))}</p>`;
     box.innerHTML += data.items.map((v, i) => `<article class="work-item">
-      <h3>Book ${v.item.book_number}, chapter ${v.item.chapter_number} ${pill(v.item.status)}</h3>
+      <h3>${esc(tf("editorial.itemTitle", {book: v.item.book_number, chapter: v.item.chapter_number}))} ${pill(v.item.status)}</h3>
       <p>${esc(v.item.description)}</p>
-      ${v.source_changed ? '<p class="note">The source has changed since this concern was raised. Read the current chapter before deciding.</p>' : ''}
-      <details><summary>Chapter evidence and decision history</summary><p class="muted">This is a chapter-level concern; scene references identify what was read.</p><p>${esc(v.item.scene_ids.join(", "))}</p>
-      <ol>${v.item.decisions.map(d => `<li>${esc(d.status)} — ${esc(d.note)} <span class="muted">${esc(d.recorded_at)}</span></li>`).join("")}</ol></details>
-      <button data-inspect="${i}">Read current chapter</button><div id="editorial-prose-${i}"></div>
-      <label for="editorial-note-${i}">Revision request or decision note</label>
-      <textarea id="editorial-note-${i}" maxlength="2000" placeholder="What should change, or how was this addressed?"></textarea>
-      <div class="actions"><label for="editorial-status-${i}">Decision</label><select id="editorial-status-${i}">
-      ${[["accepted","Accept revision"],["deferred","Defer"],["resolved","Resolve"],["dismissed","Dismiss"],["open","Reopen"]].map(([value,label]) => `<option value="${value}">${label}</option>`).join("")}</select>
-      <button data-editorial="${i}">Save decision</button></div></article>`).join("");
+      ${v.source_changed ? `<p class="note">${esc(t("editorial.sourceChanged"))}</p>` : ''}
+      <details><summary>${esc(t("editorial.evidence"))}</summary><p class="muted">${esc(t("editorial.evidenceNote"))}</p><p>${esc(v.item.scene_ids.join(", "))}</p>
+      <ol>${v.item.decisions.map(d => `<li>${esc(statusLabel(d.status))} — ${esc(d.note)} <span class="muted">${esc(d.recorded_at)}</span></li>`).join("")}</ol></details>
+      <button data-inspect="${i}">${esc(t("editorial.inspect"))}</button><div id="editorial-prose-${i}"></div>
+      <label for="editorial-note-${i}">${esc(t("editorial.noteLabel"))}</label>
+      <textarea id="editorial-note-${i}" maxlength="2000" placeholder="${esc(t("editorial.notePlaceholder"))}"></textarea>
+      <div class="actions"><label for="editorial-status-${i}">${esc(t("editorial.decision"))}</label><select id="editorial-status-${i}">
+      ${[["accepted", t("editorial.decisionAccepted")],["deferred", t("editorial.decisionDeferred")],["resolved", t("editorial.decisionResolved")],["dismissed", t("editorial.decisionDismissed")],["open", t("editorial.decisionOpen")]].map(([value,label]) => `<option value="${value}">${esc(label)}</option>`).join("")}</select>
+      <button data-editorial="${i}">${esc(t("editorial.save"))}</button></div></article>`).join("");
     box.querySelectorAll("[data-inspect]").forEach(b => b.onclick = () => perform(b, async () => {
       const i = Number(b.dataset.inspect), v = data.items[i];
       const prose = await callTool("compile_manuscript", {project_id:pid, book_number:v.item.book_number, start_chapter:v.item.chapter_number, end_chapter:v.item.chapter_number, write_to_workspace:false});
@@ -921,27 +1302,34 @@ async function renderEditorial(offset = editorialOffset) {
     box.querySelectorAll("[data-editorial]").forEach(b => b.onclick = () => perform(b, async () => {
       const i = Number(b.dataset.editorial), v = data.items[i];
       const result = await callTool("decide_editorial_item", {project_id:pid, item_id:v.item.id, expected_revision:v.item.revision, reviewed_source_hash:v.current_source_hash, status:$("editorial-status-"+i).value, note:$("editorial-note-"+i).value});
-      feedback(`Editorial item ${result.status}.`); await renderEditorial();
+      feedback(tf("editorial.saved", {status: statusLabel(result.status)})); await renderEditorial();
     }));
     pager(box, offset, data.next_offset, renderEditorial);
-  } catch (err) { if (current()) box.innerHTML = errorHTML("editorial queue; refresh to retry", err); }
+  } catch (err) { if (current()) box.innerHTML = errorHTML(t("editorial.loadError"), err); }
 }
 async function renderThreads() {
   const pid = $("threads-project").value, box = $("threads-out");
-  if (!pid) { box.innerHTML = '<p class="empty">Choose a project to follow its threads.</p>'; return; }
-  const current = loading("threads-out", "Loading promises, plot lines and character arcs…");
-  const groups = [["narrative-promises","Promises"],["plot-lines","Plot lines"],["character-arcs","Character arcs"]];
+  if (!pid) { box.innerHTML = `<p class="empty">${esc(t("threads.emptyNoProject"))}</p>`; return; }
+  const current = loading("threads-out", t("threads.loading"));
+  const groups = [
+    ["narrative-promises", "help-threads-promises", "threads.groupPromises", "help.threads.promises.title"],
+    ["plot-lines", "help-threads-plotlines", "threads.groupPlotLines", "help.threads.plotLines.title"],
+    ["character-arcs", "help-threads-arcs", "threads.groupArcs", "help.threads.arcs.title"],
+    ["motifs", "help-threads-motifs", "threads.groupMotifs", "help.threads.motifs.title"],
+  ];
   const results = await Promise.allSettled(groups.map(([path]) => readResource(`bible://projects/${pid}/${path}`)));
   if (!current()) return;
-  box.innerHTML = groups.map(([path, title], i) => {
+  box.innerHTML = groups.map(([path, helpId, titleKey, helpKey], i) => {
     const result = results[i];
-    if (result.status === "rejected") return `<h3>${title}</h3>${errorHTML(title, result.reason)}`;
+    const title = t(titleKey);
+    if (result.status === "rejected") return `<h3>${esc(title)}</h3>${errorHTML(title, result.reason)}`;
     const rows = result.value;
-    return `<details open><summary>${title} (${rows.length})</summary>${rows.length ? rows.map(r => `<article class="work-item"><h3>${esc(r.name || r.description || r.arc_type)} ${pill(r.status)}</h3>
+    const heading = `<summary>${esc(title)} (${rows.length}) ${helpButton(helpId, helpKey)}</summary>`;
+    return `<details open>${heading}${rows.length ? rows.map(r => `<article class="work-item"><h3>${esc(r.name || r.description || r.arc_type)} ${pill(r.status)}</h3>
       <p>${esc(r.summary || r.thematic_purpose || "")}</p>
-      ${path === "narrative-promises" ? `<p class="muted">Planted: ${esc(r.planted_at ? placement(r.planted_at) : "unknown")} · Planned payoff: ${esc(r.planned_payoff ? placement(r.planned_payoff) : "unscheduled")}</p>
-        <details><summary>Recorded status history</summary>${(r.status_history || []).length ? `<ol>${r.status_history.map(e => `<li>${esc(e.status)} · ${esc(e.at ? placement(e.at) : "actual date unknown")}${e.note ? ` · ${esc(e.note)}` : ''}${e.replaces_event_id ? ' · correction' : ''}</li>`).join("")}</ol>` : '<p class="muted">No recorded status events; the current status has no confirmed actual date.</p>'}</details>` : ''}
-      ${path === "character-arcs" ? `<p>${esc(r.starting_state)} → ${esc(r.ending_state)}</p>` : ''}</article>`).join("") : '<p class="empty">No threads recorded here yet. Build these with your writing agent as the series takes shape.</p>'}</details>`;
+      ${path === "narrative-promises" ? `<p class="muted">${esc(tf("threads.planted", {at: r.planted_at ? placement(r.planted_at) : t("threads.unknown")}))} · ${esc(tf("threads.plannedPayoff", {at: r.planned_payoff ? placement(r.planned_payoff) : t("threads.unscheduled")}))}</p>
+        <details><summary>${esc(t("threads.history"))}</summary>${(r.status_history || []).length ? `<ol>${r.status_history.map(e => `<li>${esc(statusLabel(e.status))} · ${esc(e.at ? placement(e.at) : t("threads.actualUnknown"))}${e.note ? ` · ${esc(e.note)}` : ''}${e.replaces_event_id ? ` · ${esc(t("threads.correction"))}` : ''}</li>`).join("")}</ol>` : `<p class="muted">${esc(t("threads.historyEmpty"))}</p>`}</details>` : ''}
+      ${path === "character-arcs" ? `<p>${esc(r.starting_state)} → ${esc(r.ending_state)}</p>` : ''}</article>`).join("") : `<p class="empty">${esc(t("threads.empty"))}</p>`}</details>`;
   }).join("");
 }
 document.addEventListener("click", event => {
@@ -1003,6 +1391,7 @@ $("usage").addEventListener("toggle", () => { if ($("usage").open) renderUsage()
     loadProjects("plan-project", renderPlan),
   ]);
   renderSeries();
+  booted = true;
 })();
 </script>
 </body>

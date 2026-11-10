@@ -1368,6 +1368,219 @@ mod tests {
         }
     }
 
+    fn console_markup_without_catalog() -> String {
+        const OPEN: &str = r#"<script type="application/json" id="i18n-catalog">"#;
+        let start = CONSOLE_HTML.find(OPEN).expect("catalog open");
+        let close = CONSOLE_HTML[start..]
+            .find("</script>")
+            .expect("catalog close")
+            + start;
+        format!(
+            "{}{}",
+            &CONSOLE_HTML[..start],
+            &CONSOLE_HTML[close + "</script>".len()..]
+        )
+    }
+
+    /// Text nodes left after removing markup: anything with ASCII words is copy
+    /// that must have moved into the catalog.
+    fn visible_text(html: &str) -> String {
+        let mut text = String::new();
+        let mut in_tag = false;
+        for character in html.chars() {
+            match character {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                other if !in_tag => text.push(other),
+                _ => {}
+            }
+        }
+        text
+    }
+
+    fn pane_html(id: &str) -> &'static str {
+        let start_marker = format!(r#"<section id="pane-{id}""#);
+        let start = CONSOLE_HTML.find(&start_marker).expect("pane start");
+        let end = CONSOLE_HTML[start..].find("</section>").expect("pane end") + start;
+        &CONSOLE_HTML[start..end]
+    }
+
+    #[test]
+    fn console_three_panes_are_translated_in_both_languages() {
+        let catalog = console_i18n_catalog();
+        let prefixes = [
+            "series.",
+            "release.",
+            "review.",
+            "usage.",
+            "editorial.",
+            "threads.",
+            "status.",
+        ];
+        let mut checked = 0;
+        for key in catalog["zh-TW"]
+            .as_object()
+            .expect("zh-TW catalog")
+            .keys()
+            .filter(|key| prefixes.iter().any(|prefix| key.starts_with(prefix)))
+        {
+            checked += 1;
+            let zh = catalog_copy(&catalog, "zh-TW", key)
+                .unwrap_or_else(|| panic!("zh-TW copy for {key}"));
+            let en = catalog_copy(&catalog, "en", key)
+                .unwrap_or_else(|| panic!("English copy for {key}"));
+            assert!(!zh.trim().is_empty() && !en.trim().is_empty(), "{key}");
+            assert!(has_cjk(&zh), "zh-TW copy for {key} must be Chinese: {zh}");
+        }
+        assert!(
+            checked > 80,
+            "three panes need a real catalog, got {checked}"
+        );
+    }
+
+    #[test]
+    fn console_three_panes_do_not_ship_hardcoded_english_copy() {
+        // Every label, heading, option and summary in these panes renders from
+        // the catalog; the old English literals must be gone from the markup and
+        // the renderers (the English catalog itself keeps the wording).
+        let markup = console_markup_without_catalog();
+        for stale in [
+            "Refresh series",
+            "Refresh queue",
+            "Refresh threads",
+            "Episodes</h2>",
+            "Editorial work</h2>",
+            "Threads across the series",
+            "Loading episodes…",
+            "Loading editorial work…",
+            "Loading promises, plot lines and character arcs…",
+            "Preview release",
+            "Preview correction",
+            "Run reader review",
+            "Unreleased",
+            "Draft changed",
+            "Record local release",
+            "Record correction revision",
+            "Accept revision",
+            "Save decision",
+            "Read current chapter",
+            "Planned payoff:",
+            "Recorded status history",
+            "No threads recorded here yet",
+            "Items in this view",
+            "Local release revision",
+        ] {
+            assert!(
+                !markup.contains(stale),
+                "hardcoded English copy remains: {stale}"
+            );
+        }
+        for pane in ["series", "editorial", "threads"] {
+            let visible = visible_text(pane_html(pane));
+            assert!(
+                !visible
+                    .chars()
+                    .collect::<String>()
+                    .split(|c: char| !c.is_ascii_alphabetic())
+                    .any(|word| word.len() >= 3),
+                "{pane} pane ships English text nodes: {visible:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn console_each_three_pane_feature_has_a_bilingual_tutorial() {
+        let catalog = console_i18n_catalog();
+        for key in [
+            "help.series.episodes",
+            "help.series.release",
+            "help.series.review",
+            "help.series.usage",
+            "help.editorial.queue",
+            "help.editorial.decisions",
+            "help.threads.promises",
+            "help.threads.plotLines",
+            "help.threads.arcs",
+            "help.threads.motifs",
+            "help.threads.payoffs",
+        ] {
+            for suffix in ["title", "body"] {
+                let full = format!("{key}.{suffix}");
+                let zh = catalog_copy(&catalog, "zh-TW", &full)
+                    .unwrap_or_else(|| panic!("zh-TW copy for {full}"));
+                let en = catalog_copy(&catalog, "en", &full)
+                    .unwrap_or_else(|| panic!("English copy for {full}"));
+                assert!(has_cjk(&zh), "{full} must be Chinese");
+                assert!(!en.trim().is_empty(), "{full}");
+            }
+            let id = format!(
+                "help-{}",
+                key.trim_start_matches("help.")
+                    .to_lowercase()
+                    .replace('.', "-")
+            );
+            assert!(
+                CONSOLE_HTML.contains(&format!(r#"data-help="{id}""#))
+                    || CONSOLE_HTML.contains(&format!(r#"helpButton("{id}""#))
+                    || CONSOLE_HTML.contains(&format!(r#""{id}""#)),
+                "{key} needs a help trigger"
+            );
+            assert!(
+                CONSOLE_HTML.contains(&format!(r#"<div class="help-popover" id="{id}" role="dialog" aria-labelledby="{id}-title" hidden>"#)),
+                "{key} needs its tutorial dialog"
+            );
+        }
+    }
+
+    #[test]
+    fn console_dynamic_copy_uses_real_catalog_keys() {
+        let catalog = console_i18n_catalog();
+        let lookup = regex::Regex::new(r#"[^A-Za-z0-9_](?:t|tf)\("([^"]+)""#).expect("regex");
+        let tutorial = regex::Regex::new(r#"helpButton\("[^"]+",\s*"([^"]+)""#).expect("regex");
+        let mut keys: Vec<String> = lookup
+            .captures_iter(CONSOLE_HTML)
+            .chain(tutorial.captures_iter(CONSOLE_HTML))
+            .map(|capture| capture[1].to_string())
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert!(
+            keys.len() > 40,
+            "expected many catalog lookups, got {}",
+            keys.len()
+        );
+        for key in keys {
+            for lang in ["zh-TW", "en"] {
+                assert!(
+                    catalog_copy(&catalog, lang, &key).is_some(),
+                    "{lang} catalog is missing {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn console_threads_shows_motifs() {
+        let catalog = console_i18n_catalog();
+        assert!(catalog_copy(&catalog, "zh-TW", "threads.groupMotifs").is_some());
+        assert!(
+            CONSOLE_HTML.contains(r#"["motifs", "help-threads-motifs""#),
+            "the Threads pane must read the motifs resource"
+        );
+    }
+
+    #[test]
+    fn console_language_switch_re_renders_dynamic_content() {
+        assert!(
+            CONSOLE_HTML.contains("paneRenderers[activePane]"),
+            "a language switch re-renders the active pane, not only static markup"
+        );
+        assert!(
+            CONSOLE_HTML.contains("booted = true"),
+            "boot marks first paint"
+        );
+    }
+
     #[test]
     fn console_help_notice_explains_every_tab_in_both_languages() {
         let catalog = console_i18n_catalog();
