@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -206,6 +206,14 @@ pub fn default_config_candidates() -> Vec<PathBuf> {
         paths.push(home_dir.join(".spindle").join("config.toml"));
     }
     paths
+}
+
+/// Content hash of a config file, used to detect stale console writes.
+pub fn config_revision(path: &Path) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("failed to read agent config {}", path.display()))?;
+    Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
 
 pub fn resolve_config_path(explicit: Option<&str>) -> anyhow::Result<Option<PathBuf>> {

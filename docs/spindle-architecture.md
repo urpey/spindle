@@ -603,8 +603,12 @@ status, promise state) are shown through catalog labels that fall back to the ra
 value, so an unknown state is displayed rather than hidden. Switching language
 re-renders the active pane, so already-rendered rows follow the switch.
 
-All seven panes render from that catalog, as do the shared feedback line and the
-generic load errors; no pane keeps hard-coded copy. Each feature's `!` tutorial is
+All eight panes render from that catalog, as do the shared feedback line and the
+generic load errors; no pane keeps hard-coded copy. The Settings pane reads
+`GET /console/api/settings`, which returns the loaded config path and revision,
+each agent's API-key variable name with a set/unset flag (never a key value), the
+resolved routes, and the features each route powers; routes on the built-in local
+stand-in are marked "no model connected". Each feature's `!` tutorial is
 attached by delegation, so rows, groups and checkpoints rendered later open their
 own tutorial too.
 

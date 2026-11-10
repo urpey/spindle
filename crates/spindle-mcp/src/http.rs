@@ -79,6 +79,8 @@ pub fn mcp_router_with_public_origins(
         .route("/console/api/manuscript", get(console_manuscript))
         .route("/console/api/canon_deltas", get(console_canon_deltas))
         .route("/console/api/plan_amendments", get(console_plan_amendments))
+        // Read-only: which model routes and agents the running server loaded.
+        .route("/console/api/settings", get(console_settings))
         .with_state(state)
         .nest_service("/mcp", mcp_service)
         // The console's own MCP endpoint, with its fixed tool set (see
@@ -306,6 +308,18 @@ async fn health(State(state): State<HttpState>) -> impl IntoResponse {
         );
     }
     Json(body)
+}
+
+/// Read-only model configuration for the Settings tab. Never carries a key.
+async fn console_settings(State(state): State<HttpState>) -> impl IntoResponse {
+    match state.service.console_settings() {
+        Ok(settings) => Json(settings).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("settings unavailable: {error:#}"),
+        )
+            .into_response(),
+    }
 }
 
 async fn model_routes(State(state): State<HttpState>) -> impl IntoResponse {
@@ -881,6 +895,118 @@ mod tests {
         );
     }
 
+    async fn app_with_agent_config(path: &std::path::Path) -> Router {
+        let temp = tempdir().expect("temp dir");
+        let db = SqlitePool::open(&temp.path().join("http.db"))
+            .await
+            .expect("db init");
+        let data_dir = temp.keep();
+        let router = ModelRouter::default();
+        let _ = router.configure(Some(path.to_str().expect("utf-8 path")));
+        let service = SpindleService::new(Repository::with_model_router(db, data_dir, router));
+        mcp_router(service, CancellationToken::new())
+    }
+
+    fn write_agent_config(path: &std::path::Path, body: &str) {
+        std::fs::write(path, body).expect("write config");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn console_settings_lists_routes_without_leaking_keys() {
+        let temp = tempdir().expect("temp dir");
+        let config = temp.path().join("spindle.toml");
+        write_agent_config(
+            &config,
+            r#"
+[[agents]]
+id = "test-agent"
+name = "Test Agent"
+provider = "openai-compatible"
+endpoint = "http://127.0.0.1:9/v1"
+model = "test-model"
+api_key_env = "SPINDLE_TEST_API_KEY"
+ratings = ["general"]
+notes = "operator note"
+
+[[routing]]
+route = "review"
+agent = "test-agent"
+"#,
+        );
+        let app = app_with_agent_config(&config).await;
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/console/api/settings")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("settings json");
+
+        assert_eq!(body["source_path"], config.to_str().unwrap());
+        assert!(
+            body["revision"].is_string(),
+            "a stale-write guard needs a revision"
+        );
+        let agent = &body["agents"][0];
+        assert_eq!(agent["id"], "test-agent");
+        assert_eq!(agent["api_key_env"], "SPINDLE_TEST_API_KEY");
+        assert_eq!(agent["api_key_set"], false, "the variable is not set here");
+        assert!(
+            !body.to_string().contains("sk-"),
+            "no key value may reach the browser: {body}"
+        );
+        let review = body["routes"]
+            .as_array()
+            .expect("routes")
+            .iter()
+            .find(|route| route["route_name"] == "review")
+            .expect("review route");
+        assert_eq!(review["agent_id"], "test-agent");
+        assert_eq!(review["is_local_stand_in"], false);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn console_settings_show_a_broken_config_error() {
+        let temp = tempdir().expect("temp dir");
+        let config = temp.path().join("broken.toml");
+        write_agent_config(&config, "this is not toml = = =");
+        let app = app_with_agent_config(&config).await;
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/console/api/settings")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("settings json");
+        assert!(
+            body["config_error"].is_string(),
+            "a broken config file must surface its error: {body}"
+        );
+    }
+
+    #[test]
+    fn console_settings_read_is_not_an_mcp_tool() {
+        assert!(
+            !crate::tools::static_tool_names()
+                .iter()
+                .any(|name| name.contains("settings") || name.contains("console_")),
+            "the settings read stays a console-only HTTP route"
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn health_reports_where_skill_markdown_is_read_from() {
         let app = app().await;
@@ -1249,7 +1375,7 @@ mod tests {
         text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
     }
 
-    const CONSOLE_PANES: [&str; 7] = [
+    const CONSOLE_PANES: [&str; 8] = [
         "series",
         "editorial",
         "threads",
@@ -1257,6 +1383,7 @@ mod tests {
         "manuscript",
         "canon",
         "plan",
+        "settings",
     ];
 
     #[test]
@@ -1532,6 +1659,8 @@ mod tests {
             "help.manuscript.compile",
             "help.canon.staged",
             "help.plan.amendment",
+            "help.settings.routes",
+            "help.settings.agents",
         ] {
             for suffix in ["title", "body"] {
                 let full = format!("{key}.{suffix}");
