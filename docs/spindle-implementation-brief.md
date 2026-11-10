@@ -235,7 +235,14 @@ for lightweight monitoring.
   (ADR 0002).
 - `/console` serves a single embedded operator page. Localhost-only
   `GET /console/api/*` endpoints remain read-only; series, reader review,
-  release and author-decision actions use the guarded MCP tools at `/mcp`.
+  release and author-decision actions use the guarded MCP tools through the
+  console's own `/console/mcp` endpoint. It exposes only the tools the page
+  calls and ignores `SPINDLE_TOOL_PROFILE`; model clients keep using `/mcp`.
+- Browser requests (any request carrying `Origin`) must come from the exact
+  loopback authority being served. `SPINDLE_HTTP_ALLOWED_ORIGINS` adds exact
+  `https://host[:port]` origins, comma-separated, for a tunnel that terminates
+  TLS and authenticates users (for example Cloudflare Tunnel + Access). Spindle
+  has no auth of its own; keep the listener on loopback and the tunnel gate on.
 
 ## Current cleanup direction
 

@@ -158,12 +158,16 @@ mod catalog;
 use catalog::*;
 mod profiles;
 #[cfg(test)]
+pub(crate) use profiles::CONSOLE_TOOLS;
+#[cfg(test)]
 pub(crate) use profiles::OPERATOR_ONLY_TOOLS;
 pub(crate) use profiles::is_operator_only;
 #[cfg(test)]
 pub(crate) use profiles::profile_names;
 use profiles::*;
-pub(crate) use profiles::{print_profiles, profile_has_tool, profile_help, validate_tool_profile};
+pub(crate) use profiles::{
+    CONSOLE_PROFILE, print_profiles, profile_has_tool, profile_help, validate_tool_profile,
+};
 mod authoring;
 use authoring::*;
 mod session;

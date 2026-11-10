@@ -78,3 +78,9 @@ and a secondary over a full primary, including a denied mutation with no databas
 change. The isolated live probe checks every profile, CLI metadata/help, and
 unknown-name rejection before data access. The inherited stalled-child test
 observes the real child/workspace from the parent, avoiding child-marker races.
+
+The HTTP operator console is the one exception: it talks to `/console/mcp`,
+which always exposes the fixed console tool set (`CONSOLE_TOOLS` in
+`crates/spindle-mcp/src/tools/profiles.rs`) regardless of `SPINDLE_TOOL_PROFILE`.
+That internal `console` profile is not selectable at startup. Model clients on
+`/mcp` see only their configured profile.

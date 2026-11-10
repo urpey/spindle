@@ -431,6 +431,22 @@ context as your own terminal. Ratify staged deltas/amendments with
 `decide_canon_deltas` / `decide_plan_amendments` from that terminal; console
 actions arrive in v2.
 
+**Remote access through a tunnel.** Keep `SPINDLE_HTTP_ADDR` on loopback and
+point the tunnel at it, then list the tunnel's public origin so the browser
+check accepts it. Leave the tunnel's authentication (for example Cloudflare
+Access) on: Spindle does not authenticate users.
+
+```bash
+SPINDLE_HTTP_ADDR=127.0.0.1:4321 \
+SPINDLE_HTTP_ALLOWED_ORIGINS=https://spindle.example.com \
+  ./target/release/spindle-mcp
+# cloudflared ingress: hostname spindle.example.com -> http://127.0.0.1:4321
+```
+
+Entries must be exact `https://host[:port]` origins (no path, no wildcard);
+an invalid entry stops startup. `SPINDLE_HTTP_ALLOW_NONLOOPBACK` is not needed
+for this and does not affect the origin check.
+
 **v2 roadmap.** Actions (ratify/reject deltas and amendments, resolve blocked
 checkpoints) via the `POST /mcp` transport, the thread board (promises ×
 chapters, arcs, plot lines, motif density — deferred until a promise/arc list
