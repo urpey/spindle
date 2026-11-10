@@ -208,6 +208,94 @@ pub fn default_config_candidates() -> Vec<PathBuf> {
     paths
 }
 
+/// One field the console editor can point at, so the browser can mark inputs.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ConfigFieldError {
+    /// Dotted path such as `agents[2].endpoint` or `routing[0].agent`.
+    pub field: String,
+    pub message: String,
+}
+
+/// Structural checks the console editor can pin to a field. The full parser
+/// still runs after this: this only adds location, it never replaces validation.
+pub fn config_field_errors(config: &SpindleConfigFile) -> Vec<ConfigFieldError> {
+    let mut errors = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (index, agent) in config.agents.iter().enumerate() {
+        let field = |name: &str| format!("agents[{index}].{name}");
+        if agent.id.trim().is_empty() {
+            errors.push(ConfigFieldError {
+                field: field("id"),
+                message: "agent id cannot be empty".into(),
+            });
+        } else if !seen.insert(agent.id.clone()) {
+            errors.push(ConfigFieldError {
+                field: field("id"),
+                message: format!("duplicate agent id: {}", agent.id),
+            });
+        }
+        if agent.name.trim().is_empty() {
+            errors.push(ConfigFieldError {
+                field: field("name"),
+                message: "agent name cannot be empty".into(),
+            });
+        }
+        if agent.provider.trim().is_empty() {
+            errors.push(ConfigFieldError {
+                field: field("provider"),
+                message: "provider cannot be empty".into(),
+            });
+        }
+        if agent.endpoint.trim().is_empty() {
+            errors.push(ConfigFieldError {
+                field: field("endpoint"),
+                message: "endpoint cannot be empty".into(),
+            });
+        }
+        if agent.model.trim().is_empty() {
+            errors.push(ConfigFieldError {
+                field: field("model"),
+                message: "model cannot be empty".into(),
+            });
+        }
+    }
+    for (index, rule) in config.routing.iter().enumerate() {
+        if rule.route.trim().is_empty() {
+            errors.push(ConfigFieldError {
+                field: format!("routing[{index}].route"),
+                message: "route cannot be empty".into(),
+            });
+        }
+        if !seen.contains(&rule.agent) {
+            errors.push(ConfigFieldError {
+                field: format!("routing[{index}].agent"),
+                message: format!("unknown agent id: {}", rule.agent),
+            });
+        }
+        if let Some(fallback) = rule.fallback.as_deref()
+            && !seen.contains(fallback)
+        {
+            errors.push(ConfigFieldError {
+                field: format!("routing[{index}].fallback"),
+                message: format!("unknown fallback agent id: {fallback}"),
+            });
+        }
+    }
+    errors
+}
+
+/// Parse and validate config text with the same rules startup uses.
+pub fn parse_config_text(text: &str) -> anyhow::Result<SpindleConfigFile> {
+    let config: SpindleConfigFile = toml::from_str(text).context("failed to parse config")?;
+    validate_config(&config)?;
+    Ok(config)
+}
+
+/// Render a config document back to TOML.
+pub fn render_config_text(config: &SpindleConfigFile) -> anyhow::Result<String> {
+    toml::to_string_pretty(config).context("failed to render config")
+}
+
 /// Content hash of a config file, used to detect stale console writes.
 pub fn config_revision(path: &Path) -> anyhow::Result<String> {
     use sha2::{Digest, Sha256};

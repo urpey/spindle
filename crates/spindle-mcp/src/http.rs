@@ -80,7 +80,10 @@ pub fn mcp_router_with_public_origins(
         .route("/console/api/canon_deltas", get(console_canon_deltas))
         .route("/console/api/plan_amendments", get(console_plan_amendments))
         // Read-only: which model routes and agents the running server loaded.
-        .route("/console/api/settings", get(console_settings))
+        .route(
+            "/console/api/settings",
+            get(console_settings).post(save_console_settings),
+        )
         .with_state(state)
         .nest_service("/mcp", mcp_service)
         // The console's own MCP endpoint, with its fixed tool set (see
@@ -308,6 +311,66 @@ async fn health(State(state): State<HttpState>) -> impl IntoResponse {
         );
     }
     Json(body)
+}
+
+/// Body of a console settings save: the whole document plus the revision the
+/// operator was looking at, so a concurrent edit is refused instead of lost.
+#[derive(serde::Deserialize)]
+struct ConsoleSettingsWriteRequest {
+    #[serde(default)]
+    expected_revision: Option<String>,
+    config: serde_json::Value,
+}
+
+/// Validate the whole configuration with the startup parser, then back up,
+/// write and reload the running server. Operator-only: console HTTP, no MCP tool.
+async fn save_console_settings(
+    State(state): State<HttpState>,
+    axum::Json(request): axum::Json<ConsoleSettingsWriteRequest>,
+) -> axum::response::Response {
+    use spindle_adapters::agent_config::{SpindleConfigFile, config_field_errors};
+    let config: SpindleConfigFile = match serde_json::from_value(request.config) {
+        Ok(config) => config,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"errors": [{"field": "config", "message": error.to_string()}]})),
+            )
+                .into_response();
+        }
+    };
+    let field_errors = config_field_errors(&config);
+    if !field_errors.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"errors": field_errors})),
+        )
+            .into_response();
+    }
+    match state
+        .service
+        .save_console_settings(request.expected_revision.as_deref(), &config)
+    {
+        Ok(output) => Json(output).into_response(),
+        Err(spindle_adapters::sqlite::service::ConsoleSettingsWriteError::Stale { current }) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "settings changed on disk since this view was loaded; reload before saving",
+                "current_revision": current,
+            })),
+        )
+            .into_response(),
+        Err(spindle_adapters::sqlite::service::ConsoleSettingsWriteError::Invalid(message)) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"errors": [{"field": "config", "message": message}]})),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 /// Read-only model configuration for the Settings tab. Never carries a key.
@@ -994,6 +1057,176 @@ agent = "test-agent"
         assert!(
             body["config_error"].is_string(),
             "a broken config file must surface its error: {body}"
+        );
+    }
+
+    fn settings_save_body(document: &serde_json::Value, revision: Option<&str>) -> String {
+        serde_json::json!({"expected_revision": revision, "config": document}).to_string()
+    }
+
+    async fn get_settings(app: &Router) -> serde_json::Value {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/console/api/settings")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        serde_json::from_slice(&body).expect("settings json")
+    }
+
+    async fn post_settings(
+        app: &Router,
+        body: String,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(Method::POST)
+                    .uri("/console/api/settings")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        (
+            status,
+            serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    const SETTINGS_CONFIG: &str = r#"
+[[agents]]
+id = "test-agent"
+name = "Test Agent"
+provider = "openai-compatible"
+endpoint = "http://127.0.0.1:9/v1"
+model = "test-model"
+api_key_env = "SPINDLE_TEST_API_KEY"
+ratings = ["general"]
+
+[[routing]]
+route = "review"
+agent = "test-agent"
+"#;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn console_settings_save_backs_up_writes_and_reloads() {
+        let temp = tempdir().expect("temp dir");
+        let config = temp.path().join("spindle.toml");
+        write_agent_config(&config, SETTINGS_CONFIG);
+        let app = app_with_agent_config(&config).await;
+
+        let before = get_settings(&app).await;
+        let revision = before["revision"].as_str().expect("revision").to_string();
+        let mut document = before["document"].clone();
+        document["agents"][0]["model"] = serde_json::json!("live-model");
+        document["routing"][0]["route"] = serde_json::json!("draft");
+
+        let (status, saved) =
+            post_settings(&app, settings_save_body(&document, Some(&revision))).await;
+        assert_eq!(status.as_u16(), 200, "{saved}");
+        let backup = saved["backup_path"].as_str().expect("backup path");
+        assert!(
+            std::path::Path::new(backup).exists(),
+            "previous config kept"
+        );
+        assert_ne!(
+            saved["revision"].as_str().unwrap(),
+            revision,
+            "new revision"
+        );
+
+        // The running server reloaded: the next read reflects the edit with no restart.
+        let after = get_settings(&app).await;
+        assert_eq!(after["agents"][0]["model"], "live-model");
+        assert!(
+            after["routes"]
+                .as_array()
+                .expect("routes")
+                .iter()
+                .any(|route| route["route_name"] == "draft" && route["agent_id"] == "test-agent")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn console_settings_save_rejects_invalid_fields_and_leaves_the_file() {
+        let temp = tempdir().expect("temp dir");
+        let config = temp.path().join("spindle.toml");
+        write_agent_config(&config, SETTINGS_CONFIG);
+        let app = app_with_agent_config(&config).await;
+
+        let before = get_settings(&app).await;
+        let revision = before["revision"].as_str().expect("revision").to_string();
+        let disk = std::fs::read_to_string(&config).expect("config bytes");
+        let mut document = before["document"].clone();
+        document["agents"][0]["endpoint"] = serde_json::json!("");
+
+        let (status, body) =
+            post_settings(&app, settings_save_body(&document, Some(&revision))).await;
+        assert_eq!(status.as_u16(), 400, "{body}");
+        assert!(
+            body["errors"]
+                .as_array()
+                .expect("errors")
+                .iter()
+                .any(|error| error["field"] == "agents[0].endpoint"),
+            "{body}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&config).expect("config bytes"),
+            disk
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn console_settings_save_refuses_a_stale_view() {
+        let temp = tempdir().expect("temp dir");
+        let config = temp.path().join("spindle.toml");
+        write_agent_config(&config, SETTINGS_CONFIG);
+        let app = app_with_agent_config(&config).await;
+        let before = get_settings(&app).await;
+        let mut document = before["document"].clone();
+        document["agents"][0]["model"] = serde_json::json!("stale-model");
+
+        let (status, body) =
+            post_settings(&app, settings_save_body(&document, Some("deadbeef"))).await;
+        assert_eq!(status.as_u16(), 409, "{body}");
+        assert!(body["current_revision"].is_string(), "{body}");
+    }
+
+    #[test]
+    fn console_settings_editor_is_wired_for_editing_and_saving() {
+        for expected in [
+            r#"data-field="endpoint""#,
+            r#"data-field="api_key_env""#,
+            r#"data-route-index=""#,
+            r#"expected_revision: settingsState.revision"#,
+            r#"id="settings-save""#,
+            r#"id="settings-add-agent""#,
+        ] {
+            assert!(
+                CONSOLE_HTML.contains(expected),
+                "settings editor is missing {expected}"
+            );
+        }
+        assert!(
+            CONSOLE_HTML.contains(r#"method: "POST""#)
+                && CONSOLE_HTML.contains(r#"uri: "/console/api/settings""#)
+                || CONSOLE_HTML.contains(r#"fetch("/console/api/settings""#),
+            "the editor saves through the console settings route"
         );
     }
 

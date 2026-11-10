@@ -391,6 +391,13 @@
     <div id="settings-error"></div>
     <h3 data-i18n="settings.routes"></h3>
     <div class="card" id="settings-routes"></div>
+    <div class="row" style="margin-top:12px">
+      <button id="settings-save" class="primary" data-i18n="settings.save"></button>
+      <button id="settings-reload" class="refresh" data-i18n="settings.reload"></button>
+      <button id="settings-add-agent" class="refresh" data-i18n="settings.addAgent"></button>
+      <span class="muted" id="settings-status"></span>
+    </div>
+    <div id="settings-fields"></div>
     <h3><span data-i18n="settings.agents"></span>
       <button type="button" class="help" data-help="help-settings-agents" aria-expanded="false" aria-controls="help-settings-agents" data-i18n-aria-label="help.settings.agents.title">!</button></h3>
     <p class="muted" data-i18n="settings.agentsHelp"></p>
@@ -727,7 +734,23 @@
     "help.settings.agents.title": "agent 與 API key",
     "help.settings.agents.body": "agent 記錄供應商、端點、模型與評級。API key 只以環境變數名稱顯示，並標示該變數在伺服器行程裡是否已設定；主控台永遠不會收到或顯示金鑰本身。",
     "status.missing_api_key": "缺少 API key",
-    "status.unreachable": "連不上"
+    "status.unreachable": "連不上",
+    "settings.save": "儲存並套用",
+    "settings.reload": "重新載入",
+    "settings.addAgent": "新增 agent",
+    "settings.remove": "刪除",
+    "settings.saved": "已儲存並重新載入：{agents} 個 agent、{rules} 條 route。備份：{backup}",
+    "settings.stale": "設定檔在你讀取後已被修改，請重新載入再儲存。",
+    "settings.invalid": "儲存失敗，請修正標示的欄位。",
+    "settings.defaultAgent": "（內建預設）",
+    "settings.editing": "編輯中：未儲存的變更",
+    "settings.dirty": "有未儲存的變更",
+    "settings.clean": "沒有未儲存的變更",
+    "settings.routeAgent": "綁定 agent",
+    "settings.documentMissing": "沒有載入設定檔，無法編輯；請先建立 .spindle/config.toml。",
+    "settings.field": "欄位",
+    "settings.cancel": "還原修改",
+    "common.working": "處理中…"
   },
   "en": {
     "app.title": "Spindle Operator Console",
@@ -1046,7 +1069,23 @@
     "help.settings.agents.title": "Agents and API keys",
     "help.settings.agents.body": "An agent records the provider, endpoint, model and ratings. The API key is shown only as its environment variable name with a set/unset flag; the console never receives or displays the key itself.",
     "status.missing_api_key": "missing API key",
-    "status.unreachable": "unreachable"
+    "status.unreachable": "unreachable",
+    "settings.save": "Save and apply",
+    "settings.reload": "Reload",
+    "settings.addAgent": "Add agent",
+    "settings.remove": "Remove",
+    "settings.saved": "Saved and reloaded: {agents} agents, {rules} routes. Backup: {backup}",
+    "settings.stale": "The config file changed since you loaded it; reload before saving.",
+    "settings.invalid": "Save failed; fix the marked fields.",
+    "settings.defaultAgent": "(built-in default)",
+    "settings.editing": "Editing: unsaved changes",
+    "settings.dirty": "Unsaved changes",
+    "settings.clean": "No unsaved changes",
+    "settings.routeAgent": "Bound agent",
+    "settings.documentMissing": "No config file loaded, so there is nothing to edit; create .spindle/config.toml first.",
+    "settings.field": "Field",
+    "settings.cancel": "Revert changes",
+    "common.working": "Working…"
   }
 }
 </script>
@@ -1242,7 +1281,7 @@ function feedback(message, error = false) {
 async function perform(button, work) {
   if (button.disabled) return;
   const label = button.textContent;
-  button.disabled = true; button.textContent = "Working…";
+  button.disabled = true; button.textContent = t("common.working");
   try { await work(); }
   catch (error) { feedback(error.message || String(error), true); }
   finally { button.disabled = false; button.textContent = label; }
@@ -1721,8 +1760,55 @@ document.addEventListener("click", event => {
 });
 
 // ── Settings pane ────────────────────────────────────────────────────────
-async function renderSettings() {
+// The document is the config file itself, so a save round-trips fields the
+// read-only summary never shows. Edits are local until Save.
+let settingsState = null, settingsDirty = false;
+
+function settingsStatusText() {
+  const node = $("settings-status");
+  if (node) node.textContent = settingsDirty ? t("settings.dirty") : t("settings.clean");
+}
+
+function renderSettingsDocument() {
   const routesBox = $("settings-routes"), agentsBox = $("settings-agents");
+  const state = settingsState;
+  const routes = state.routes || [], agents = state.document.agents || [];
+  const agentIds = agents.map((agent) => agent.id).filter(Boolean);
+  routesBox.innerHTML = routes.length
+    ? `<div class="table-scroll"><table><thead><tr>
+        <th>${esc(t("settings.route"))}</th><th>${esc(t("settings.routeAgent"))}</th><th>${esc(t("settings.adapter"))}</th>
+        <th>${esc(t("settings.model"))}</th><th>${esc(t("settings.features"))}</th></tr></thead><tbody>${routes.map((route, index) => `<tr>
+        <td><strong>${esc(route.route_name)}</strong>${route.rating ? `<br><span class="muted">${esc(route.rating)}</span>` : ""}</td>
+        <td><select data-route-index="${index}"><option value="">${esc(t("settings.defaultAgent"))}</option>${agentIds.map((id) => `<option value="${esc(id)}"${route.agent_id === id ? " selected" : ""}>${esc(id)}</option>`).join("")}</select></td>
+        <td>${esc(route.adapter_kind)}${route.is_local_stand_in ? `<br><span class="pill blocked">${esc(t("settings.localBadge"))}</span>` : ""}</td>
+        <td>${esc(route.model_name)}</td>
+        <td>${(route.features || []).map((key) => esc(t(key))).join("、") || `<span class="muted">—</span>`}</td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">${esc(t("settings.emptyRoutes"))}</div>`;
+  agentsBox.innerHTML = agents.length
+    ? agents.map((agent, index) => `<article class="work-item">
+        <div class="row">
+          <label>${esc(t("settings.agentId"))}</label><input data-field="id" data-index="${index}" value="${esc(agent.id || "")}">
+          <label>${esc(t("settings.agentName"))}</label><input data-field="name" data-index="${index}" value="${esc(agent.name || "")}">
+          <label>${esc(t("settings.provider"))}</label><input data-field="provider" data-index="${index}" value="${esc(agent.provider || "")}">
+        </div>
+        <div class="row">
+          <label>${esc(t("settings.endpoint"))}</label><input data-field="endpoint" data-index="${index}" value="${esc(agent.endpoint || "")}" style="min-width:260px">
+          <label>${esc(t("settings.model"))}</label><input data-field="model" data-index="${index}" value="${esc(agent.model || "")}">
+          <label>${esc(t("settings.apiKeyEnv"))}</label><input data-field="api_key_env" data-index="${index}" value="${esc(agent.api_key_env || "")}">
+        </div>
+        <div class="row">
+          <label>${esc(t("settings.ratings"))}</label><input data-field="ratings" data-list="true" data-index="${index}" value="${esc((agent.ratings || []).join(", "))}">
+          <label>${esc(t("settings.quality"))}</label><input data-field="quality_tier" data-index="${index}" value="${esc(agent.quality_tier || "")}">
+          <label>${esc(t("settings.notes"))}</label><input data-field="notes" data-index="${index}" value="${esc(agent.notes || "")}" style="min-width:220px">
+          <button class="refresh" data-remove-agent="${index}">${esc(t("settings.remove"))}</button>
+        </div>
+      </article>`).join("")
+    : `<div class="empty">${esc(t("settings.emptyAgents"))}</div>`;
+  settingsStatusText();
+}
+
+async function renderSettings() {
+  const routesBox = $("settings-routes");
   const current = loading("settings-routes", t("settings.loading"));
   let data;
   try {
@@ -1732,31 +1818,71 @@ async function renderSettings() {
     return;
   }
   if (!current()) return;
+  settingsState = data;
+  settingsDirty = false;
   $("settings-config-path").textContent = data.source_path
     ? tf("settings.configPath", {path: data.source_path})
     : t("settings.noConfig");
   $("settings-error").innerHTML = data.config_error
     ? `<div class="note">${esc(data.config_error)}</div>` : "";
-  const routes = data.routes || [], agents = data.agents || [];
-  routesBox.innerHTML = routes.length
-    ? `<div class="table-scroll"><table><thead><tr>
-        <th>${esc(t("settings.route"))}</th><th>${esc(t("settings.agent"))}</th><th>${esc(t("settings.adapter"))}</th>
-        <th>${esc(t("settings.model"))}</th><th>${esc(t("settings.features"))}</th></tr></thead><tbody>${routes.map((route) => `<tr>
-        <td><strong>${esc(route.route_name)}</strong>${route.rating ? `<br><span class="muted">${esc(route.rating)}</span>` : ""}</td>
-        <td>${route.agent_id ? esc(route.agent_id) : `<span class="muted">—</span>`}</td>
-        <td>${esc(route.adapter_kind)}${route.is_local_stand_in ? `<br><span class="pill blocked">${esc(t("settings.localBadge"))}</span>` : ""}</td>
-        <td>${esc(route.model_name)}</td>
-        <td>${(route.features || []).map((key) => esc(t(key))).join("、") || `<span class="muted">—</span>`}</td></tr>`).join("")}</tbody></table></div>`
-    : `<div class="empty">${esc(t("settings.emptyRoutes"))}</div>`;
-  agentsBox.innerHTML = agents.length
-    ? `<div class="table-scroll"><table><thead><tr>
-        <th>${esc(t("settings.agentId"))}</th><th>${esc(t("settings.agentName"))}</th><th>${esc(t("settings.provider"))}</th>
-        <th>${esc(t("settings.model"))}</th><th>${esc(t("settings.apiKeyEnv"))}</th><th>${esc(t("settings.status"))}</th></tr></thead><tbody>${agents.map((agent) => `<tr>
-        <td>${esc(agent.id)}</td><td>${esc(agent.name)}</td><td>${esc(agent.provider)}</td><td>${esc(agent.model)}</td>
-        <td>${agent.api_key_env ? `${esc(agent.api_key_env)}<br><span class="muted">${esc(t(agent.api_key_set ? "settings.apiKeySet" : "settings.apiKeyUnset"))}</span>` : `<span class="muted">${esc(t("settings.apiKeyNone"))}</span>`}</td>
-        <td>${pill(agent.status)}</td></tr>`).join("")}</tbody></table></div>`
-    : `<div class="empty">${esc(t("settings.emptyAgents"))}</div>`;
+  $("settings-fields").innerHTML = "";
+  if (!data.document) {
+    routesBox.innerHTML = `<div class="empty">${esc(t("settings.documentMissing"))}</div>`;
+    $("settings-agents").innerHTML = "";
+    settingsStatusText();
+    return;
+  }
+  renderSettingsDocument();
 }
+
+function updateSettingsFromInputs(event) {
+  const field = event.target.closest("[data-field]");
+  if (!field || !settingsState || !settingsState.document) return false;
+  const index = Number(field.dataset.index);
+  const agent = (settingsState.document.agents || [])[index];
+  if (!agent) return false;
+  agent[field.dataset.field] = field.dataset.list === "true"
+    ? field.value.split(",").map((value) => value.trim()).filter(Boolean)
+    : field.value;
+  settingsDirty = true;
+  settingsStatusText();
+  return true;
+}
+
+function updateRoutingFromSelect(event) {
+  const select = event.target.closest("[data-route-index]");
+  if (!select || !settingsState || !settingsState.document) return false;
+  const route = (settingsState.routes || [])[Number(select.dataset.routeIndex)];
+  if (!route) return false;
+  const rules = settingsState.document.routing || (settingsState.document.routing = []);
+  const at = rules.findIndex((rule) => rule.route === route.route_name
+    && (rule.rating || null) === (route.rating || null));
+  if (!select.value) {
+    if (at >= 0) rules.splice(at, 1);
+  } else if (at >= 0) {
+    rules[at].agent = select.value;
+  } else {
+    rules.push({ route: route.route_name, agent: select.value, ...(route.rating ? { rating: route.rating } : {}) });
+  }
+  settingsDirty = true;
+  settingsStatusText();
+  return true;
+}
+
+document.addEventListener("input", updateSettingsFromInputs);
+document.addEventListener("change", updateRoutingFromSelect);
+document.addEventListener("click", (event) => {
+  const remove = event.target.closest("[data-remove-agent]");
+  if (!remove || !settingsState || !settingsState.document) return;
+  const index = Number(remove.dataset.removeAgent);
+  const removed = settingsState.document.agents.splice(index, 1)[0];
+  if (removed) {
+    settingsState.document.routing = (settingsState.document.routing || [])
+      .filter((rule) => rule.agent !== removed.id && rule.fallback !== removed.id);
+  }
+  settingsDirty = true;
+  renderSettingsDocument();
+});
 
 // ── Pane switching + wiring ──────────────────────────────────────────────
 const paneRenderers = { series: renderSeries, editorial: renderEditorial, threads: renderThreads, runs: renderRuns, manuscript: renderManuscript, canon: renderCanon, plan: renderPlan, settings: renderSettings };
@@ -1783,6 +1909,38 @@ $("ms-refresh").addEventListener("click", renderManuscript);
 $("canon-refresh").addEventListener("click", renderCanon);
 $("plan-refresh").addEventListener("click", renderPlan);
 $("settings-refresh").addEventListener("click", renderSettings);
+$("settings-reload").addEventListener("click", renderSettings);
+$("settings-add-agent").addEventListener("click", () => {
+  if (!settingsState || !settingsState.document) return;
+  const agents = settingsState.document.agents || (settingsState.document.agents = []);
+  const index = agents.length + 1;
+  agents.push({ id: `agent-${index}`, name: `Agent ${index}`, provider: "openai-compatible", endpoint: "", model: "", ratings: [], capabilities: [] });
+  settingsDirty = true;
+  renderSettingsDocument();
+});
+$("settings-save").addEventListener("click", (event) => perform(event.currentTarget, async () => {
+  if (!settingsState || !settingsState.document) return;
+  const response = await fetch("/console/api/settings", {
+    method: "POST",
+    headers: {"content-type": "application/json"},
+    body: JSON.stringify({expected_revision: settingsState.revision, config: settingsState.document}),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (response.status === 409) { feedback(t("settings.stale"), true); return; }
+  if (response.status === 400) {
+    $("settings-fields").innerHTML = (body.errors || [])
+      .map((error) => `<div class="err">${esc(t("settings.field"))} ${esc(error.field)}: ${esc(error.message)}</div>`)
+      .join("");
+    feedback(t("settings.invalid"), true);
+    return;
+  }
+  if (!response.ok) throw new Error(body.error || `Save failed (${response.status})`);
+  feedback(tf("settings.saved", {
+    agents: body.agents_loaded, rules: body.routing_rules_loaded,
+    backup: body.backup_path || "—",
+  }));
+  await renderSettings();
+}));
 
 $("series-refresh").onclick = () => renderSeries();
 $("editorial-refresh").onclick = () => renderEditorial();

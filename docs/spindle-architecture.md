@@ -607,8 +607,16 @@ All eight panes render from that catalog, as do the shared feedback line and the
 generic load errors; no pane keeps hard-coded copy. The Settings pane reads
 `GET /console/api/settings`, which returns the loaded config path and revision,
 each agent's API-key variable name with a set/unset flag (never a key value), the
-resolved routes, and the features each route powers; routes on the built-in local
-stand-in are marked "no model connected". Each feature's `!` tutorial is
+resolved routes, the features each route powers, and the editable config document;
+routes on the built-in local stand-in are marked "no model connected".
+
+`POST /console/api/settings` saves that document: the whole configuration is
+validated with the startup parser (plus field-level errors for the editor), a
+stale `expected_revision` is refused with 409, the previous file is copied to
+`config.toml.bak` next to it, and the running server reloads the file — so a new
+agent or a reassigned route takes effect on the next call with no restart. The
+write is operator-only and stays on the console HTTP surface: no MCP tool exists
+for it, so model transports cannot change agent configuration. Each feature's `!` tutorial is
 attached by delegation, so rows, groups and checkpoints rendered later open their
 own tutorial too.
 
