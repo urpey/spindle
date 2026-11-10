@@ -110,8 +110,24 @@ refused and reported the same way.
 The edit loop:
 
 1. edit `skills/<name>/SKILL.md` or a reference;
-2. call `get_skill` / `get_reference` (or read the `bible://` resource) again;
-3. `curl -s localhost:4321/health` shows the content mode and any fallback.
+2. `spindle-mcp skills check` — seconds, no cargo: reports unknown tool markers,
+   markers for tools the unit's manifest does not declare, prose mentions with no
+   marker, and compiled skills or references whose file is missing. Problems
+   carry `file:line: code: message`, and the exit code is 1 when anything is
+   wrong, so it fits a pre-commit hook;
+3. call `get_skill` / `get_reference` (or read the `bible://` resource) again;
+4. `curl -s localhost:4321/health` shows the content mode and any fallback.
+
+```bash
+spindle-mcp skills check                       # skills check: 25 files OK
+spindle-mcp skills check --json                # machine-readable problems
+spindle-mcp skills check --skills-dir /tmp/skills --references-dir references
+```
+
+The command reads the same directories the server reads (`SPINDLE_SKILLS_DIR`,
+`SPINDLE_REFERENCES_DIR`, defaults `skills` and `references`) and validates the
+compiled unit inventory, so it can report a unit whose file is gone but can never
+invent a unit that the build did not compile.
 
 Rebuild when a `manifest.toml`, `profiles.toml`, reference declaration or tool
 list changes, and keep the compiled fallback copy current: it is what ships when
