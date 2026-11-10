@@ -32,3 +32,28 @@ Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents
 - `main` only moves at release time: the maintainer merges `dev` into `main`
   when they decide to release. Never merge a feature branch straight to `main`.
 - Build a deployment from `main` at release time, not from a feature branch.
+- `Closes #n` only fires when a pull request merges into the default branch
+  (`main`), and ticket PRs merge into `dev`. Close the issue by hand when its
+  PR merges into `dev`, and link the merge commit in the closing comment.
+
+### Release gate: `dev` → `main`
+
+Agents never perform the `main` merge. The maintainer does, and only when they
+decide to release, and only when every condition below holds on the tip of
+`dev`:
+
+1. **Green on `dev`**: `cargo fmt --all --check`,
+   `cargo clippy --workspace --all-targets -- -D warnings`, and
+   `cargo test --workspace` all pass.
+2. **Scope closed**: every `ready-for-agent` issue this release claims is
+   closed, and no `ready-for-human` issue is still waiting on this release.
+3. **Reviewed**: every pull request merged into `dev` for this release was
+   reviewed and approved; nothing entered `dev` by a direct push.
+4. **Docs and skills match the code**: `docs/`, `skills/` and the tests describe
+   the behaviour now on `dev` (the conventions at the top of this file).
+5. **Verified running**: a release build started on a scratch data dir answered
+   `/health`, `/console` and `/console/mcp` before the release is cut.
+6. **Traceable**: the release is a merge commit `dev` → `main` — no squash and
+   no history rewrite — so each ticket keeps its commits and its PR link.
+7. **Release is not deployment**: merging to `main` ships nothing. Deploy the
+   release build from `main` only when the maintainer asks for it.
