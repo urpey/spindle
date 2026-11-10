@@ -238,6 +238,9 @@ for lightweight monitoring.
   release and author-decision actions use the guarded MCP tools through the
   console's own `/console/mcp` endpoint. It exposes only the tools the page
   calls and ignores `SPINDLE_TOOL_PROFILE`; model clients keep using `/mcp`.
+  Console copy is bilingual, Traditional Chinese (`zh-TW`) by default with a
+  remembered English switch, and every feature has a translated help notice
+  (`!`); all of it lives in one string catalog inside the same embedded page.
 - Browser requests (any request carrying `Origin`) must come from the exact
   loopback authority being served. `SPINDLE_HTTP_ALLOWED_ORIGINS` adds exact
   `https://host[:port]` origins, comma-separated, for a tunnel that terminates

@@ -589,6 +589,14 @@ endpoints never mutate. Cross-site browser requests are rejected. When an Origin
 header is present, it must match the loopback authority or an exact origin listed
 in `SPINDLE_HTTP_ALLOWED_ORIGINS`; native MCP clients without one remain supported.
 
+Console copy is bilingual: Traditional Chinese (`zh-TW`) is the fixed default and
+English is an opt-in switch whose choice is remembered per browser. All
+operator-facing copy lives in one per-language catalog embedded in the page, and a
+key missing from the active language falls back to English rather than printing the
+key. Each feature carries a help notice (`!`) that opens a short tutorial in the
+active language. The catalog and the tutorials belong to the same embedded file,
+so the console still needs no build step and makes no external requests.
+
 ## Craft evaluation layer
 
 Two deep, checkpoint-scoped craft passes ride the same deep-check / honest-skip
