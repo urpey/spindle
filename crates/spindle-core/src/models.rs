@@ -6940,6 +6940,25 @@ pub struct ConsoleSettingsOutput {
     pub agents: Vec<ConsoleAgentSummary>,
     #[serde(default)]
     pub routes: Vec<ConsoleRouteSummary>,
+    /// The editable config document (same schema as the config file), omitted
+    /// when no config file is loaded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<serde_json::Value>,
+}
+
+/// Result of a console settings save.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConsoleSettingsWriteOutput {
+    pub source_path: String,
+    /// Content hash of the file just written; send it back on the next save.
+    pub revision: String,
+    /// Previous file kept next to the config, when there was one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_path: Option<String>,
+    pub agents_loaded: usize,
+    pub routing_rules_loaded: usize,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

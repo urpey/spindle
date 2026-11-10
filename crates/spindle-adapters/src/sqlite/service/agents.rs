@@ -39,6 +39,79 @@ impl SqliteSpindleService {
             .collect())
     }
 
+    /// Save an edited config document: stale-check, back up, write, reload.
+    /// Validation is expected to have run already; this re-checks the revision.
+    pub fn save_console_settings(
+        &self,
+        expected_revision: Option<&str>,
+        config: &crate::agent_config::SpindleConfigFile,
+    ) -> std::result::Result<
+        spindle_core::models::ConsoleSettingsWriteOutput,
+        ConsoleSettingsWriteError,
+    > {
+        use crate::agent_config::{
+            config_revision, parse_config_text, render_config_text, resolve_config_path,
+        };
+        let path = self
+            .list_agents()
+            .ok()
+            .and_then(|agents| agents.source_path)
+            .map(std::path::PathBuf::from)
+            .or_else(|| resolve_config_path(None).ok().flatten())
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|cwd| cwd.join(".spindle").join("config.toml"))
+            })
+            .ok_or_else(|| ConsoleSettingsWriteError::Io("no config path".to_string()))?;
+        let current_revision = if path.exists() {
+            Some(
+                config_revision(&path)
+                    .map_err(|error| ConsoleSettingsWriteError::Io(format!("{error:#}")))?,
+            )
+        } else {
+            None
+        };
+        if current_revision.as_deref() != expected_revision {
+            return Err(ConsoleSettingsWriteError::Stale {
+                current: current_revision,
+            });
+        }
+        let text = render_config_text(config)
+            .map_err(|error| ConsoleSettingsWriteError::Invalid(format!("{error:#}")))?;
+        parse_config_text(&text)
+            .map_err(|error| ConsoleSettingsWriteError::Invalid(format!("{error:#}")))?;
+        let backup_path = if path.exists() {
+            let backup = path.with_extension("toml.bak");
+            std::fs::copy(&path, &backup)
+                .map_err(|error| ConsoleSettingsWriteError::Io(format!("{error:#}")))?;
+            Some(backup.display().to_string())
+        } else {
+            None
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| ConsoleSettingsWriteError::Io(format!("{error:#}")))?;
+        }
+        std::fs::write(&path, &text)
+            .map_err(|error| ConsoleSettingsWriteError::Io(format!("{error:#}")))?;
+        let reloaded = self
+            .configure_agents(ConfigureAgentsInput {
+                config_path: Some(path.display().to_string()),
+            })
+            .map_err(|error| ConsoleSettingsWriteError::Reload(format!("{error:#}")))?;
+        let revision = config_revision(&path)
+            .map_err(|error| ConsoleSettingsWriteError::Io(format!("{error:#}")))?;
+        Ok(spindle_core::models::ConsoleSettingsWriteOutput {
+            source_path: path.display().to_string(),
+            revision,
+            backup_path,
+            agents_loaded: reloaded.agents_loaded,
+            routing_rules_loaded: reloaded.routing_rules_loaded,
+            warnings: reloaded.warnings,
+        })
+    }
+
     /// Read-only model configuration for the operator console: agents, resolved
     /// routes and the features each route powers. Carries API-key variable
     /// names and set/unset flags only, never key values.
@@ -49,13 +122,27 @@ impl SqliteSpindleService {
         let agents = self.list_agents()?;
         let routing = self.agent_routing_config()?;
         // The public agent summary is frozen (its tool schema has byte budgets),
-        // so the console joins the loaded config file for the key variable name.
-        let configured = agents
+        // so the console joins the loaded config file for the key variable name
+        // and for the editable document.
+        let loaded = agents
             .source_path
             .as_deref()
-            .and_then(|path| crate::agent_config::load_agent_config(Some(path)).ok())
-            .map(|loaded| loaded.agents)
+            .and_then(|path| crate::agent_config::load_agent_config(Some(path)).ok());
+        let configured = loaded
+            .as_ref()
+            .map(|loaded| loaded.agents.clone())
             .unwrap_or_default();
+        let document = loaded
+            .and_then(|loaded| {
+                let file = crate::agent_config::SpindleConfigFile {
+                    agents: loaded.agents,
+                    routing: loaded.routing,
+                    health_check: Some(loaded.health_check),
+                    route_import_to_explicit: loaded.route_import_to_explicit,
+                    anti_slop: loaded.anti_slop,
+                };
+                serde_json::to_value(file).ok()
+            });
         let revision = agents
             .source_path
             .as_deref()
@@ -119,6 +206,7 @@ impl SqliteSpindleService {
                 })
                 .collect(),
             routes,
+            document,
         })
     }
 
@@ -313,3 +401,33 @@ fn route_feature_keys(route: &str) -> &'static [&'static str] {
         _ => &[],
     }
 }
+
+/// Why a console settings save did not happen.
+#[derive(Debug)]
+pub enum ConsoleSettingsWriteError {
+    /// The file changed since the console read it.
+    Stale {
+        current: Option<String>,
+    },
+    /// The document does not render to a config startup would accept.
+    Invalid(String),
+    Io(String),
+    Reload(String),
+}
+
+impl std::fmt::Display for ConsoleSettingsWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stale { current } => write!(
+                f,
+                "settings changed on disk since this view was loaded (current revision {:?}); reload before saving",
+                current
+            ),
+            Self::Invalid(message) => write!(f, "invalid config: {message}"),
+            Self::Io(message) => write!(f, "could not write config: {message}"),
+            Self::Reload(message) => write!(f, "config written but reload failed: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for ConsoleSettingsWriteError {}

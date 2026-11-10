@@ -442,6 +442,7 @@ struct ResearchQueryOutputJson {
 }
 
 mod agents;
+pub use agents::ConsoleSettingsWriteError;
 mod batch;
 mod branch_snapshots;
 mod branches;
