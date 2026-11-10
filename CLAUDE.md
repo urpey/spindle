@@ -24,3 +24,11 @@ Default triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-f
 ### Domain docs
 
 Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Branches and release
+
+- `dev` is the integration branch. Feature and fix work branches from `dev` and
+  merges back into `dev` through a pull request.
+- `main` only moves at release time: the maintainer merges `dev` into `main`
+  when they decide to release. Never merge a feature branch straight to `main`.
+- Build a deployment from `main` at release time, not from a feature branch.
