@@ -597,6 +597,12 @@ key. Each feature carries a help notice (`!`) that opens a short tutorial in the
 active language. The catalog and the tutorials belong to the same embedded file,
 so the console still needs no build step and makes no external requests.
 
+Dynamic copy reads the same catalog: values are interpolated with `{placeholder}`
+rather than concatenated, and the English data enums the server returns (item
+status, promise state) are shown through catalog labels that fall back to the raw
+value, so an unknown state is displayed rather than hidden. Switching language
+re-renders the active pane, so already-rendered rows follow the switch.
+
 ## Craft evaluation layer
 
 Two deep, checkpoint-scoped craft passes ride the same deep-check / honest-skip
