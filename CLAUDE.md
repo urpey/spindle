@@ -10,3 +10,17 @@
 - Prefer explicit typed contracts over loose JSON blobs.
 - Branch and revision workflows are public MCP surface area; keep docs, tests,
   and skills aligned when changing them.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues in `urpey/spindle`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
