@@ -6,6 +6,7 @@ mod proxy;
 mod resources;
 mod run_journal;
 mod server;
+mod skills_check;
 mod tools;
 
 #[cfg(test)]
@@ -157,6 +158,27 @@ enum McpCommand {
     },
     /// Initialize a local workspace (.spindle/) and install the global Codex skill.
     Init,
+    /// Validate the skills directory without rebuilding (skill text is read at runtime).
+    Skills {
+        #[command(subcommand)]
+        command: SkillsCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SkillsCommand {
+    /// Check every compiled skill and reference against a skills directory.
+    Check {
+        /// Print the report as JSON for scripts.
+        #[arg(long)]
+        json: bool,
+        /// Skills directory (default: SPINDLE_SKILLS_DIR, else ./skills).
+        #[arg(long)]
+        skills_dir: Option<PathBuf>,
+        /// Craft-reference directory (default: SPINDLE_REFERENCES_DIR, else ./references).
+        #[arg(long)]
+        references_dir: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -166,19 +188,6 @@ async fn main() -> anyhow::Result<()> {
     // needs no rebuild; the compiled manifests still decide which units and
     // tools exist. A directory that is missing means the compiled copy.
     spindle_adapters::configure_skill_content(spindle_adapters::SkillContent::from_env());
-    let skill_source = spindle_adapters::skill_content_status();
-    tracing::info!(
-        skills_dir = skill_source.skills_dir.as_deref().unwrap_or("(compiled)"),
-        references_dir = skill_source
-            .references_dir
-            .as_deref()
-            .unwrap_or("(compiled)"),
-        "skill markdown source"
-    );
-    for warning in &skill_source.warnings {
-        tracing::warn!("skill content: {warning}");
-    }
-
     // Fast path: subcommands (e.g. `spindle-mcp init-grok-skills`)
     let cli = McpCli::parse();
     let server_data_dir = cli.data_dir.clone();
@@ -187,6 +196,43 @@ async fn main() -> anyhow::Result<()> {
         match cmd {
             McpCommand::Profiles { json } => {
                 tools::print_profiles(json);
+                return Ok(());
+            }
+            McpCommand::Skills { command } => {
+                let SkillsCommand::Check {
+                    json,
+                    skills_dir,
+                    references_dir,
+                } = command;
+                let skills_dir = skills_dir
+                    .or_else(|| std::env::var_os("SPINDLE_SKILLS_DIR").map(PathBuf::from))
+                    .unwrap_or_else(|| PathBuf::from("skills"));
+                let references_dir = references_dir
+                    .or_else(|| std::env::var_os("SPINDLE_REFERENCES_DIR").map(PathBuf::from))
+                    .unwrap_or_else(|| PathBuf::from("references"));
+                let report = skills_check::check(&skills_dir, &references_dir);
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    for problem in &report.problems {
+                        eprintln!(
+                            "{}:{}: {}: {}",
+                            problem.file, problem.line, problem.code, problem.message
+                        );
+                    }
+                    if report.ok() {
+                        println!("skills check: {} files OK", report.files_checked);
+                    } else {
+                        eprintln!(
+                            "skills check: {} problems in {} files",
+                            report.problems.len(),
+                            report.files_checked
+                        );
+                    }
+                }
+                if !report.ok() {
+                    std::process::exit(1);
+                }
                 return Ok(());
             }
             McpCommand::InitCodexSkills { target_dir } => {
@@ -294,6 +340,19 @@ async fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
         }
+    }
+
+    let skill_source = spindle_adapters::skill_content_status();
+    tracing::info!(
+        skills_dir = skill_source.skills_dir.as_deref().unwrap_or("(compiled)"),
+        references_dir = skill_source
+            .references_dir
+            .as_deref()
+            .unwrap_or("(compiled)"),
+        "skill markdown source"
+    );
+    for warning in &skill_source.warnings {
+        tracing::warn!("skill content: {warning}");
     }
 
     let tool_profile = match std::env::var("SPINDLE_TOOL_PROFILE") {
