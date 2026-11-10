@@ -1170,6 +1170,206 @@ mod tests {
         assert!(!CONSOLE_HTML.contains("fetch(\"/mcp\""));
     }
 
+    // The console has no JS test harness, so its language contract is pinned on
+    // the page source itself: default Traditional Chinese, a remembered choice,
+    // English fallback, and a help notice per feature.
+    fn console_i18n_catalog() -> serde_json::Value {
+        const OPEN: &str = r#"<script type="application/json" id="i18n-catalog">"#;
+        let start = CONSOLE_HTML.find(OPEN).expect("console i18n catalog") + OPEN.len();
+        let rest = &CONSOLE_HTML[start..];
+        let end = rest.find("</script>").expect("console i18n catalog end");
+        serde_json::from_str(rest[..end].trim()).expect("console i18n catalog is json")
+    }
+
+    fn markup_i18n_keys(attribute: &str) -> Vec<String> {
+        let needle = format!("{attribute}=\"");
+        let mut keys = Vec::new();
+        let mut rest = CONSOLE_HTML;
+        while let Some(index) = rest.find(&needle) {
+            rest = &rest[index + needle.len()..];
+            let end = rest.find('"').expect("attribute value is terminated");
+            keys.push(rest[..end].to_string());
+            rest = &rest[end..];
+        }
+        keys.sort_unstable();
+        keys.dedup();
+        keys
+    }
+
+    fn catalog_copy(catalog: &serde_json::Value, lang: &str, key: &str) -> Option<String> {
+        catalog.get(lang)?.get(key)?.as_str().map(str::to_string)
+    }
+
+    fn has_cjk(text: &str) -> bool {
+        text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+    }
+
+    const CONSOLE_PANES: [&str; 7] = [
+        "series",
+        "editorial",
+        "threads",
+        "runs",
+        "manuscript",
+        "canon",
+        "plan",
+    ];
+
+    #[test]
+    fn console_first_visit_renders_traditional_chinese() {
+        assert!(
+            CONSOLE_HTML.contains(r#"<html lang="zh-Hant">"#),
+            "the page declares Traditional Chinese up front"
+        );
+        assert!(
+            CONSOLE_HTML.contains(r#"const DEFAULT_LANG = "zh-TW";"#),
+            "zh-TW is the fixed default language"
+        );
+        assert!(
+            !CONSOLE_HTML.contains("navigator.language")
+                && !CONSOLE_HTML.contains("navigator.languages"),
+            "the console language must not follow the browser language"
+        );
+        let catalog = console_i18n_catalog();
+        let mut keys = vec!["app.title".to_string(), "app.badge".to_string()];
+        keys.extend(CONSOLE_PANES.iter().map(|pane| format!("nav.{pane}")));
+        for key in &keys {
+            let copy = catalog_copy(&catalog, "zh-TW", key)
+                .unwrap_or_else(|| panic!("zh-TW copy for {key}"));
+            assert!(
+                has_cjk(&copy),
+                "{key} must be Chinese on first visit: {copy}"
+            );
+        }
+        assert!(
+            CONSOLE_HTML.contains(r#"<h1 data-i18n="app.title">"#),
+            "the title renders from the catalog, not hard-coded English"
+        );
+        for pane in CONSOLE_PANES {
+            assert!(
+                CONSOLE_HTML.contains(&format!(r#"data-i18n="nav.{pane}""#)),
+                "the {pane} tab label renders from the catalog"
+            );
+        }
+        assert!(
+            CONSOLE_HTML.contains("applyLanguage();"),
+            "boot applies the active language"
+        );
+    }
+
+    #[test]
+    fn console_remembers_the_language_choice() {
+        assert!(
+            CONSOLE_HTML.contains(r#"const LANG_KEY = "spindle.console.lang";"#),
+            "the choice has one stable storage key"
+        );
+        assert!(CONSOLE_HTML.contains("localStorage.getItem(LANG_KEY)"));
+        assert!(CONSOLE_HTML.contains("localStorage.setItem(LANG_KEY"));
+        assert!(
+            CONSOLE_HTML.contains(r#"data-lang="zh-TW""#)
+                && CONSOLE_HTML.contains(r#"data-lang="en""#),
+            "the header offers both languages"
+        );
+        assert!(
+            CONSOLE_HTML.contains("aria-pressed"),
+            "the active language is announced, not only styled"
+        );
+        assert!(
+            !CONSOLE_HTML.contains("location.reload"),
+            "switching language must not reload the page"
+        );
+    }
+
+    #[test]
+    fn console_missing_copy_falls_back_to_english() {
+        assert!(
+            !CONSOLE_HTML.contains("navigator.language"),
+            "the fallback is the English catalog, never the browser language"
+        );
+        let start = CONSOLE_HTML.find("function t(key)").expect("t() resolver");
+        let resolver = &CONSOLE_HTML[start..start + 400];
+        assert!(
+            resolver.contains("CATALOG[lang]"),
+            "the resolver reads the active language first"
+        );
+        assert!(
+            resolver.contains("CATALOG.en"),
+            "a key missing from zh-TW must fall back to the English copy, not print the key"
+        );
+    }
+
+    #[test]
+    fn console_copy_catalog_covers_every_markup_key() {
+        let catalog = console_i18n_catalog();
+        let keys = markup_i18n_keys("data-i18n");
+        assert!(!keys.is_empty(), "some markup renders from the catalog");
+        for key in keys
+            .iter()
+            .chain(markup_i18n_keys("data-i18n-aria-label").iter())
+        {
+            for lang in ["zh-TW", "en"] {
+                let copy = catalog_copy(&catalog, lang, key)
+                    .unwrap_or_else(|| panic!("{lang} copy for markup key {key}"));
+                assert!(
+                    !copy.trim().is_empty(),
+                    "{lang} copy for {key} is not empty"
+                );
+            }
+        }
+        for key in markup_i18n_keys("data-i18n-aria-label") {
+            assert!(
+                keys.contains(&key) || !key.is_empty(),
+                "aria copy uses the same catalog: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn console_help_notice_explains_every_tab_in_both_languages() {
+        let catalog = console_i18n_catalog();
+        let mut keys = vec![
+            "help.button".to_string(),
+            "help.nav.title".to_string(),
+            "help.nav.intro".to_string(),
+            "help.close".to_string(),
+        ];
+        keys.extend(CONSOLE_PANES.iter().map(|pane| format!("help.nav.{pane}")));
+        for key in &keys {
+            for lang in ["zh-TW", "en"] {
+                let copy = catalog_copy(&catalog, lang, key)
+                    .unwrap_or_else(|| panic!("{lang} tutorial copy for {key}"));
+                assert!(!copy.trim().is_empty(), "{lang} tutorial copy for {key}");
+                if lang == "zh-TW" {
+                    assert!(has_cjk(&copy), "zh-TW tutorial copy for {key} is Chinese");
+                }
+            }
+        }
+        // A real button: Enter and Space activate it for free, and it stays in
+        // the tab order. Its expanded state and dialog ownership are announced.
+        assert!(
+            CONSOLE_HTML.contains(r#"<button type="button" class="help" data-help="help-nav""#),
+            "the help notice is a native button"
+        );
+        assert!(CONSOLE_HTML.contains(r#"aria-expanded="false""#));
+        assert!(CONSOLE_HTML.contains(r#"aria-controls="help-nav""#));
+        assert!(
+            CONSOLE_HTML.contains(r#"<div class="help-popover" id="help-nav" role="dialog" aria-labelledby="help-nav-title" hidden>"#),
+            "the tutorial is a labelled dialog that starts closed"
+        );
+        // Mouse and keyboard both dismiss it, and focus comes back to the trigger.
+        assert!(
+            CONSOLE_HTML.contains(r#""Escape""#),
+            "Escape closes the tutorial"
+        );
+        assert!(
+            CONSOLE_HTML.contains("closeHelp("),
+            "one dismissal path serves Escape, outside click and the close button"
+        );
+        assert!(
+            CONSOLE_HTML.contains("trigger.focus()"),
+            "focus returns to the help button after closing"
+        );
+    }
+
     async fn console_mcp_post(
         app: &Router,
         session: Option<&str>,

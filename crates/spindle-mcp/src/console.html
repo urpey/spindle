@@ -5,7 +5,7 @@
   new reads use /console/mcp: the normal MCP session, project locks and service
   validation, with a fixed console tool set independent of SPINDLE_TOOL_PROFILE. Release snapshots stay local; no platform posting.
 -->
-<html lang="en">
+<html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -36,6 +36,27 @@
     border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 13px;
   }
   nav button[aria-pressed="true"] { background: var(--accent); color: #0c0f14; border-color: var(--accent); }
+  .lang-switch { display: flex; gap: 2px; border: 1px solid var(--line); border-radius: 6px; padding: 2px; margin-left: auto; }
+  .lang-switch button { background: transparent; border: 0; color: var(--dim); font-size: 12px; padding: 4px 8px; border-radius: 4px; min-height: 0; }
+  .lang-switch button[aria-pressed="true"] { background: var(--panel2); color: var(--fg); }
+  header { position: relative; }
+  button.help {
+    background: transparent; color: var(--dim); border: 1px solid var(--line);
+    border-radius: 50%; width: 24px; min-width: 24px; height: 24px; min-height: 0;
+    padding: 0; font: 700 12px/1 var(--mono);
+  }
+  button.help:hover, button.help[aria-expanded="true"] { color: var(--fg); border-color: var(--accent); }
+  .help-popover {
+    position: absolute; top: calc(100% + 6px); right: 16px; z-index: 20;
+    width: min(420px, calc(100vw - 32px)); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
+  }
+  .help-popover h2 { font-size: 15px; margin: 0 0 6px; }
+  .help-popover p { margin: 0; font-size: 13px; color: var(--dim); }
+  .help-popover ul { margin: 10px 0 12px; padding-left: 18px; font-size: 13px; color: var(--dim); }
+  .help-popover li { margin-bottom: 5px; }
+  .help-popover strong { color: var(--fg); }
   main { padding: 16px; max-width: 1100px; margin: 0 auto; }
   .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
   label { color: var(--dim); font-size: 12px; }
@@ -140,17 +161,36 @@
 </head>
 <body>
 <header>
-  <h1>Spindle Operator Console</h1>
-  <span class="badge">local workspace</span>
-  <nav aria-label="Workspace">
-    <button data-pane="series" aria-pressed="true">Series</button>
-    <button data-pane="editorial" aria-pressed="false">Editorial</button>
-    <button data-pane="threads" aria-pressed="false">Threads</button>
-    <button data-pane="runs" aria-pressed="false">Runs</button>
-    <button data-pane="manuscript" aria-pressed="false">Manuscript</button>
-    <button data-pane="canon" aria-pressed="false">Canon queue</button>
-    <button data-pane="plan" aria-pressed="false">Plan queue</button>
+  <h1 data-i18n="app.title">Spindle Operator Console</h1>
+  <span class="badge" data-i18n="app.badge">local workspace</span>
+  <button type="button" class="help" data-help="help-nav" aria-expanded="false" aria-controls="help-nav" data-i18n-aria-label="help.button">!</button>
+  <div class="lang-switch" role="group" data-i18n-aria-label="lang.label" aria-label="Language">
+    <button type="button" class="lang" data-lang="zh-TW" aria-pressed="true">繁體中文</button>
+    <button type="button" class="lang" data-lang="en" aria-pressed="false">English</button>
+  </div>
+  <nav data-i18n-aria-label="nav.label" aria-label="Workspace">
+    <button data-pane="series" aria-pressed="true" data-i18n="nav.series">Series</button>
+    <button data-pane="editorial" aria-pressed="false" data-i18n="nav.editorial">Editorial</button>
+    <button data-pane="threads" aria-pressed="false" data-i18n="nav.threads">Threads</button>
+    <button data-pane="runs" aria-pressed="false" data-i18n="nav.runs">Runs</button>
+    <button data-pane="manuscript" aria-pressed="false" data-i18n="nav.manuscript">Manuscript</button>
+    <button data-pane="canon" aria-pressed="false" data-i18n="nav.canon">Canon queue</button>
+    <button data-pane="plan" aria-pressed="false" data-i18n="nav.plan">Plan queue</button>
   </nav>
+  <div class="help-popover" id="help-nav" role="dialog" aria-labelledby="help-nav-title" hidden>
+    <h2 id="help-nav-title" data-i18n="help.nav.title">What this console is</h2>
+    <p data-i18n="help.nav.intro"></p>
+    <ul>
+      <li><strong data-i18n="nav.series"></strong> — <span data-i18n="help.nav.series"></span></li>
+      <li><strong data-i18n="nav.editorial"></strong> — <span data-i18n="help.nav.editorial"></span></li>
+      <li><strong data-i18n="nav.threads"></strong> — <span data-i18n="help.nav.threads"></span></li>
+      <li><strong data-i18n="nav.runs"></strong> — <span data-i18n="help.nav.runs"></span></li>
+      <li><strong data-i18n="nav.manuscript"></strong> — <span data-i18n="help.nav.manuscript"></span></li>
+      <li><strong data-i18n="nav.canon"></strong> — <span data-i18n="help.nav.canon"></span></li>
+      <li><strong data-i18n="nav.plan"></strong> — <span data-i18n="help.nav.plan"></span></li>
+    </ul>
+    <button type="button" class="help-close" data-i18n="help.close">Close</button>
+  </div>
 </header>
 <main>
   <p id="feedback" role="status" aria-live="polite"></p>
@@ -239,6 +279,58 @@
   </section>
 
 </main>
+<script type="application/json" id="i18n-catalog">
+{
+  "zh-TW": {
+    "app.title": "Spindle 操作主控台",
+    "app.badge": "本機工作區",
+    "lang.label": "語言",
+    "nav.label": "工作區",
+    "nav.series": "連載",
+    "nav.editorial": "編輯",
+    "nav.threads": "伏筆",
+    "nav.runs": "執行",
+    "nav.manuscript": "書稿",
+    "nav.canon": "設定佇列",
+    "nav.plan": "大綱佇列",
+    "help.button": "說明",
+    "help.close": "關閉",
+    "help.nav.title": "這個主控台是做什麼的",
+    "help.nav.intro": "Spindle 的本機操作主控台：追蹤連載進度、讀取書稿，並決定要批准哪些已暫存的設定與大綱變更。所有版本紀錄都留在本機。",
+    "help.nav.series": "集數清單與就緒狀態、版本預覽與本機發布紀錄、AI 讀者審閱，以及模型用量。",
+    "help.nav.editorial": "讀者審閱提出的顧慮，以及接受、延後、解決、忽略四種決定對後續寫作的影響。",
+    "help.nav.threads": "跨集追蹤伏筆、支線與角色弧；計畫中的回收與實際記錄的事件分開顯示。",
+    "help.nav.runs": "章節與場景的進度格、檢查點狀態，以及即時事件時間軸。",
+    "help.nav.manuscript": "編譯書稿；尚未寫成的場景會被標示出來。",
+    "help.nav.canon": "已暫存的設定變更：讀證據，決定加入設定或拒絕。",
+    "help.nav.plan": "已暫存的大綱變更；已寫的章節保留原本的保護。"
+  },
+  "en": {
+    "app.title": "Spindle Operator Console",
+    "app.badge": "local workspace",
+    "lang.label": "Language",
+    "nav.label": "Workspace",
+    "nav.series": "Series",
+    "nav.editorial": "Editorial",
+    "nav.threads": "Threads",
+    "nav.runs": "Runs",
+    "nav.manuscript": "Manuscript",
+    "nav.canon": "Canon queue",
+    "nav.plan": "Plan queue",
+    "help.button": "Help",
+    "help.close": "Close",
+    "help.nav.title": "What this console is",
+    "help.nav.intro": "Spindle's local operator console: follow the series, read the manuscript, and decide which staged canon and plan changes to ratify. Every release record stays local.",
+    "help.nav.series": "Episode list and readiness, release preview and local recording, the AI reader review, and model usage.",
+    "help.nav.editorial": "Reader concerns, and what the accept, defer, resolve and dismiss decisions do to future drafting.",
+    "help.nav.threads": "Promises, plot lines and character arcs across the series; planned payoffs and recorded events are kept apart.",
+    "help.nav.runs": "The chapter and scene grid with its statuses, checkpoint states, and the live timeline.",
+    "help.nav.manuscript": "Compile a book; undrafted scenes are flagged.",
+    "help.nav.canon": "Staged canon deltas: read the evidence, then ratify or reject.",
+    "help.nav.plan": "Staged plan amendments; drafted chapters keep their protection."
+  }
+}
+</script>
 <script>
 "use strict";
 // All state is module-local; no framework, no build. Every render path handles
@@ -249,6 +341,85 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? "" : s)
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;");
+
+// ── Language ─────────────────────────────────────────────────────────────
+// Console copy lives in one per-language catalog in this file; Traditional
+// Chinese is the fixed default, English is opt-in and remembered per browser.
+const DEFAULT_LANG = "zh-TW";
+const LANG_KEY = "spindle.console.lang";
+const CATALOG = JSON.parse($("i18n-catalog").textContent);
+let lang = DEFAULT_LANG;
+function t(key) {
+  const active = CATALOG[lang] || {};
+  const fallback = CATALOG.en || {};
+  if (Object.prototype.hasOwnProperty.call(active, key)) return active[key];
+  if (Object.prototype.hasOwnProperty.call(fallback, key)) return fallback[key];
+  return key;
+}
+function storedLang() {
+  try {
+    const saved = localStorage.getItem(LANG_KEY);
+    return saved && CATALOG[saved] ? saved : DEFAULT_LANG;
+  } catch (_error) { return DEFAULT_LANG; }
+}
+function applyLanguage() {
+  document.documentElement.lang = lang === "zh-TW" ? "zh-Hant" : "en";
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    node.textContent = t(node.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-aria-label]").forEach((node) => {
+    node.setAttribute("aria-label", t(node.dataset.i18nAriaLabel));
+  });
+  document.querySelectorAll("[data-lang]").forEach((node) => {
+    node.setAttribute("aria-pressed", String(node.dataset.lang === lang));
+  });
+  document.title = t("app.title");
+}
+function setLanguage(next) {
+  if (!CATALOG[next] || next === lang) return;
+  lang = next;
+  try { localStorage.setItem(LANG_KEY, next); } catch (_error) { /* storage may be blocked */ }
+  applyLanguage();
+}
+document.querySelectorAll("[data-lang]").forEach((node) =>
+  node.addEventListener("click", () => setLanguage(node.dataset.lang)));
+
+// ── Help notices ─────────────────────────────────────────────────────────
+// A "!" button per feature opens a short tutorial. A native <button> gives
+// Enter and Space for free; Escape, an outside click and the close button all
+// dismiss it through closeHelp(), and focus returns to the trigger so keyboard
+// and screen-reader users never lose their place.
+let openHelp = null;
+function closeHelp(returnFocus = true) {
+  if (!openHelp) return;
+  const { trigger, popover } = openHelp;
+  popover.hidden = true;
+  trigger.setAttribute("aria-expanded", "false");
+  openHelp = null;
+  if (returnFocus) trigger.focus();
+}
+document.querySelectorAll("[data-help]").forEach((trigger) => {
+  const popover = $(trigger.dataset.help);
+  trigger.addEventListener("click", () => {
+    if (openHelp && openHelp.popover === popover) { closeHelp(); return; }
+    closeHelp(false);
+    popover.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    openHelp = { trigger, popover };
+    const close = popover.querySelector(".help-close");
+    (close || popover).focus();
+  });
+  popover.querySelectorAll(".help-close").forEach((button) =>
+    button.addEventListener("click", () => closeHelp()));
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && openHelp) closeHelp();
+});
+document.addEventListener("click", (event) => {
+  if (!openHelp) return;
+  if (openHelp.popover.contains(event.target) || openHelp.trigger.contains(event.target)) return;
+  closeHelp(false);
+});
 
 // GET a JSON endpoint; throws on non-2xx so callers render an error state.
 async function getJSON(path) {
@@ -820,6 +991,8 @@ $("usage").addEventListener("toggle", () => { if ($("usage").open) renderUsage()
 
 // Boot all project pickers before rendering the initial series view.
 (async function boot() {
+  lang = storedLang();
+  applyLanguage();
   await Promise.all([
     loadProjects("series-project", () => renderSeries()),
     loadProjects("editorial-project", () => renderEditorial()),
