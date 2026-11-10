@@ -603,6 +603,11 @@ status, promise state) are shown through catalog labels that fall back to the ra
 value, so an unknown state is displayed rather than hidden. Switching language
 re-renders the active pane, so already-rendered rows follow the switch.
 
+All seven panes render from that catalog, as do the shared feedback line and the
+generic load errors; no pane keeps hard-coded copy. Each feature's `!` tutorial is
+attached by delegation, so rows, groups and checkpoints rendered later open their
+own tutorial too.
+
 ## Craft evaluation layer
 
 Two deep, checkpoint-scoped craft passes ride the same deep-check / honest-skip
