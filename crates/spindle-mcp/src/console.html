@@ -291,55 +291,91 @@
   </section>
 
   <!-- ── Runs ─────────────────────────────────────────────────────────── -->
-  <section id="pane-runs" class="pane">
+  <section id="pane-runs" class="pane" data-i18n-aria-label="nav.runs" aria-label="Runs">
     <div class="row">
-      <label for="runs-project">Project</label>
+      <label for="runs-project" data-i18n="common.project"></label>
       <select id="runs-project"></select>
-      <button class="refresh" id="runs-refresh">Refresh</button>
+      <button class="refresh" id="runs-refresh" data-i18n="runs.refresh"></button>
+      <button type="button" class="help" data-help="help-runs-grid" aria-expanded="false" aria-controls="help-runs-grid" data-i18n-aria-label="help.runs.grid.title">!</button>
     </div>
-    <div class="card" id="runs-status"><div class="empty">Pick a project.</div></div>
+    <div class="card" id="runs-status"><div class="empty" data-i18n="common.pickProject"></div></div>
     <div class="card">
       <div class="row" style="margin-bottom:6px">
-        <strong>Live timeline</strong>
-        <span class="muted"> · anti_slop summary (ids + counts) when a draft reports it</span>
-        <span class="sse-state" id="sse-state">idle</span>
+        <strong data-i18n="runs.timeline"></strong>
+        <button type="button" class="help" data-help="help-runs-timeline" aria-expanded="false" aria-controls="help-runs-timeline" data-i18n-aria-label="help.runs.timeline.title">!</button>
+        <span class="muted"> · <span data-i18n="runs.antiSlop"></span></span>
+        <span class="muted" data-i18n="runs.antiSlopHint"></span>
+        <span class="sse-state" id="sse-state" data-i18n="runs.sseIdle"></span>
       </div>
-      <div id="timeline"><div class="empty">No run selected.</div></div>
+      <div id="timeline"><div class="empty" data-i18n="runs.noRunSelected"></div></div>
+    </div>
+    <div class="help-popover" id="help-runs-grid" role="dialog" aria-labelledby="help-runs-grid-title" hidden>
+      <h2 id="help-runs-grid-title" data-i18n="help.runs.grid.title"></h2>
+      <p data-i18n="help.runs.grid.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+    <div class="help-popover" id="help-runs-checkpoints" role="dialog" aria-labelledby="help-runs-checkpoints-title" hidden>
+      <h2 id="help-runs-checkpoints-title" data-i18n="help.runs.checkpoints.title"></h2>
+      <p data-i18n="help.runs.checkpoints.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+    <div class="help-popover" id="help-runs-timeline" role="dialog" aria-labelledby="help-runs-timeline-title" hidden>
+      <h2 id="help-runs-timeline-title" data-i18n="help.runs.timeline.title"></h2>
+      <p data-i18n="help.runs.timeline.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
     </div>
   </section>
 
   <!-- ── Manuscript ───────────────────────────────────────────────────── -->
-  <section id="pane-manuscript" class="pane">
+  <section id="pane-manuscript" class="pane" data-i18n-aria-label="nav.manuscript" aria-label="Manuscript">
     <div class="row">
-      <label for="ms-project">Project</label>
+      <label for="ms-project" data-i18n="common.project"></label>
       <select id="ms-project"></select>
-      <label for="ms-book">Book</label>
+      <label for="ms-book" data-i18n="manuscript.book"></label>
       <input type="number" id="ms-book" value="1" min="1" style="min-width:80px">
-      <button class="refresh" id="ms-refresh">Compile</button>
+      <button class="refresh" id="ms-refresh" data-i18n="manuscript.compile"></button>
+      <button type="button" class="help" data-help="help-manuscript-compile" aria-expanded="false" aria-controls="help-manuscript-compile" data-i18n-aria-label="help.manuscript.compile.title">!</button>
     </div>
-    <div class="card" id="ms-out"><div class="empty">Pick a project and compile.</div></div>
+    <div class="card" id="ms-out"><div class="empty" data-i18n="manuscript.emptyNoProject"></div></div>
+    <div class="help-popover" id="help-manuscript-compile" role="dialog" aria-labelledby="help-manuscript-compile-title" hidden>
+      <h2 id="help-manuscript-compile-title" data-i18n="help.manuscript.compile.title"></h2>
+      <p data-i18n="help.manuscript.compile.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
   </section>
 
   <!-- ── Canon queue ──────────────────────────────────────────────────── -->
-  <section id="pane-canon" class="pane">
+  <section id="pane-canon" class="pane" data-i18n-aria-label="nav.canon" aria-label="Canon queue">
     <div class="row">
-      <label for="canon-project">Project</label>
+      <label for="canon-project" data-i18n="common.project"></label>
       <select id="canon-project"></select>
-      <button class="refresh" id="canon-refresh">Refresh</button>
+      <button class="refresh" id="canon-refresh" data-i18n="canon.refresh"></button>
+      <button type="button" class="help" data-help="help-canon-staged" aria-expanded="false" aria-controls="help-canon-staged" data-i18n-aria-label="help.canon.staged.title">!</button>
     </div>
-    <div class="note">Review the scene evidence and proposed change before adding it to canon.</div>
-    <div class="card" id="canon-out"><div class="empty">Pick a project.</div></div>
+    <div class="note" data-i18n="canon.note"></div>
+    <div class="card" id="canon-out"><div class="empty" data-i18n="common.pickProject"></div></div>
+    <div class="help-popover" id="help-canon-staged" role="dialog" aria-labelledby="help-canon-staged-title" hidden>
+      <h2 id="help-canon-staged-title" data-i18n="help.canon.staged.title"></h2>
+      <p data-i18n="help.canon.staged.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
   </section>
 
   <!-- ── Plan queue ───────────────────────────────────────────────────── -->
-  <section id="pane-plan" class="pane">
+  <section id="pane-plan" class="pane" data-i18n-aria-label="nav.plan" aria-label="Plan queue">
     <div class="row">
-      <label for="plan-project">Project</label>
+      <label for="plan-project" data-i18n="common.project"></label>
       <select id="plan-project"></select>
-      <button class="refresh" id="plan-refresh">Refresh</button>
+      <button class="refresh" id="plan-refresh" data-i18n="plan.refresh"></button>
+      <button type="button" class="help" data-help="help-plan-amendment" aria-expanded="false" aria-controls="help-plan-amendment" data-i18n-aria-label="help.plan.amendment.title">!</button>
     </div>
-    <div class="note">Review the rationale and proposed plan change. Drafted chapters keep their existing protection.</div>
-    <div class="card" id="plan-out"><div class="empty">Pick a project.</div></div>
+    <div class="note" data-i18n="plan.note"></div>
+    <div class="card" id="plan-out"><div class="empty" data-i18n="common.pickProject"></div></div>
+    <div class="help-popover" id="help-plan-amendment" role="dialog" aria-labelledby="help-plan-amendment-title" hidden>
+      <h2 id="help-plan-amendment-title" data-i18n="help.plan.amendment.title"></h2>
+      <p data-i18n="help.plan.amendment.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
   </section>
 
 </main>
@@ -508,7 +544,115 @@
     "help.threads.motifs.title": "意象",
     "help.threads.motifs.body": "重複出現的意象與象徵。用來看它們的分佈與密度，避免同一個意象被過度使用。",
     "help.threads.payoffs.title": "計畫回收與實際事件",
-    "help.threads.payoffs.body": "「計畫回收」是規劃中的位置,可能還沒發生；已記錄的事件才是真的寫進章節的狀態變化。兩者分開顯示，才不會把計畫當成事實。"
+    "help.threads.payoffs.body": "「計畫回收」是規劃中的位置,可能還沒發生；已記錄的事件才是真的寫進章節的狀態變化。兩者分開顯示，才不會把計畫當成事實。",
+    "common.refresh": "重新整理",
+    "common.decisionFailed": "決定沒有套用。請重新整理後再看一次該項目。",
+    "runs.refresh": "重新整理",
+    "runs.loading": "正在載入執行狀態…",
+    "runs.noRun": "這個專案還沒有 authoring run。",
+    "runs.next": "下一步",
+    "runs.chapterRange": "第 {start}–{end} 章",
+    "runs.chapterProgress": "{done}/{total} 章",
+    "runs.chapter": "第 {n} 章",
+    "runs.mine": "挖掘",
+    "runs.verify": "驗證",
+    "runs.revise": "重寫",
+    "runs.summarySaved": "摘要已儲存",
+    "runs.replan": "重新規劃",
+    "runs.noScenes": "沒有場景",
+    "runs.checkpoints": "檢查點",
+    "runs.colRange": "範圍",
+    "runs.colStatus": "狀態",
+    "runs.colPolicy": "策略",
+    "runs.colAuto": "自動",
+    "runs.colPending": "待人工",
+    "runs.manual": "人工",
+    "runs.timeline": "即時時間軸",
+    "runs.antiSlop": "anti_slop 摘要（id + 次數）",
+    "runs.antiSlopHint": "草稿回報時顯示",
+    "runs.sseIdle": "閒置",
+    "runs.sseLive": "連線中",
+    "runs.sseReconnecting": "重新連線…",
+    "runs.sseNoRun": "沒有 run",
+    "runs.sseError": "錯誤",
+    "runs.noRunSelected": "尚未選擇 run。",
+    "runs.unknownKind": "（未知）",
+    "runs.loadError": "執行狀態",
+    "manuscript.compile": "編譯",
+    "manuscript.book": "書",
+    "manuscript.loading": "正在編譯…",
+    "manuscript.summary": "{scenes} 個場景 · {words} 字",
+    "manuscript.undrafted": "{count} 個未寫：{list}",
+    "manuscript.empty": "這本書還沒有已寫的文字。",
+    "manuscript.emptyNoProject": "請選擇專案再編譯。",
+    "manuscript.loadError": "書稿",
+    "canon.refresh": "重新整理",
+    "canon.note": "決定加入設定前，先看場景證據與提案變更。",
+    "canon.loading": "正在載入待處理的設定變更…",
+    "canon.empty": "沒有待處理的設定變更。",
+    "canon.scene": "場景 {id}",
+    "canon.newTarget": "（新增）",
+    "canon.proposed": "提案的設定變更",
+    "canon.approve": "加入設定",
+    "canon.reject": "拒絕",
+    "canon.decided": "設定提案已{outcome}。",
+    "canon.loadError": "設定變更",
+    "plan.refresh": "重新整理",
+    "plan.note": "看理由與提案的大綱變更。已寫的章節保留原本的保護。",
+    "plan.loading": "正在載入待處理的大綱變更…",
+    "plan.empty": "沒有待處理的大綱變更。",
+    "plan.targetCh": "目標第 {chapter} 章",
+    "plan.fromCh": "來自第 {source} 章（第 {book} 本）",
+    "plan.proposed": "提案的大綱變更",
+    "plan.apply": "套用到大綱",
+    "plan.reject": "拒絕",
+    "plan.decided": "大綱提案已{outcome}。",
+    "plan.loadError": "大綱變更",
+    "help.runs.grid.title": "章節與場景進度",
+    "help.runs.grid.body": "每一格是一個場景，顯示撰寫、驗證與重寫的狀態，以及任何阻塞原因。章的狀態與摘要是否已儲存也在同一列。",
+    "help.runs.checkpoints.title": "檢查點狀態",
+    "help.runs.checkpoints.body": "檢查點覆蓋一段章節區間。狀態顯示通過、待人工或阻塞，auto 欄是自動判定的結果，pending manual 列出還要人工看的場景。",
+    "help.runs.timeline.title": "即時時間軸與 anti_slop",
+    "help.runs.timeline.body": "時間軸跟著這次 run 的 journal 事件流，斷線會自動續傳。anti_slop 摘要只給 id 與次數，不含文章內容。",
+    "help.manuscript.compile.title": "編譯書稿",
+    "help.manuscript.compile.body": "把已寫的場景編譯成一本書的 Markdown。還沒寫的場景會列出來，不會被默默略過。",
+    "help.canon.staged.title": "待批准的設定變更",
+    "help.canon.staged.body": "每一筆是從場景挖出的提案，附上原文證據。按下加入設定才會成為設定；拒絕則丟棄這筆提案。",
+    "help.plan.amendment.title": "待批准的大綱變更",
+    "help.plan.amendment.body": "每筆提案附理由。套用後才影響後續章節；已寫的章節保留原本的保護，不會被改寫。",
+    "status.pending": "待處理",
+    "status.draft_saved": "草稿已存",
+    "status.in_progress": "進行中",
+    "status.changes_committed": "變更已提交",
+    "status.beats_annotated": "節拍已標註",
+    "status.complete": "完成",
+    "status.clean": "乾淨",
+    "status.staged": "待審",
+    "status.blocked": "阻塞",
+    "status.findings": "有發現",
+    "status.error": "錯誤",
+    "status.skipped": "略過",
+    "status.high": "高",
+    "status.medium": "中",
+    "status.low": "低",
+    "status.running": "執行中",
+    "status.paused": "暫停",
+    "status.applied": "已套用",
+    "status.rejected": "已拒絕",
+    "status.failed": "失敗",
+    "status.not_reached": "未處理",
+    "status.decided": "已決定",
+    "status.writer": "撰寫",
+    "status.verifier": "驗證",
+    "status.revise": "重寫",
+    "status.auto": "自動",
+    "status.manual": "人工",
+    "status.engaged": "投入",
+    "status.detached": "疏離",
+    "status.mixed": "混合",
+    "status.neutral": "中性",
+    "status.local": "本機",
+    "status.none": "無"
   },
   "en": {
     "app.title": "Spindle Operator Console",
@@ -673,7 +817,115 @@
     "help.threads.motifs.title": "Motifs",
     "help.threads.motifs.body": "Recurring images and symbols. Watch their spread and density so one motif is not overused.",
     "help.threads.payoffs.title": "Planned payoff vs recorded event",
-    "help.threads.payoffs.body": "A planned payoff is a scheduled position that may not have happened yet; a recorded event is a status change that is actually written into a chapter. They are shown apart so a plan is never mistaken for a fact."
+    "help.threads.payoffs.body": "A planned payoff is a scheduled position that may not have happened yet; a recorded event is a status change that is actually written into a chapter. They are shown apart so a plan is never mistaken for a fact.",
+    "common.refresh": "Refresh",
+    "common.decisionFailed": "Decision was not applied. Refresh and review the item.",
+    "runs.refresh": "Refresh",
+    "runs.loading": "Loading run status…",
+    "runs.noRun": "No authoring run for this project yet.",
+    "runs.next": "next",
+    "runs.chapterRange": "ch {start}–{end}",
+    "runs.chapterProgress": "{done}/{total} chapters",
+    "runs.chapter": "Chapter {n}",
+    "runs.mine": "mine",
+    "runs.verify": "verify",
+    "runs.revise": "revise",
+    "runs.summarySaved": "summary saved",
+    "runs.replan": "replan",
+    "runs.noScenes": "no scenes",
+    "runs.checkpoints": "Checkpoints",
+    "runs.colRange": "range",
+    "runs.colStatus": "status",
+    "runs.colPolicy": "policy",
+    "runs.colAuto": "auto",
+    "runs.colPending": "pending manual",
+    "runs.manual": "manual",
+    "runs.timeline": "Live timeline",
+    "runs.antiSlop": "anti_slop summary (ids + counts)",
+    "runs.antiSlopHint": "when a draft reports it",
+    "runs.sseIdle": "idle",
+    "runs.sseLive": "live",
+    "runs.sseReconnecting": "reconnecting…",
+    "runs.sseNoRun": "no run",
+    "runs.sseError": "error",
+    "runs.noRunSelected": "No run selected.",
+    "runs.unknownKind": "(unknown)",
+    "runs.loadError": "run status",
+    "manuscript.compile": "Compile",
+    "manuscript.book": "Book",
+    "manuscript.loading": "Compiling…",
+    "manuscript.summary": "{scenes} scenes · {words} words",
+    "manuscript.undrafted": "{count} undrafted: {list}",
+    "manuscript.empty": "No drafted prose for this book yet.",
+    "manuscript.emptyNoProject": "Pick a project and compile.",
+    "manuscript.loadError": "manuscript",
+    "canon.refresh": "Refresh",
+    "canon.note": "Review the scene evidence and proposed change before adding it to canon.",
+    "canon.loading": "Loading staged canon deltas…",
+    "canon.empty": "No staged canon deltas.",
+    "canon.scene": "scene {id}",
+    "canon.newTarget": "(new)",
+    "canon.proposed": "Proposed canon change",
+    "canon.approve": "Add to canon",
+    "canon.reject": "Reject",
+    "canon.decided": "Canon proposal {outcome}.",
+    "canon.loadError": "canon deltas",
+    "plan.refresh": "Refresh",
+    "plan.note": "Review the rationale and proposed plan change. Drafted chapters keep their existing protection.",
+    "plan.loading": "Loading staged plan amendments…",
+    "plan.empty": "No staged plan amendments.",
+    "plan.targetCh": "target ch {chapter}",
+    "plan.fromCh": "from ch {source} (book {book})",
+    "plan.proposed": "Proposed plan change",
+    "plan.apply": "Apply to plan",
+    "plan.reject": "Reject",
+    "plan.decided": "Plan proposal {outcome}.",
+    "plan.loadError": "plan amendments",
+    "help.runs.grid.title": "Chapter and scene progress",
+    "help.runs.grid.body": "Each cell is one scene with its drafting, verification and revision status and any blocking reason. The chapter row also shows whether its summary is saved.",
+    "help.runs.checkpoints.title": "Checkpoint states",
+    "help.runs.checkpoints.body": "A checkpoint covers a chapter range. Status shows passed, pending manual or blocked; the auto column is the automatic outcome and pending manual lists the scenes still waiting for a human.",
+    "help.runs.timeline.title": "Live timeline and anti_slop",
+    "help.runs.timeline.body": "The timeline follows this run's journal stream and resumes automatically after a drop. The anti_slop summary reports ids and counts only, never prose.",
+    "help.manuscript.compile.title": "Compiling a book",
+    "help.manuscript.compile.body": "Compiles the drafted scenes into one book's Markdown. Scenes that are not written yet are listed, never silently skipped.",
+    "help.canon.staged.title": "Staged canon deltas",
+    "help.canon.staged.body": "Each entry is a proposal mined from a scene, with its source evidence. It becomes canon only when you add it; rejecting discards that proposal.",
+    "help.plan.amendment.title": "Staged plan amendments",
+    "help.plan.amendment.body": "Each proposal carries its rationale. It affects future chapters only once applied; drafted chapters keep their protection and are never rewritten.",
+    "status.pending": "pending",
+    "status.draft_saved": "draft saved",
+    "status.in_progress": "in progress",
+    "status.changes_committed": "changes committed",
+    "status.beats_annotated": "beats annotated",
+    "status.complete": "complete",
+    "status.clean": "clean",
+    "status.staged": "staged",
+    "status.blocked": "blocked",
+    "status.findings": "findings",
+    "status.error": "error",
+    "status.skipped": "skipped",
+    "status.high": "high",
+    "status.medium": "medium",
+    "status.low": "low",
+    "status.running": "running",
+    "status.paused": "paused",
+    "status.applied": "applied",
+    "status.rejected": "rejected",
+    "status.failed": "failed",
+    "status.not_reached": "not reached",
+    "status.decided": "decided",
+    "status.writer": "writer",
+    "status.verifier": "verifier",
+    "status.revise": "revise",
+    "status.auto": "auto",
+    "status.manual": "manual",
+    "status.engaged": "engaged",
+    "status.detached": "detached",
+    "status.mixed": "mixed",
+    "status.neutral": "neutral",
+    "status.local": "local",
+    "status.none": "none"
   }
 }
 </script>
@@ -929,19 +1181,19 @@ let currentEventSource = null;
 async function renderRuns() {
   const pid = $("runs-project").value;
   const box = $("runs-status");
-  if (!pid) { box.innerHTML = `<div class="empty">Pick a project.</div>`; return; }
-  box.innerHTML = `<div class="muted">Loading run status…</div>`;
+  if (!pid) { box.innerHTML = `<div class="empty">${esc(t("common.pickProject"))}</div>`; return; }
+  box.innerHTML = `<div class="muted">${esc(t("runs.loading"))}</div>`;
   let data;
   try {
     data = await getJSON(`/console/api/status?project_id=${encodeURIComponent(pid)}`);
   } catch (err) {
-    box.innerHTML = errorHTML("run status", err);
-    stopTimeline("error");
+    box.innerHTML = errorHTML(t("runs.loadError"), err);
+    stopTimeline(t("runs.sseError"));
     return;
   }
   if (!data.run_present || !data.run) {
-    box.innerHTML = `<div class="empty">No authoring run for this project yet.</div>`;
-    stopTimeline("no run");
+    box.innerHTML = `<div class="empty">${esc(t("runs.noRun"))}</div>`;
+    stopTimeline(t("runs.sseNoRun"));
     return;
   }
   const run = data.run;
@@ -954,45 +1206,46 @@ function renderRunStatus(run) {
     <div class="row" style="margin-bottom:8px">
       <span class="kv" style="font-family:var(--mono)">${esc(run.run_id)}</span>
       ${pill(run.status)}
-      <span class="kv">next: ${esc(run.next_action)}</span>
-      <span class="kv">ch ${esc(run.start_chapter)}–${esc(run.end_chapter)}</span>
-      <span class="kv">${esc(run.completed_chapter_count)}/${esc(run.total_chapter_count)} chapters</span>
+      <span class="kv">${esc(t("runs.next"))}: ${esc(statusLabel(run.next_action))}</span>
+      <span class="kv">${esc(tf("runs.chapterRange", {start: run.start_chapter, end: run.end_chapter}))}</span>
+      <span class="kv">${esc(tf("runs.chapterProgress", {done: run.completed_chapter_count, total: run.total_chapter_count}))}</span>
       ${run.blocked_reason ? `<span class="err">${esc(run.blocked_reason)}</span>` : ""}
+      ${helpButton("help-runs-checkpoints", "help.runs.checkpoints.title")}
     </div>`;
   const chapters = (run.chapters || []).map((ch) => {
     const scenes = (ch.scenes || []).map((sc) => `
       <div class="scene-cell">
         <div class="lbl">${esc(ch.chapter_number)}.${esc(sc.scene_order)} ${pill(sc.phase)}</div>
-        ${sc.mine_status ? `<div class="kv">mine: ${pill(sc.mine_status)} ${esc(sc.mine_detail || "")}</div>` : ""}
-        ${sc.verify_status ? `<div class="kv">verify: ${pill(sc.verify_status)} ${esc(sc.verify_detail || "")}</div>` : ""}
-        ${sc.revise_attempts ? `<div class="kv">revise: ${esc(sc.revise_attempts)}</div>` : ""}
+        ${sc.mine_status ? `<div class="kv">${esc(t("runs.mine"))}: ${pill(sc.mine_status)} ${esc(sc.mine_detail || "")}</div>` : ""}
+        ${sc.verify_status ? `<div class="kv">${esc(t("runs.verify"))}: ${pill(sc.verify_status)} ${esc(sc.verify_detail || "")}</div>` : ""}
+        ${sc.revise_attempts ? `<div class="kv">${esc(t("runs.revise"))}: ${esc(sc.revise_attempts)}</div>` : ""}
         ${sc.blocked_reason ? `<div class="err">${esc(sc.blocked_reason)}</div>` : ""}
       </div>`).join("");
     return `
       <div style="margin:10px 0">
-        <div style="margin-bottom:6px">Chapter ${esc(ch.chapter_number)} ${pill(ch.status)}
-          ${ch.summary_saved ? `<span class="kv">· summary saved</span>` : ""}
-          ${ch.replan_status ? `<span class="kv">· replan: ${pill(ch.replan_status)} ${esc(ch.replan_detail || "")}</span>` : ""}
+        <div style="margin-bottom:6px">${esc(tf("runs.chapter", {n: ch.chapter_number}))} ${pill(ch.status)}
+          ${ch.summary_saved ? `<span class="kv">· ${esc(t("runs.summarySaved"))}</span>` : ""}
+          ${ch.replan_status ? `<span class="kv">· ${esc(t("runs.replan"))}: ${pill(ch.replan_status)} ${esc(ch.replan_detail || "")}</span>` : ""}
         </div>
-        <div class="grid">${scenes || '<span class="empty">no scenes</span>'}</div>
+        <div class="grid">${scenes || `<span class="empty">${esc(t("runs.noScenes"))}</span>`}</div>
       </div>`;
   }).join("");
   const cps = (run.checkpoint_reports || []).map((cp) => `
     <tr>
-      <td>ch ${esc(cp.start_chapter)}–${esc(cp.end_chapter)}</td>
+      <td>${esc(tf("runs.chapterRange", {start: cp.start_chapter, end: cp.end_chapter}))}</td>
       <td>${pill(cp.status)}</td>
-      <td>${cp.checkpoint_policy ? esc(cp.checkpoint_policy) : "manual"}</td>
+      <td>${cp.checkpoint_policy ? esc(statusLabel(cp.checkpoint_policy)) : esc(t("runs.manual"))}</td>
       <td>${cp.auto_outcome ? pill(cp.auto_outcome) : ""}</td>
       <td class="kv">${esc((cp.pending_manual_scene_ids || []).join(", "))}</td>
     </tr>`).join("");
   const cpTable = cps
-    ? `<table><thead><tr><th>range</th><th>status</th><th>policy</th><th>auto</th><th>pending manual</th></tr></thead><tbody>${cps}</tbody></table>`
+    ? `<table><thead><tr><th>${esc(t("runs.colRange"))}</th><th>${esc(t("runs.colStatus"))}</th><th>${esc(t("runs.colPolicy"))}</th><th>${esc(t("runs.colAuto"))}</th><th>${esc(t("runs.colPending"))}</th></tr></thead><tbody>${cps}</tbody></table>`
     : "";
-  return head + chapters + (cpTable ? `<div style="margin-top:10px"><strong>Checkpoints</strong>${cpTable}</div>` : "");
+  return head + chapters + (cpTable ? `<div style="margin-top:10px"><strong>${esc(t("runs.checkpoints"))}</strong>${cpTable}</div>` : "");
 }
 
 function startTimeline(runId) {
-  stopTimeline("reconnecting");
+  stopTimeline(t("runs.sseReconnecting"));
   const tl = $("timeline");
   tl.innerHTML = "";
   // The browser's native EventSource handles Last-Event-ID resume for us: on a
@@ -1000,8 +1253,8 @@ function startTimeline(runId) {
   // server replays only newer rows (ADR 0002 D4).
   const es = new EventSource(`/events?topic=run:${encodeURIComponent(runId)}`);
   currentEventSource = es;
-  es.onopen = () => setSse("live");
-  es.onerror = () => setSse("reconnecting…"); // EventSource retries automatically
+  es.onopen = () => setSse(t("runs.sseLive"));
+  es.onerror = () => setSse(t("runs.sseReconnecting")); // EventSource retries automatically
   // Known kinds from ADR 0002 D2. Consumers MUST ignore unknown kinds and
   // unknown payload keys (ADR 0002 D3.2) — a forward-compat rule. We render any
   // kind generically, so a kind added in a later phase shows up without a code
@@ -1044,7 +1297,7 @@ function appendEvent(seq, kind, data, known) {
   const summary = formatAntiSlop(data);
   div.innerHTML =
     `<span class="seq">#${esc(seq)}</span>` +
-    `<span class="kind">${esc(kind)}${known ? "" : " (unknown)"}</span>` +
+    `<span class="kind">${esc(kind)}${known ? "" : " " + esc(t("runs.unknownKind"))}</span>` +
     (summary ? `<span class="as">${esc(summary)}</span>` : "") +
     `<span class="pl">${esc(data)}</span>`;
   tl.appendChild(div); // append-only
@@ -1079,17 +1332,17 @@ async function renderManuscript() {
   const pid = $("ms-project").value;
   const book = parseInt($("ms-book").value, 10) || 1;
   const box = $("ms-out");
-  if (!pid) { box.innerHTML = `<div class="empty">Pick a project.</div>`; return; }
-  box.innerHTML = `<div class="muted">Compiling…</div>`;
+  if (!pid) { box.innerHTML = `<div class="empty">${esc(t("manuscript.emptyNoProject"))}</div>`; return; }
+  box.innerHTML = `<div class="muted">${esc(t("manuscript.loading"))}</div>`;
   let data;
   try {
     data = await getJSON(`/console/api/manuscript?project_id=${encodeURIComponent(pid)}&book_number=${book}`);
-  } catch (err) { box.innerHTML = errorHTML("manuscript", err); return; }
+  } catch (err) { box.innerHTML = errorHTML(t("manuscript.loadError"), err); return; }
   const missing = (data.missing_scenes || []);
-  const head = `<div class="row"><span class="kv">${esc(data.scene_count)} scenes · ${esc(data.word_count)} words</span>
-    ${missing.length ? `<span class="err">${missing.length} undrafted: ${esc(missing.join(", "))}</span>` : ""}</div>`;
+  const head = `<div class="row"><span class="kv">${esc(tf("manuscript.summary", {scenes: data.scene_count, words: data.word_count}))}</span>
+    ${missing.length ? `<span class="err">${esc(tf("manuscript.undrafted", {count: missing.length, list: missing.join(", ")}))}</span>` : ""}</div>`;
   if (!data.markdown || !data.markdown.trim()) {
-    box.innerHTML = head + `<div class="empty">No drafted prose for this book yet.</div>`;
+    box.innerHTML = head + `<div class="empty">${esc(t("manuscript.empty"))}</div>`;
     return;
   }
   box.innerHTML = head + `<div class="md">${renderMarkdown(data.markdown)}</div>`;
@@ -1099,26 +1352,26 @@ async function renderManuscript() {
 async function renderCanon() {
   const pid = $("canon-project").value;
   const box = $("canon-out");
-  if (!pid) { box.innerHTML = `<div class="empty">Pick a project.</div>`; return; }
-  box.innerHTML = `<div class="muted">Loading staged canon deltas…</div>`;
+  if (!pid) { box.innerHTML = `<div class="empty">${esc(t("common.pickProject"))}</div>`; return; }
+  box.innerHTML = `<div class="muted">${esc(t("canon.loading"))}</div>`;
   let data;
   try {
     data = await getJSON(`/console/api/canon_deltas?project_id=${encodeURIComponent(pid)}&status=staged`);
-  } catch (err) { box.innerHTML = errorHTML("canon deltas", err); return; }
+  } catch (err) { box.innerHTML = errorHTML(t("canon.loadError"), err); return; }
   const deltas = (data.deltas || []);
-  if (!deltas.length) { box.innerHTML = `<div class="empty">No staged canon deltas.</div>`; return; }
+  if (!deltas.length) { box.innerHTML = `<div class="empty">${esc(t("canon.empty"))}</div>`; return; }
   box.innerHTML = deltas.map((d) => `
     <article class="work-item">
       <div class="row" style="margin-bottom:4px">
-        <strong>${esc(d.delta_class)}</strong>
+        <strong>${esc(statusLabel(d.delta_class))}</strong>
         ${pill(d.confidence)}
-        <span class="kv">scene ${esc(d.scene_id)}</span>
-        ${d.target_id ? `<span class="kv">→ ${esc(d.target_id)}</span>` : `<span class="kv">(new)</span>`}
+        <span class="kv">${esc(tf("canon.scene", {id: d.scene_id}))}</span>
+        ${d.target_id ? `<span class="kv">→ ${esc(d.target_id)}</span>` : `<span class="kv">${esc(t("canon.newTarget"))}</span>`}
       </div>
       <div class="evidence">${esc(d.evidence)}</div>
-      <details><summary>Proposed canon change</summary><pre class="payload">${esc(JSON.stringify(d.payload, null, 2))}</pre></details>
-      <div class="actions"><button data-queue="canon" data-project="${esc(pid)}" data-id="${esc(d.id)}" data-decision="apply">Add to canon</button>
-      <button data-queue="canon" data-project="${esc(pid)}" data-id="${esc(d.id)}" data-decision="reject">Reject</button></div>
+      <details><summary>${esc(t("canon.proposed"))}</summary><pre class="payload">${esc(JSON.stringify(d.payload, null, 2))}</pre></details>
+      <div class="actions"><button data-queue="canon" data-project="${esc(pid)}" data-id="${esc(d.id)}" data-decision="apply">${esc(t("canon.approve"))}</button>
+      <button data-queue="canon" data-project="${esc(pid)}" data-id="${esc(d.id)}" data-decision="reject">${esc(t("canon.reject"))}</button></div>
     </article>`).join("");
 }
 
@@ -1126,26 +1379,26 @@ async function renderCanon() {
 async function renderPlan() {
   const pid = $("plan-project").value;
   const box = $("plan-out");
-  if (!pid) { box.innerHTML = `<div class="empty">Pick a project.</div>`; return; }
-  box.innerHTML = `<div class="muted">Loading staged plan amendments…</div>`;
+  if (!pid) { box.innerHTML = `<div class="empty">${esc(t("common.pickProject"))}</div>`; return; }
+  box.innerHTML = `<div class="muted">${esc(t("plan.loading"))}</div>`;
   let data;
   try {
     data = await getJSON(`/console/api/plan_amendments?project_id=${encodeURIComponent(pid)}&status=staged`);
-  } catch (err) { box.innerHTML = errorHTML("plan amendments", err); return; }
+  } catch (err) { box.innerHTML = errorHTML(t("plan.loadError"), err); return; }
   const amendments = (data.amendments || []);
-  if (!amendments.length) { box.innerHTML = `<div class="empty">No staged plan amendments.</div>`; return; }
+  if (!amendments.length) { box.innerHTML = `<div class="empty">${esc(t("plan.empty"))}</div>`; return; }
   box.innerHTML = amendments.map((a) => `
     <article class="work-item">
       <div class="row" style="margin-bottom:4px">
-        <strong>${esc(a.amendment_class)}</strong>
+        <strong>${esc(statusLabel(a.amendment_class))}</strong>
         ${pill(a.confidence)}
-        ${a.target_chapter != null ? `<span class="kv">target ch ${esc(a.target_chapter)}</span>` : ""}
-        <span class="kv">from ch ${esc(a.source_chapter)} (book ${esc(a.book_number)})</span>
+        ${a.target_chapter != null ? `<span class="kv">${esc(tf("plan.targetCh", {chapter: a.target_chapter}))}</span>` : ""}
+        <span class="kv">${esc(tf("plan.fromCh", {source: a.source_chapter, book: a.book_number}))}</span>
       </div>
       <div class="evidence">${esc(a.rationale)}</div>
-      <details><summary>Proposed plan change</summary><pre class="payload">${esc(JSON.stringify(a.payload, null, 2))}</pre></details>
-      <div class="actions"><button data-queue="plan" data-project="${esc(pid)}" data-id="${esc(a.id)}" data-decision="apply">Apply to plan</button>
-      <button data-queue="plan" data-project="${esc(pid)}" data-id="${esc(a.id)}" data-decision="reject">Reject</button></div>
+      <details><summary>${esc(t("plan.proposed"))}</summary><pre class="payload">${esc(JSON.stringify(a.payload, null, 2))}</pre></details>
+      <div class="actions"><button data-queue="plan" data-project="${esc(pid)}" data-id="${esc(a.id)}" data-decision="apply">${esc(t("plan.apply"))}</button>
+      <button data-queue="plan" data-project="${esc(pid)}" data-id="${esc(a.id)}" data-decision="reject">${esc(t("plan.reject"))}</button></div>
     </article>`).join("");
 }
 
@@ -1340,8 +1593,8 @@ document.addEventListener("click", event => {
     const decision = {action:b.dataset.decision, [kind === "canon" ? "delta_id" : "amendment_id"]:b.dataset.id};
     const result = await callTool(kind === "canon" ? "decide_canon_deltas" : "decide_plan_amendments", {project_id:b.dataset.project, decided_by:"operator", decisions:[decision]});
     const failure = result.results.find(r => r.outcome === "failed" || r.outcome === "not_reached");
-    if (failure) throw new Error(failure.error || "Decision was not applied. Refresh and review the item.");
-    feedback(`${kind === "canon" ? "Canon" : "Plan"} proposal ${result.results[0]?.outcome || "decided"}.`);
+    if (failure) throw new Error(failure.error || t("common.decisionFailed"));
+    feedback(tf(kind === "canon" ? "canon.decided" : "plan.decided", {outcome: statusLabel(result.results[0]?.outcome || "decided")}));
     await (kind === "canon" ? renderCanon() : renderPlan());
   });
 });

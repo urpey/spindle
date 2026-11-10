@@ -1406,7 +1406,7 @@ mod tests {
     }
 
     #[test]
-    fn console_three_panes_are_translated_in_both_languages() {
+    fn console_all_panes_are_translated_in_both_languages() {
         let catalog = console_i18n_catalog();
         let prefixes = [
             "series.",
@@ -1439,7 +1439,7 @@ mod tests {
     }
 
     #[test]
-    fn console_three_panes_do_not_ship_hardcoded_english_copy() {
+    fn console_all_panes_do_not_ship_hardcoded_english_copy() {
         // Every label, heading, option and summary in these panes renders from
         // the catalog; the old English literals must be gone from the markup and
         // the renderers (the English catalog itself keeps the wording).
@@ -1469,13 +1469,36 @@ mod tests {
             "No threads recorded here yet",
             "Items in this view",
             "Local release revision",
+            "Live timeline",
+            "Loading run status…",
+            "No authoring run for this project yet.",
+            "Checkpoints</strong>",
+            "No run selected.",
+            "Compiling…",
+            "Loading staged canon deltas…",
+            "No staged canon deltas.",
+            "Add to canon",
+            "Apply to plan",
+            "Proposed canon change",
+            "Proposed plan change",
+            "Pick a project and compile.",
+            "Loading staged plan amendments…",
+            "No staged plan amendments.",
         ] {
             assert!(
                 !markup.contains(stale),
                 "hardcoded English copy remains: {stale}"
             );
         }
-        for pane in ["series", "editorial", "threads"] {
+        for pane in [
+            "series",
+            "editorial",
+            "threads",
+            "runs",
+            "manuscript",
+            "canon",
+            "plan",
+        ] {
             let visible = visible_text(pane_html(pane));
             assert!(
                 !visible
@@ -1489,7 +1512,7 @@ mod tests {
     }
 
     #[test]
-    fn console_each_three_pane_feature_has_a_bilingual_tutorial() {
+    fn console_each_feature_has_a_bilingual_tutorial() {
         let catalog = console_i18n_catalog();
         for key in [
             "help.series.episodes",
@@ -1503,6 +1526,12 @@ mod tests {
             "help.threads.arcs",
             "help.threads.motifs",
             "help.threads.payoffs",
+            "help.runs.grid",
+            "help.runs.checkpoints",
+            "help.runs.timeline",
+            "help.manuscript.compile",
+            "help.canon.staged",
+            "help.plan.amendment",
         ] {
             for suffix in ["title", "body"] {
                 let full = format!("{key}.{suffix}");
