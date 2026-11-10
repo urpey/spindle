@@ -33,10 +33,22 @@ impl SpindleMcpServer {
         service: SpindleService,
         serialization_state: Arc<ToolSerializationState>,
     ) -> Self {
+        Self::with_profile_and_serialization_state(
+            service,
+            std::env::var("SPINDLE_TOOL_PROFILE").ok(),
+            serialization_state,
+        )
+    }
+
+    fn with_profile_and_serialization_state(
+        service: SpindleService,
+        tool_profile: Option<String>,
+        serialization_state: Arc<ToolSerializationState>,
+    ) -> Self {
         Self {
             tool_router: ToolRouter::with_tool_profile_and_serialization(
                 service.clone(),
-                std::env::var("SPINDLE_TOOL_PROFILE").ok(),
+                tool_profile,
                 serialization_state,
             ),
             resource_router: ResourceRouter::new(service),
@@ -80,13 +92,43 @@ impl SpindleMcpServer {
         cancellation_token: CancellationToken,
         serialization_state: Arc<ToolSerializationState>,
     ) -> StreamableHttpService<Self, LocalSessionManager> {
+        Self::streamable_http_service_for_profile(
+            service,
+            cancellation_token,
+            serialization_state,
+            std::env::var("SPINDLE_TOOL_PROFILE").ok(),
+        )
+    }
+
+    /// MCP service for the operator console: exposes exactly the console's
+    /// tools, independent of the server's model-facing `SPINDLE_TOOL_PROFILE`.
+    pub(crate) fn console_streamable_http_service(
+        service: SpindleService,
+        cancellation_token: CancellationToken,
+    ) -> StreamableHttpService<Self, LocalSessionManager> {
+        let serialization_state = ToolSerializationState::for_service(&service);
+        Self::streamable_http_service_for_profile(
+            service,
+            cancellation_token,
+            serialization_state,
+            Some(crate::tools::CONSOLE_PROFILE.to_string()),
+        )
+    }
+
+    fn streamable_http_service_for_profile(
+        service: SpindleService,
+        cancellation_token: CancellationToken,
+        serialization_state: Arc<ToolSerializationState>,
+        tool_profile: Option<String>,
+    ) -> StreamableHttpService<Self, LocalSessionManager> {
         let config =
             StreamableHttpServerConfig::default().with_cancellation_token(cancellation_token);
 
         StreamableHttpService::new(
             move || {
-                Ok(SpindleMcpServer::with_serialization_state(
+                Ok(SpindleMcpServer::with_profile_and_serialization_state(
                     service.clone(),
+                    tool_profile.clone(),
                     serialization_state.clone(),
                 ))
             },

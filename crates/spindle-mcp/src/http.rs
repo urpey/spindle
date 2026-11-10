@@ -61,6 +61,10 @@ pub fn mcp_router_with_public_origins(
     public_origins: PublicOrigins,
 ) -> Router {
     let state = HttpState::new(service.clone());
+    let console_mcp_service = SpindleMcpServer::console_streamable_http_service(
+        service.clone(),
+        cancellation_token.clone(),
+    );
     let mcp_service = SpindleMcpServer::streamable_http_service(service, cancellation_token);
 
     Router::new()
@@ -77,6 +81,9 @@ pub fn mcp_router_with_public_origins(
         .route("/console/api/plan_amendments", get(console_plan_amendments))
         .with_state(state)
         .nest_service("/mcp", mcp_service)
+        // The console's own MCP endpoint, with its fixed tool set (see
+        // `CONSOLE_TOOLS`), so a narrow model profile cannot break the console.
+        .nest_service("/console/mcp", console_mcp_service)
         .layer(axum::middleware::from_fn_with_state(
             Arc::new(public_origins),
             check_browser_origin,
@@ -1141,6 +1148,131 @@ mod tests {
         assert!(
             body.contains("anti_slop hard="),
             "console summary is ids + counts, not excerpts"
+        );
+    }
+
+    #[test]
+    fn console_tool_set_matches_tools_the_page_calls() {
+        let known = crate::tools::static_tool_names();
+        let mut called: Vec<&str> = CONSOLE_HTML
+            .split('"')
+            .filter(|name| known.contains(name))
+            .collect();
+        called.sort_unstable();
+        called.dedup();
+        let mut console = crate::tools::CONSOLE_TOOLS.to_vec();
+        console.sort_unstable();
+        assert_eq!(
+            called, console,
+            "update CONSOLE_TOOLS when console.html changes"
+        );
+        assert!(CONSOLE_HTML.contains("fetch(\"/console/mcp\""));
+        assert!(!CONSOLE_HTML.contains("fetch(\"/mcp\""));
+    }
+
+    async fn console_mcp_post(
+        app: &Router,
+        session: Option<&str>,
+        body: serde_json::Value,
+    ) -> axum::response::Response {
+        let mut request = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("/console/mcp")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream");
+        if let Some(session) = session {
+            request = request.header("mcp-session-id", session);
+        }
+        app.clone()
+            .oneshot(
+                request
+                    .body(axum::body::Body::from(body.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response")
+    }
+
+    async fn sse_json(response: axum::response::Response) -> serde_json::Value {
+        let body = tokio::time::timeout(
+            Duration::from_secs(10),
+            to_bytes(response.into_body(), usize::MAX),
+        )
+        .await
+        .expect("mcp response finished")
+        .expect("body bytes");
+        let body = String::from_utf8(body.to_vec()).expect("utf-8");
+        let data = body
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim)
+            .rfind(|data| !data.is_empty())
+            .unwrap_or(body.trim());
+        serde_json::from_str(data).unwrap_or_else(|e| panic!("json-rpc body {body:?}: {e}"))
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn console_mcp_lists_exactly_the_console_tools() {
+        let app = app().await;
+        let init = console_mcp_post(
+            &app,
+            None,
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "spindle-console", "version": "test"}
+            }}),
+        )
+        .await;
+        assert_eq!(init.status(), axum::http::StatusCode::OK);
+        let session = init
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .expect("session id")
+            .to_string();
+        sse_json(init).await;
+        let ack = console_mcp_post(
+            &app,
+            Some(&session),
+            serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        )
+        .await;
+        assert!(ack.status().is_success(), "{}", ack.status());
+
+        let list = sse_json(
+            console_mcp_post(
+                &app,
+                Some(&session),
+                serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+            )
+            .await,
+        )
+        .await;
+        let mut names: Vec<&str> = list["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        names.sort_unstable();
+        let mut expected = crate::tools::CONSOLE_TOOLS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(names, expected);
+
+        let denied = sse_json(
+            console_mcp_post(
+                &app,
+                Some(&session),
+                serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                    "params": {"name": "create_project", "arguments": {"name": "x"}}}),
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            denied.to_string().contains("unknown tool: create_project"),
+            "console endpoint must not expose other tools: {denied}"
         );
     }
 

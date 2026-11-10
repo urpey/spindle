@@ -2,8 +2,8 @@
 <!--
   Spindle Operator Console: one embedded HTML file, native CSS/JS, no external
   requests or build step. GET read models remain compatible. All actions and
-  new reads use /mcp with its normal session, tool profiles, project locks and
-  service validation. Release snapshots stay local; no platform posting.
+  new reads use /console/mcp: the normal MCP session, project locks and service
+  validation, with a fixed console tool set independent of SPINDLE_TOOL_PROFILE. Release snapshots stay local; no platform posting.
 -->
 <html lang="en">
 <head>
@@ -268,7 +268,7 @@ async function rpc(method, params, initialize = false) {
   const headers = {"Content-Type":"application/json", "Accept":"application/json, text/event-stream"};
   if (mcpSession) headers["Mcp-Session-Id"] = mcpSession;
   if (!initialize) headers["MCP-Protocol-Version"] = mcpVersion;
-  const res = await fetch("/mcp", {method:"POST", headers, body:JSON.stringify({jsonrpc:"2.0", id, method, params}), signal:AbortSignal.timeout(300000)});
+  const res = await fetch("/console/mcp", {method:"POST", headers, body:JSON.stringify({jsonrpc:"2.0", id, method, params}), signal:AbortSignal.timeout(300000)});
   if (!res.ok) {
     if (res.status === 404) { mcpReady = null; mcpSession = null; }
     throw new Error(`Request failed (${res.status}). Refresh the view before retrying.`);
@@ -303,7 +303,7 @@ async function readyMcp() {
     mcpVersion = result.protocolVersion;
     const headers = {"Content-Type":"application/json", "Accept":"application/json, text/event-stream", "MCP-Protocol-Version":mcpVersion};
     if (mcpSession) headers["Mcp-Session-Id"] = mcpSession;
-    const response = await fetch("/mcp", {method:"POST", headers, body:JSON.stringify({jsonrpc:"2.0", method:"notifications/initialized"})});
+    const response = await fetch("/console/mcp", {method:"POST", headers, body:JSON.stringify({jsonrpc:"2.0", method:"notifications/initialized"})});
     if (!response.ok) throw new Error("Could not initialize Spindle. Refresh the page.");
   })().catch(error => { mcpReady = null; mcpSession = null; throw error; });
   return mcpReady;

@@ -581,10 +581,13 @@ The **operator console** is served at `/console` when HTTP mode is on
 assets. It reads run status, the compiled manuscript, and staged canon/plan
 queues through localhost-only `GET /console/api/*` service reads, and follows a
 run's journal live over the SSE topic above. Series, reader memory, editorial
-decisions, and local release actions use an MCP session at `/mcp`; ratification
-still goes through the guarded `decide_*` tools. The GET endpoints never mutate.
-Cross-site browser requests are rejected. When an Origin header is present, it
-must match the loopback authority; native MCP clients without one remain supported.
+decisions, and local release actions use the console's own MCP session at
+`/console/mcp`, which exposes a fixed console tool set (`CONSOLE_TOOLS`)
+independent of `SPINDLE_TOOL_PROFILE`, so a narrow model profile cannot break the
+console; ratification still goes through the guarded `decide_*` tools. The GET
+endpoints never mutate. Cross-site browser requests are rejected. When an Origin
+header is present, it must match the loopback authority or an exact origin listed
+in `SPINDLE_HTTP_ALLOWED_ORIGINS`; native MCP clients without one remain supported.
 
 ## Craft evaluation layer
 

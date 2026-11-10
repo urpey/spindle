@@ -18,8 +18,29 @@ pub(crate) const OPERATOR_ONLY_TOOLS: &[&str] = &[
 pub(crate) fn is_operator_only(name: &str) -> bool {
     OPERATOR_ONLY_TOOLS.contains(&name)
 }
+/// Internal profile for the operator console's own `/console/mcp` endpoint.
+/// It is not selectable with `SPINDLE_TOOL_PROFILE`, so the console keeps
+/// working no matter which model profile the server was started with.
+pub(crate) const CONSOLE_PROFILE: &str = "console";
+
+/// Every tool `console.html` calls. Keep in sync with its `callTool` sites.
+pub(crate) const CONSOLE_TOOLS: &[&str] = &[
+    "compile_manuscript",
+    "decide_canon_deltas",
+    "decide_editorial_item",
+    "decide_plan_amendments",
+    "get_editorial_queue",
+    "get_episode_release",
+    "get_model_usage",
+    "get_series_status",
+    "prepare_episode_release",
+    "read_episode",
+    "release_episode",
+];
+
 pub(super) fn profile_allowed_tool_names(profile: &str) -> Option<&'static [&'static str]> {
     match profile {
+        CONSOLE_PROFILE => Some(CONSOLE_TOOLS),
         "import" => Some(&[
             "create_project",
             "list_projects",
