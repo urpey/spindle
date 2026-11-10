@@ -39,6 +39,89 @@ impl SqliteSpindleService {
             .collect())
     }
 
+    /// Read-only model configuration for the operator console: agents, resolved
+    /// routes and the features each route powers. Carries API-key variable
+    /// names and set/unset flags only, never key values.
+    pub fn console_settings(&self) -> Result<spindle_core::models::ConsoleSettingsOutput> {
+        use spindle_core::models::{
+            ConsoleAgentSummary, ConsoleRouteSummary, ConsoleSettingsOutput,
+        };
+        let agents = self.list_agents()?;
+        let routing = self.agent_routing_config()?;
+        // The public agent summary is frozen (its tool schema has byte budgets),
+        // so the console joins the loaded config file for the key variable name.
+        let configured = agents
+            .source_path
+            .as_deref()
+            .and_then(|path| crate::agent_config::load_agent_config(Some(path)).ok())
+            .map(|loaded| loaded.agents)
+            .unwrap_or_default();
+        let revision = agents
+            .source_path
+            .as_deref()
+            .map(|path| crate::agent_config::config_revision(std::path::Path::new(path)))
+            .transpose()?;
+        let routes = self
+            .model_routes()?
+            .into_iter()
+            .map(|route| {
+                let agent_id = routing
+                    .rules
+                    .iter()
+                    .find(|rule| rule.route_name == route.route_name && rule.rating == route.rating)
+                    .map(|rule| rule.agent_id.clone());
+                ConsoleRouteSummary {
+                    is_local_stand_in: route.adapter_kind == "local",
+                    features: route_feature_keys(&route.route_name)
+                        .iter()
+                        .map(|key| (*key).to_string())
+                        .collect(),
+                    route_name: route.route_name,
+                    adapter_kind: route.adapter_kind,
+                    model_name: route.model_name,
+                    purpose: route.purpose,
+                    rating: route.rating,
+                    agent_id,
+                }
+            })
+            .collect();
+        Ok(ConsoleSettingsOutput {
+            source_path: agents.source_path,
+            revision,
+            config_error: agents.config_error,
+            health_checks_enabled: agents.health_checks_enabled,
+            agents: agents
+                .agents
+                .into_iter()
+                .map(|agent| {
+                    let api_key_env = configured
+                        .iter()
+                        .find(|configured| configured.id == agent.id)
+                        .and_then(|configured| configured.api_key_env.clone());
+                    let api_key_set = api_key_env
+                        .as_deref()
+                        .is_some_and(|variable| std::env::var_os(variable).is_some());
+                    ConsoleAgentSummary {
+                        id: agent.id,
+                        name: agent.name,
+                        provider: agent.provider,
+                        model: agent.model,
+                        endpoint: agent.endpoint,
+                        ratings: agent.ratings,
+                        quality_tier: agent.quality_tier,
+                        capabilities: agent.capabilities,
+                        notes: agent.notes,
+                        status: agent.status,
+                        api_key_env,
+                        api_key_set,
+                        route_names: agent.route_names,
+                    }
+                })
+                .collect(),
+            routes,
+        })
+    }
+
     pub fn configure_agents(&self, input: ConfigureAgentsInput) -> Result<ConfigureAgentsOutput> {
         self.repository
             .model_router()
@@ -208,5 +291,25 @@ impl SqliteSpindleService {
             },
             activity_id: None,
         })
+    }
+}
+
+/// Catalog keys for the features a model route powers.
+fn route_feature_keys(route: &str) -> &'static [&'static str] {
+    match route {
+        "draft" => &["route.feature.drafting"],
+        "review" => &[
+            "route.feature.reader_review",
+            "route.feature.dual_persona_review",
+            "route.feature.replan",
+            "route.feature.canon_mining",
+        ],
+        "research" => &["route.feature.research_recall"],
+        "embedding" => &["route.feature.semantic_search"],
+        "import_extract" | "import_synthesize" | "import_validate" => {
+            &["route.feature.manuscript_import"]
+        }
+        "style_analyze" | "style_revise" => &["route.feature.style_profile"],
+        _ => &[],
     }
 }

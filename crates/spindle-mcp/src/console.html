@@ -176,6 +176,7 @@
     <button data-pane="manuscript" aria-pressed="false" data-i18n="nav.manuscript">Manuscript</button>
     <button data-pane="canon" aria-pressed="false" data-i18n="nav.canon">Canon queue</button>
     <button data-pane="plan" aria-pressed="false" data-i18n="nav.plan">Plan queue</button>
+    <button data-pane="settings" aria-pressed="false" data-i18n="nav.settings"></button>
   </nav>
   <div class="help-popover" id="help-nav" role="dialog" aria-labelledby="help-nav-title" hidden>
     <h2 id="help-nav-title" data-i18n="help.nav.title">What this console is</h2>
@@ -188,6 +189,7 @@
       <li><strong data-i18n="nav.manuscript"></strong> — <span data-i18n="help.nav.manuscript"></span></li>
       <li><strong data-i18n="nav.canon"></strong> — <span data-i18n="help.nav.canon"></span></li>
       <li><strong data-i18n="nav.plan"></strong> — <span data-i18n="help.nav.plan"></span></li>
+      <li><strong data-i18n="nav.settings"></strong> — <span data-i18n="help.nav.settings"></span></li>
     </ul>
     <button type="button" class="help-close" data-i18n="help.close">Close</button>
   </div>
@@ -374,6 +376,33 @@
     <div class="help-popover" id="help-plan-amendment" role="dialog" aria-labelledby="help-plan-amendment-title" hidden>
       <h2 id="help-plan-amendment-title" data-i18n="help.plan.amendment.title"></h2>
       <p data-i18n="help.plan.amendment.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+  </section>
+
+  <!-- ── Settings ─────────────────────────────────────────────────────── -->
+  <section id="pane-settings" class="pane" data-i18n-aria-label="nav.settings" aria-label="Settings">
+    <div class="row">
+      <button class="refresh" id="settings-refresh" data-i18n="settings.refresh"></button>
+      <button type="button" class="help" data-help="help-settings-routes" aria-expanded="false" aria-controls="help-settings-routes" data-i18n-aria-label="help.settings.routes.title">!</button>
+    </div>
+    <h2 data-i18n="settings.title"></h2>
+    <p class="muted" id="settings-config-path"></p>
+    <div id="settings-error"></div>
+    <h3 data-i18n="settings.routes"></h3>
+    <div class="card" id="settings-routes"></div>
+    <h3><span data-i18n="settings.agents"></span>
+      <button type="button" class="help" data-help="help-settings-agents" aria-expanded="false" aria-controls="help-settings-agents" data-i18n-aria-label="help.settings.agents.title">!</button></h3>
+    <p class="muted" data-i18n="settings.agentsHelp"></p>
+    <div class="card" id="settings-agents"></div>
+    <div class="help-popover" id="help-settings-routes" role="dialog" aria-labelledby="help-settings-routes-title" hidden>
+      <h2 id="help-settings-routes-title" data-i18n="help.settings.routes.title"></h2>
+      <p data-i18n="help.settings.routes.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+    <div class="help-popover" id="help-settings-agents" role="dialog" aria-labelledby="help-settings-agents-title" hidden>
+      <h2 id="help-settings-agents-title" data-i18n="help.settings.agents.title"></h2>
+      <p data-i18n="help.settings.agents.body"></p>
       <button type="button" class="help-close" data-i18n="help.close"></button>
     </div>
   </section>
@@ -652,7 +681,53 @@
     "status.mixed": "混合",
     "status.neutral": "中性",
     "status.local": "本機",
-    "status.none": "無"
+    "status.none": "無",
+    "nav.settings": "設定",
+    "help.nav.settings": "顯示自己呼叫的模型設定：每一條 route 綁到哪個 agent、是不是內建替身，以及每個 agent 的 API key 變數名稱（不會顯示值）。",
+    "settings.title": "模型設定",
+    "settings.refresh": "重新整理",
+    "settings.routes": "模型 route",
+    "settings.agents": "已設定的 agent",
+    "settings.configPath": "設定檔：{path}",
+    "settings.noConfig": "沒有載入任何設定檔（所有 route 都走內建的本機替身）。",
+    "settings.loading": "正在載入模型設定…",
+    "settings.loadError": "模型設定",
+    "settings.localBadge": "沒有連接模型",
+    "settings.features": "影響的功能",
+    "settings.route": "route",
+    "settings.agent": "agent",
+    "settings.adapter": "轉接器",
+    "settings.model": "模型",
+    "settings.agentId": "id",
+    "settings.agentName": "名稱",
+    "settings.provider": "供應商",
+    "settings.apiKeyEnv": "API key 變數",
+    "settings.apiKeySet": "已設定",
+    "settings.apiKeyUnset": "未設定",
+    "settings.apiKeyNone": "不需要",
+    "settings.status": "狀態",
+    "settings.endpoint": "端點",
+    "settings.ratings": "評級",
+    "settings.quality": "品質層級",
+    "settings.notes": "備註",
+    "settings.emptyRoutes": "沒有可顯示的 route。",
+    "settings.emptyAgents": "沒有設定任何 agent。",
+    "settings.agentsHelp": "agent 是供應商連線；route 是把功能綁到 agent。沒有 agent 時所有 route 都退回內建替身。",
+    "route.feature.drafting": "場景撰寫",
+    "route.feature.reader_review": "AI 讀者審閱",
+    "route.feature.dual_persona_review": "雙人格審閱",
+    "route.feature.replan": "重新規劃",
+    "route.feature.canon_mining": "設定挖掘",
+    "route.feature.research_recall": "研究召回",
+    "route.feature.semantic_search": "語意搜尋",
+    "route.feature.manuscript_import": "書稿匯入",
+    "route.feature.style_profile": "風格側寫",
+    "help.settings.routes.title": "route 與本機替身",
+    "help.settings.routes.body": "每條 route 是一個功能（撰寫、審閱、研究…）指向的模型。顯示「沒有連接模型」表示它走內建替身，該功能不會呼叫真正的模型，只能靠 host assistant 完成。",
+    "help.settings.agents.title": "agent 與 API key",
+    "help.settings.agents.body": "agent 記錄供應商、端點、模型與評級。API key 只以環境變數名稱顯示，並標示該變數在伺服器行程裡是否已設定；主控台永遠不會收到或顯示金鑰本身。",
+    "status.missing_api_key": "缺少 API key",
+    "status.unreachable": "連不上"
   },
   "en": {
     "app.title": "Spindle Operator Console",
@@ -925,7 +1000,53 @@
     "status.mixed": "mixed",
     "status.neutral": "neutral",
     "status.local": "local",
-    "status.none": "none"
+    "status.none": "none",
+    "nav.settings": "Settings",
+    "help.nav.settings": "Shows how Spindle's own model calls are configured: which agent each route binds to, whether it is the built-in stand-in, and each agent's API-key variable name (never its value).",
+    "settings.title": "Model settings",
+    "settings.refresh": "Refresh",
+    "settings.routes": "Model routes",
+    "settings.agents": "Configured agents",
+    "settings.configPath": "Config file: {path}",
+    "settings.noConfig": "No config file loaded (every route uses the built-in local stand-in).",
+    "settings.loading": "Loading model settings…",
+    "settings.loadError": "model settings",
+    "settings.localBadge": "no model connected",
+    "settings.features": "Powers",
+    "settings.route": "route",
+    "settings.agent": "agent",
+    "settings.adapter": "adapter",
+    "settings.model": "model",
+    "settings.agentId": "id",
+    "settings.agentName": "name",
+    "settings.provider": "provider",
+    "settings.apiKeyEnv": "API key variable",
+    "settings.apiKeySet": "set",
+    "settings.apiKeyUnset": "not set",
+    "settings.apiKeyNone": "not needed",
+    "settings.status": "status",
+    "settings.endpoint": "endpoint",
+    "settings.ratings": "ratings",
+    "settings.quality": "quality tier",
+    "settings.notes": "notes",
+    "settings.emptyRoutes": "No routes to show.",
+    "settings.emptyAgents": "No agents configured.",
+    "settings.agentsHelp": "An agent is a provider connection; a route binds a feature to an agent. With no agents every route falls back to the built-in stand-in.",
+    "route.feature.drafting": "scene drafting",
+    "route.feature.reader_review": "AI reader review",
+    "route.feature.dual_persona_review": "dual-persona review",
+    "route.feature.replan": "replanning",
+    "route.feature.canon_mining": "canon mining",
+    "route.feature.research_recall": "research recall",
+    "route.feature.semantic_search": "semantic search",
+    "route.feature.manuscript_import": "manuscript import",
+    "route.feature.style_profile": "style profile",
+    "help.settings.routes.title": "Routes and the local stand-in",
+    "help.settings.routes.body": "Each route is the model a feature (drafting, review, research…) calls. \"No model connected\" means it uses the built-in stand-in: that feature cannot call a real model and only works through the host assistant.",
+    "help.settings.agents.title": "Agents and API keys",
+    "help.settings.agents.body": "An agent records the provider, endpoint, model and ratings. The API key is shown only as its environment variable name with a set/unset flag; the console never receives or displays the key itself.",
+    "status.missing_api_key": "missing API key",
+    "status.unreachable": "unreachable"
   }
 }
 </script>
@@ -1599,8 +1720,46 @@ document.addEventListener("click", event => {
   });
 });
 
+// ── Settings pane ────────────────────────────────────────────────────────
+async function renderSettings() {
+  const routesBox = $("settings-routes"), agentsBox = $("settings-agents");
+  const current = loading("settings-routes", t("settings.loading"));
+  let data;
+  try {
+    data = await getJSON("/console/api/settings");
+  } catch (err) {
+    $("settings-error").innerHTML = errorHTML(t("settings.loadError"), err);
+    return;
+  }
+  if (!current()) return;
+  $("settings-config-path").textContent = data.source_path
+    ? tf("settings.configPath", {path: data.source_path})
+    : t("settings.noConfig");
+  $("settings-error").innerHTML = data.config_error
+    ? `<div class="note">${esc(data.config_error)}</div>` : "";
+  const routes = data.routes || [], agents = data.agents || [];
+  routesBox.innerHTML = routes.length
+    ? `<div class="table-scroll"><table><thead><tr>
+        <th>${esc(t("settings.route"))}</th><th>${esc(t("settings.agent"))}</th><th>${esc(t("settings.adapter"))}</th>
+        <th>${esc(t("settings.model"))}</th><th>${esc(t("settings.features"))}</th></tr></thead><tbody>${routes.map((route) => `<tr>
+        <td><strong>${esc(route.route_name)}</strong>${route.rating ? `<br><span class="muted">${esc(route.rating)}</span>` : ""}</td>
+        <td>${route.agent_id ? esc(route.agent_id) : `<span class="muted">—</span>`}</td>
+        <td>${esc(route.adapter_kind)}${route.is_local_stand_in ? `<br><span class="pill blocked">${esc(t("settings.localBadge"))}</span>` : ""}</td>
+        <td>${esc(route.model_name)}</td>
+        <td>${(route.features || []).map((key) => esc(t(key))).join("、") || `<span class="muted">—</span>`}</td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">${esc(t("settings.emptyRoutes"))}</div>`;
+  agentsBox.innerHTML = agents.length
+    ? `<div class="table-scroll"><table><thead><tr>
+        <th>${esc(t("settings.agentId"))}</th><th>${esc(t("settings.agentName"))}</th><th>${esc(t("settings.provider"))}</th>
+        <th>${esc(t("settings.model"))}</th><th>${esc(t("settings.apiKeyEnv"))}</th><th>${esc(t("settings.status"))}</th></tr></thead><tbody>${agents.map((agent) => `<tr>
+        <td>${esc(agent.id)}</td><td>${esc(agent.name)}</td><td>${esc(agent.provider)}</td><td>${esc(agent.model)}</td>
+        <td>${agent.api_key_env ? `${esc(agent.api_key_env)}<br><span class="muted">${esc(t(agent.api_key_set ? "settings.apiKeySet" : "settings.apiKeyUnset"))}</span>` : `<span class="muted">${esc(t("settings.apiKeyNone"))}</span>`}</td>
+        <td>${pill(agent.status)}</td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">${esc(t("settings.emptyAgents"))}</div>`;
+}
+
 // ── Pane switching + wiring ──────────────────────────────────────────────
-const paneRenderers = { series: renderSeries, editorial: renderEditorial, threads: renderThreads, runs: renderRuns, manuscript: renderManuscript, canon: renderCanon, plan: renderPlan };
+const paneRenderers = { series: renderSeries, editorial: renderEditorial, threads: renderThreads, runs: renderRuns, manuscript: renderManuscript, canon: renderCanon, plan: renderPlan, settings: renderSettings };
 
 function switchPane(name) {
   activePane = name;
@@ -1623,6 +1782,7 @@ $("runs-refresh").addEventListener("click", renderRuns);
 $("ms-refresh").addEventListener("click", renderManuscript);
 $("canon-refresh").addEventListener("click", renderCanon);
 $("plan-refresh").addEventListener("click", renderPlan);
+$("settings-refresh").addEventListener("click", renderSettings);
 
 $("series-refresh").onclick = () => renderSeries();
 $("editorial-refresh").onclick = () => renderEditorial();

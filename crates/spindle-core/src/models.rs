@@ -6924,6 +6924,68 @@ pub struct ModelRouteSummary {
     pub caller_should_send_brief: bool,
 }
 
+/// Read-only model configuration for the operator console. Carries the name of
+/// each agent's API-key environment variable and whether it is set, never a key.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConsoleSettingsOutput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    /// Content hash of the loaded config file, for stale-write detection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_error: Option<String>,
+    pub health_checks_enabled: bool,
+    #[serde(default)]
+    pub agents: Vec<ConsoleAgentSummary>,
+    #[serde(default)]
+    pub routes: Vec<ConsoleRouteSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConsoleAgentSummary {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub model: String,
+    pub endpoint: String,
+    #[serde(default)]
+    pub ratings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_tier: Option<String>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    pub status: AgentConfigStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub api_key_set: bool,
+    #[serde(default)]
+    pub route_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConsoleRouteSummary {
+    pub route_name: String,
+    pub adapter_kind: String,
+    pub model_name: String,
+    pub purpose: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rating: Option<String>,
+    /// Agent bound to this route, when a routing rule names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// True when the route resolves to the built-in local stand-in, i.e. no
+    /// model is configured and the feature only works through the host agent.
+    #[serde(default)]
+    pub is_local_stand_in: bool,
+    /// Catalog keys for the features this route powers.
+    #[serde(default)]
+    pub features: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ConfigureAgentsInput {
     pub config_path: Option<String>,
