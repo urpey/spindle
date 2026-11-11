@@ -53,15 +53,16 @@ use spindle_core::models::{
     normalize_name,
 };
 use spindle_core::provenance::{Provenance, RecordId as SnapshotRecordId};
+use spindle_core::story_spine::StorySpine;
 use spindle_core::subject::{Subject, SubjectTable};
 use spindle_core::subject_snapshot::{
     CanonicalFactSummary, CharacterArcDetails, CharacterArcSummary, CharacterDetails,
     CharacterStateSummary, ConflictDetails, EconomyDetails, FactionDetails, KnowledgeFactSummary,
     LocationDetails, MotifDetails, NarrativePromiseDetails, NarrativePromiseSummary,
     PlotLineDetails, RelationshipDetails, RelationshipSummary, ReligionDetails,
-    SceneAppearanceSummary, SubjectKindSpecific, SubjectLinkSummary, SubjectSnapshot,
-    SystemOverlayDetails, TermDetails, ThemeDetails, TimelineEventDetails, VoiceProfileSummary,
-    WorldRuleDetails,
+    SceneAppearanceSummary, StorySpineDetails, SubjectKindSpecific, SubjectLinkSummary,
+    SubjectSnapshot, SystemOverlayDetails, TermDetails, ThemeDetails, TimelineEventDetails,
+    VoiceProfileSummary, WorldRuleDetails,
 };
 
 use super::records::{
@@ -775,6 +776,7 @@ mod scene_commit;
 mod scenes;
 mod search;
 mod snapshots;
+mod story_spine;
 mod style;
 mod timeline;
 mod validation;
@@ -2863,6 +2865,7 @@ struct SnapshotBatchContext {
     character_states: Vec<CharacterState>,
     voice_profiles: Vec<CharacterVoiceProfile>,
     world_states: Vec<WorldState>,
+    story_spines: Vec<StorySpine>,
 }
 
 fn assemble_subject_snapshot_from_batch(
@@ -3230,6 +3233,31 @@ fn batch_subject_kind(
                     "title": book.title,
                 })),
                 Provenance::book(SnapshotRecordId::new(book.id.clone())),
+            ))
+        }
+        SubjectTable::StorySpine => {
+            let spine = find_by_id(&batch.story_spines, &raw_id, |item| &item.story_spine_id)?;
+            Ok((
+                match spine.book_number {
+                    Some(book) => format!("Story Spine for book {book}"),
+                    None => "Series Story Spine".to_string(),
+                },
+                SubjectKindSpecific::StorySpine(StorySpineDetails {
+                    series_spine_id: spine.series_spine_id.clone(),
+                    book_number: spine.book_number,
+                    central_question: spine.central_question.clone(),
+                    controlling_idea: spine.controlling_idea.clone(),
+                    counter_idea: spine.counter_idea.clone(),
+                    spine_axis: spine.spine_axis.clone(),
+                    ending_type: spine.ending_type,
+                    inciting_incident: spine.inciting_incident.clone(),
+                    final_climax: spine.final_climax.clone(),
+                    theme_ids: spine.theme_ids.clone(),
+                }),
+                Provenance::asserted_by_author(
+                    chrono::DateTime::from_timestamp_micros(spine.updated_at)
+                        .unwrap_or_else(chrono::Utc::now),
+                ),
             ))
         }
         SubjectTable::Project => anyhow::bail!("project snapshots are handled separately"),
@@ -3605,6 +3633,13 @@ fn batch_subject_display_name(batch: &SnapshotBatchContext, id: &str) -> Result<
                 .clone()
                 .unwrap_or_else(|| format!("Book {}", book.book_number)))
         }
+        "story_spine" => {
+            let spine = find_by_id(&batch.story_spines, id, |item| &item.story_spine_id)?;
+            Ok(match spine.book_number {
+                Some(book) => format!("Story Spine for book {book}"),
+                None => "Series Story Spine".to_string(),
+            })
+        }
         "relationship" | "relates_to" => {
             let (in_id, out_id) = split_relationship_subject_id(id)?;
             let relationship = batch
@@ -3658,6 +3693,7 @@ fn subject_table_from_id(id: &str) -> Result<SubjectTable> {
         "scene" => Ok(SubjectTable::Scene),
         "chapter" => Ok(SubjectTable::Chapter),
         "book" => Ok(SubjectTable::Book),
+        "story_spine" => Ok(SubjectTable::StorySpine),
         other => anyhow::bail!("unsupported subject table: {other}"),
     }
 }

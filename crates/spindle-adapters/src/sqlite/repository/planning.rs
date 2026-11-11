@@ -532,7 +532,9 @@ fn check_level(level: PlanningLevel, op: &PlanningOperation, attached: bool) -> 
     use PlanningOperation::*;
     let valid = match op {
         CreateProject(_) => level == PlanningLevel::Contract && !attached,
-        UpdateReaderContract(_) => level == PlanningLevel::Contract && attached,
+        UpdateReaderContract(_) | CreateStorySpine(_) => {
+            level == PlanningLevel::Contract && attached
+        }
         CreateCharacter(_) | CreateLocation(_) | CreateWorldRule(_) | CreateRelationship(_) => {
             level == PlanningLevel::CastWorld
         }
@@ -624,12 +626,13 @@ fn check_refs(
                     "pacing_curve",
                     "book",
                     "chapter",
-                    "faction"
+                    "faction",
+                    "story_spine"
                 ]
                 .contains(&table),
                 "unsupported planning record type"
             );
-            if matches!(table, "book" | "chapter") {
+            if matches!(table, "book" | "chapter" | "story_spine") {
                 let project: String = conn.query_row(
                     &format!("SELECT project_id FROM {table} WHERE id=?1"),
                     [id],
@@ -659,7 +662,7 @@ fn check_refs(
                     "character_id" | "character_a_id" | "character_b_id" | "character_ids"
                     | "pov_character_id" => Some("character"),
                     "location_id" => Some("location"),
-                    "connected_theme_ids" | "target_theme_ids" => Some("theme"),
+                    "connected_theme_ids" | "target_theme_ids" | "theme_ids" => Some("theme"),
                     "connected_conflict_ids" | "target_conflict_ids" => Some("conflict"),
                     "target_plot_line_ids" => Some("plot_line"),
                     "promise_ref" => Some("narrative_promise"),
@@ -667,6 +670,7 @@ fn check_refs(
                     "book_id" => Some("book"),
                     "entity_id" => Some("chapter"),
                     "controlling_faction" => Some("faction"),
+                    "series_spine_id" => Some("story_spine"),
                     _ => None,
                 };
                 check_refs(conn, v, available, scope, field_type)?;
@@ -686,6 +690,7 @@ fn output_type(op: &PlanningOperation) -> &'static str {
     use PlanningOperation::*;
     match op {
         CreateProject(_) | UpdateReaderContract(_) => "project",
+        CreateStorySpine(_) => "story_spine",
         CreateCharacter(_) => "character",
         CreateLocation(_) => "location",
         CreateWorldRule(_) => "world_rule",
@@ -706,6 +711,17 @@ fn output_type(op: &PlanningOperation) -> &'static str {
         PlanChapter(_) => "chapter_plan",
     }
 }
+
+/// Story-Spine completeness findings are blocking for acceptance, but they
+/// are recorded on the staged proposal so the author can see exactly which
+/// contract field is missing. Every other blocking finding still rejects
+/// staging, as before.
+const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
+    "story_spine_missing_central_question",
+    "story_spine_missing_controlling_idea_value",
+    "story_spine_missing_controlling_idea_cause",
+    "story_spine_missing_spine_axis",
+];
 
 fn stage_in_transaction(
     conn: &mut rusqlite::Connection,
@@ -792,6 +808,7 @@ fn stage_in_transaction(
     let blocking: Vec<String> = stage_findings
         .iter()
         .filter(|f| f.severity == PlanningFindingSeverity::Blocking)
+        .filter(|f| !STAGE_RECORDABLE_BLOCKING_CODES.contains(&f.code.as_str()))
         .map(|f| format!("{}: {} (at {})", f.code, f.actual, f.path))
         .collect();
     anyhow::ensure!(
@@ -922,7 +939,7 @@ fn collect_ref_findings(
                     "character_id" | "character_a_id" | "character_b_id" | "character_ids"
                     | "pov_character_id" => Some("character"),
                     "location_id" => Some("location"),
-                    "connected_theme_ids" | "target_theme_ids" => Some("theme"),
+                    "connected_theme_ids" | "target_theme_ids" | "theme_ids" => Some("theme"),
                     "connected_conflict_ids" | "target_conflict_ids" => Some("conflict"),
                     "target_plot_line_ids" => Some("plot_line"),
                     "promise_ref" => Some("narrative_promise"),
@@ -930,6 +947,7 @@ fn collect_ref_findings(
                     "book_id" => Some("book"),
                     "entity_id" => Some("chapter"),
                     "controlling_faction" => Some("faction"),
+                    "series_spine_id" => Some("story_spine"),
                     _ => None,
                 };
                 let child_path = format!("{path}/{key}");
@@ -2017,6 +2035,305 @@ fn validate_stage_input_in_conn_excluding(
                             co.book_number, co.chapter_number
                         ),
                         repair_hint: "Use positive 1-based book and chapter numbers.".to_string(),
+                    });
+                }
+            }
+            PlanningOperation::CreateStorySpine(spine) => {
+                let scope = s
+                    .scope
+                    .as_ref()
+                    .context("story spine requires an attached project")?;
+                let project_is_mckee: bool = conn.query_row(
+                    "SELECT mckee_structured FROM project WHERE id=?1",
+                    [&scope.project_id],
+                    |row| row.get(0),
+                )?;
+                if !project_is_mckee {
+                    findings.push(PlanningFinding {
+                        code: "story_spine_requires_mckee_project".to_string(),
+                        severity: PlanningFindingSeverity::Blocking,
+                        path: format!("{item_path}/operation"),
+                        related_refs: vec![item.output_ref.clone()],
+                        expected: "McKee-structured project".to_string(),
+                        actual: "project was not created through the planning root".to_string(),
+                        repair_hint:
+                            "Story Spines are available only to projects created through the new-book planning flow; existing projects cannot opt in."
+                                .to_string(),
+                    });
+                }
+
+                for (field, value, code) in [
+                    (
+                        "central_question",
+                        &spine.central_question,
+                        "story_spine_missing_central_question",
+                    ),
+                    (
+                        "controlling_idea/value",
+                        &spine.controlling_idea.value,
+                        "story_spine_missing_controlling_idea_value",
+                    ),
+                    (
+                        "controlling_idea/cause",
+                        &spine.controlling_idea.cause,
+                        "story_spine_missing_controlling_idea_cause",
+                    ),
+                    (
+                        "spine_axis",
+                        &spine.spine_axis,
+                        "story_spine_missing_spine_axis",
+                    ),
+                ] {
+                    if value.trim().is_empty() {
+                        findings.push(PlanningFinding {
+                            code: code.to_string(),
+                            severity: PlanningFindingSeverity::Blocking,
+                            path: format!("{item_path}/operation/input/{field}"),
+                            related_refs: vec![item.output_ref.clone()],
+                            expected: "non-empty Story Spine field".to_string(),
+                            actual: "empty".to_string(),
+                            repair_hint: format!(
+                                "Fill in the {field} before accepting this Story Spine."
+                            ),
+                        });
+                    }
+                }
+
+                let is_sub_spine = spine.series_spine_id.is_some();
+                if is_sub_spine && spine.book_number.is_none() {
+                    findings.push(PlanningFinding {
+                        code: "story_spine_sub_spine_requires_book_number".to_string(),
+                        severity: PlanningFindingSeverity::Blocking,
+                        path: format!("{item_path}/operation/input/book_number"),
+                        related_refs: vec![item.output_ref.clone()],
+                        expected: "positive book_number for a book sub-spine".to_string(),
+                        actual: "missing".to_string(),
+                        repair_hint:
+                            "A book sub-spine must set book_number and reference the series spine."
+                                .to_string(),
+                    });
+                }
+                if !is_sub_spine && spine.book_number.is_some() {
+                    findings.push(PlanningFinding {
+                        code: "story_spine_series_cannot_name_book".to_string(),
+                        severity: PlanningFindingSeverity::Blocking,
+                        path: format!("{item_path}/operation/input/book_number"),
+                        related_refs: vec![item.output_ref.clone()],
+                        expected: "book_number absent on the series spine".to_string(),
+                        actual: format!("{:?}", spine.book_number),
+                        repair_hint:
+                            "The series spine has no book_number; create one sub-spine per book instead."
+                                .to_string(),
+                    });
+                }
+                if let Some(book) = spine.book_number
+                    && book < 1
+                {
+                    findings.push(PlanningFinding {
+                        code: "story_spine_invalid_book_number".to_string(),
+                        severity: PlanningFindingSeverity::Blocking,
+                        path: format!("{item_path}/operation/input/book_number"),
+                        related_refs: vec![item.output_ref.clone()],
+                        expected: "book_number >= 1".to_string(),
+                        actual: book.to_string(),
+                        repair_hint: "Use a 1-based positive book number.".to_string(),
+                    });
+                }
+
+                if let Some(reference) = &spine.series_spine_id {
+                    let mut referenced_series: Option<Result<(String, Option<String>)>> = None;
+                    match reference {
+                        PlanningRef::ExistingRecordId(id) => {
+                            referenced_series = Some(
+                                conn.query_row(
+                                    "SELECT project_id, series_spine_id FROM story_spine WHERE id=?1",
+                                    [id],
+                                    |row| Ok((row.get(0)?, row.get(1)?)),
+                                )
+                                .optional_inner()?
+                                .map(Ok)
+                                .unwrap_or_else(|| {
+                                    Err(anyhow::anyhow!("series story spine not found"))
+                                }),
+                            );
+                        }
+                        PlanningRef::ProposalRef(key) => {
+                            if let Some(parent) = input
+                                .operations
+                                .iter()
+                                .find(|candidate| &candidate.output_ref == key)
+                            {
+                                if let PlanningOperation::CreateStorySpine(parent) =
+                                    &parent.operation
+                                {
+                                    referenced_series = Some(Ok((
+                                        scope.project_id.clone(),
+                                        parent.series_spine_id.as_ref().map(|_| key.clone()),
+                                    )));
+                                }
+                            } else if let Some(id) = receipt_refs.get(key) {
+                                referenced_series = Some(
+                                    conn.query_row(
+                                        "SELECT project_id, series_spine_id FROM story_spine WHERE id=?1",
+                                        [id],
+                                        |row| Ok((row.get(0)?, row.get(1)?)),
+                                    )
+                                    .optional_inner()?
+                                    .map(Ok)
+                                    .unwrap_or_else(|| {
+                                        Err(anyhow::anyhow!("series story spine not found"))
+                                    }),
+                                );
+                            }
+                        }
+                    }
+                    match referenced_series {
+                        Some(Ok((project_id, parent_series_id))) => {
+                            if project_id != scope.project_id {
+                                findings.push(PlanningFinding {
+                                    code: "story_spine_series_wrong_project".to_string(),
+                                    severity: PlanningFindingSeverity::Blocking,
+                                    path: format!("{item_path}/operation/input/series_spine_id"),
+                                    related_refs: vec![item.output_ref.clone()],
+                                    expected: "series spine from the same project".to_string(),
+                                    actual: format!("project {project_id}"),
+                                    repair_hint:
+                                        "Reference the series Story Spine created for this project."
+                                            .to_string(),
+                                });
+                            } else if parent_series_id.is_some() {
+                                findings.push(PlanningFinding {
+                                    code: "story_spine_sub_spine_must_reference_series".to_string(),
+                                    severity: PlanningFindingSeverity::Blocking,
+                                    path: format!(
+                                        "{item_path}/operation/input/series_spine_id"
+                                    ),
+                                    related_refs: vec![item.output_ref.clone()],
+                                    expected: "the project's series spine".to_string(),
+                                    actual: "another book sub-spine".to_string(),
+                                    repair_hint:
+                                        "A book sub-spine references the series spine, not another book's sub-spine."
+                                            .to_string(),
+                                });
+                            }
+                        }
+                        Some(Err(error)) => {
+                            findings.push(PlanningFinding {
+                                code: "story_spine_series_not_found".to_string(),
+                                severity: PlanningFindingSeverity::Blocking,
+                                path: format!("{item_path}/operation/input/series_spine_id"),
+                                related_refs: vec![item.output_ref.clone()],
+                                expected: "existing series-spine record".to_string(),
+                                actual: error.to_string(),
+                                repair_hint:
+                                    "Reference the series spine created earlier in this session."
+                                        .to_string(),
+                            });
+                        }
+                        None => {}
+                    }
+                }
+
+                if !is_sub_spine {
+                    let existing_series: bool = conn.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM story_spine WHERE project_id=?1 AND series_spine_id IS NULL)",
+                        [&scope.project_id],
+                        |row| row.get(0),
+                    )?;
+                    let earlier_series = input.operations.iter().take(idx).any(|candidate| {
+                        matches!(
+                            &candidate.operation,
+                            PlanningOperation::CreateStorySpine(earlier)
+                                if earlier.series_spine_id.is_none()
+                        )
+                    });
+                    if existing_series || earlier_series {
+                        findings.push(PlanningFinding {
+                            code: "story_spine_series_already_exists".to_string(),
+                            severity: PlanningFindingSeverity::Blocking,
+                            path: format!("{item_path}/operation"),
+                            related_refs: vec![item.output_ref.clone()],
+                            expected: "one series Story Spine per project".to_string(),
+                            actual: "a series spine already exists".to_string(),
+                            repair_hint:
+                                "A project has exactly one series Story Spine; stage a book sub-spine instead."
+                                    .to_string(),
+                        });
+                    }
+                } else if let Some(book) = spine.book_number {
+                    let existing_book: bool = conn.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM story_spine WHERE project_id=?1 AND book_number=?2 AND series_spine_id IS NOT NULL)",
+                        rusqlite::params![&scope.project_id, book],
+                        |row| row.get(0),
+                    )?;
+                    let earlier_book = input.operations.iter().take(idx).any(|candidate| {
+                        matches!(
+                            &candidate.operation,
+                            PlanningOperation::CreateStorySpine(earlier)
+                                if earlier.book_number == Some(book)
+                                    && earlier.series_spine_id.is_some()
+                        )
+                    });
+                    if existing_book || earlier_book {
+                        findings.push(PlanningFinding {
+                            code: "story_spine_book_already_exists".to_string(),
+                            severity: PlanningFindingSeverity::Blocking,
+                            path: format!("{item_path}/operation/input/book_number"),
+                            related_refs: vec![item.output_ref.clone()],
+                            expected: "one sub-spine per book".to_string(),
+                            actual: format!("book {book} already has a sub-spine"),
+                            repair_hint:
+                                "Each book has at most one Story Spine sub-spine; revise the existing one instead."
+                                    .to_string(),
+                        });
+                    }
+                }
+
+                if let Some(placement) = &spine.inciting_incident
+                    && !placement.has_positive_coordinates()
+                {
+                    findings.push(PlanningFinding {
+                        code: "story_spine_invalid_story_placement".to_string(),
+                        severity: PlanningFindingSeverity::Blocking,
+                        path: format!("{item_path}/operation/input/inciting_incident"),
+                        related_refs: vec![item.output_ref.clone()],
+                        expected: "positive book, chapter, and scene coordinates".to_string(),
+                        actual: format!("{placement:?}"),
+                        repair_hint: "Use 1-based positive story placement coordinates."
+                            .to_string(),
+                    });
+                }
+                if let Some(placement) = &spine.final_climax
+                    && !placement.has_positive_coordinates()
+                {
+                    findings.push(PlanningFinding {
+                        code: "story_spine_invalid_story_placement".to_string(),
+                        severity: PlanningFindingSeverity::Blocking,
+                        path: format!("{item_path}/operation/input/final_climax"),
+                        related_refs: vec![item.output_ref.clone()],
+                        expected: "positive book, chapter, and scene coordinates".to_string(),
+                        actual: format!("{placement:?}"),
+                        repair_hint: "Use 1-based positive story placement coordinates."
+                            .to_string(),
+                    });
+                }
+                if let (Some(inciting), Some(climax)) =
+                    (&spine.inciting_incident, &spine.final_climax)
+                    && climax.cmp_story_order(inciting) == std::cmp::Ordering::Less
+                {
+                    findings.push(PlanningFinding {
+                        code: "story_spine_climax_before_inciting_incident".to_string(),
+                        severity: PlanningFindingSeverity::Blocking,
+                        path: format!("{item_path}/operation/input/final_climax"),
+                        related_refs: vec![item.output_ref.clone()],
+                        expected: "final_climax at or after inciting_incident".to_string(),
+                        actual: format!(
+                            "book {} chapter {}",
+                            climax.book_number, climax.chapter_number
+                        ),
+                        repair_hint:
+                            "Place the final climax after the inciting incident in story order."
+                                .to_string(),
                     });
                 }
             }

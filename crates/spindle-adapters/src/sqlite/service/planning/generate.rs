@@ -20,7 +20,7 @@ pub(crate) fn canonical_artifact_schema() -> (serde_json::Value, String) {
 fn allowed_operations_for_level(level: PlanningLevel, attached: bool) -> &'static [&'static str] {
     match (level, attached) {
         (PlanningLevel::Contract, false) => &["create_project"],
-        (PlanningLevel::Contract, true) => &["update_reader_contract"],
+        (PlanningLevel::Contract, true) => &["update_reader_contract", "create_story_spine"],
         (PlanningLevel::CastWorld, _) => &[
             "create_character",
             "create_location",

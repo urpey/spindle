@@ -539,6 +539,7 @@ impl SqliteSpindleService {
                 project_type: project.project_type,
                 genre: project.genre,
                 active_style_profile_id: project.active_style_profile_id.clone(),
+                mckee_structured: project.mckee_structured,
             },
             branch: format::branch_summary(&branch, Some(active_branch.id.as_str())),
             book: book_summary,

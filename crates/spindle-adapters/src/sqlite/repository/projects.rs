@@ -42,6 +42,24 @@ impl Repository {
         &self,
         input: &CreateProjectInput,
     ) -> Result<(Project, BibleBranch, Book, Chapter)> {
+        self.create_project_with_marker(input, false).await
+    }
+
+    /// The planning CreateProject apply path is the only caller that sets the
+    /// McKee marker. Direct create_project calls must stay byte-identical for
+    /// existing clients, so the default wrapper above never marks.
+    pub async fn create_project_with_mckee_marker(
+        &self,
+        input: &CreateProjectInput,
+    ) -> Result<(Project, BibleBranch, Book, Chapter)> {
+        self.create_project_with_marker(input, true).await
+    }
+
+    async fn create_project_with_marker(
+        &self,
+        input: &CreateProjectInput,
+        mckee_structured: bool,
+    ) -> Result<(Project, BibleBranch, Book, Chapter)> {
         let project_id = mint_id("project");
         let branch_id = mint_id("bible_branch");
         let book_id = mint_id("book");
@@ -62,8 +80,8 @@ impl Repository {
                 let tx = conn.savepoint()?;
                 tx.execute(
                     "INSERT INTO project (id, name, project_type, genre, reader_contract, \
-                     active_branch_id, notes, created_at, updated_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?7)",
+                     active_branch_id, notes, created_at, updated_at, mckee_structured) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?7, ?8)",
                     rusqlite::params![
                         &project_id,
                         &name,
@@ -72,6 +90,7 @@ impl Repository {
                         &reader_contract,
                         &branch_id,
                         now,
+                        mckee_structured,
                     ],
                 )?;
                 tx.execute(

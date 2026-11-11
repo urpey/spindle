@@ -608,6 +608,7 @@ impl Repository {
             character_states,
             voice_profiles,
             world_states,
+            story_spines: self.list_story_spines(project_id).await?,
         })
     }
 

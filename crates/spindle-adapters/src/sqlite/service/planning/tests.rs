@@ -6982,3 +6982,334 @@ async fn phase_d_tightening_pov_and_pacing_policy_after_staging_revalidates_and_
         "delegated acceptance must not bypass tightened POV/pacing constraints"
     );
 }
+
+fn story_spine_payload(
+    series_spine_id: Option<&str>,
+    book_number: Option<i32>,
+) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "central_question": "Can Ada trust the heir?",
+        "controlling_idea": {
+            "value": "trust",
+            "cause": "Ada accepts help from the person who betrayed her"
+        },
+        "counter_idea": "Trust is a trap",
+        "spine_axis": "trust",
+        "ending_type": "ironic",
+        "inciting_incident": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+        "final_climax": {"book_number": 1, "chapter_number": 3, "scene_order": 2}
+    });
+    if let Some(series_spine_id) = series_spine_id {
+        value["series_spine_id"] = serde_json::json!({
+            "kind": "existing_record_id",
+            "value": series_spine_id
+        });
+    }
+    if let Some(book_number) = book_number {
+        value["book_number"] = serde_json::json!(book_number);
+    }
+    value
+}
+
+#[tokio::test]
+async fn planning_created_project_is_mckee_and_direct_create_project_is_not() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let direct = svc
+        .create_project(CreateProjectInput {
+            name: "Direct".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Not McKee".into(),
+                style_notes: vec![],
+                boundaries: vec![],
+            },
+        })
+        .await
+        .unwrap();
+    let direct_summary = svc
+        .list_projects()
+        .await
+        .unwrap()
+        .projects
+        .into_iter()
+        .find(|project| project.project_id == direct.project_id)
+        .unwrap();
+    assert!(!direct_summary.mckee_structured);
+    let direct_json = serde_json::to_value(&direct_summary).unwrap();
+    assert!(
+        direct_json.get("mckee_structured").is_none(),
+        "non-McKee project output must not grow the marker field"
+    );
+
+    let (session, _root) = accepted_root(&svc).await;
+    let project_id = session.scope.as_ref().unwrap().project_id.clone();
+    let planned_summary = svc
+        .list_projects()
+        .await
+        .unwrap()
+        .projects
+        .into_iter()
+        .find(|project| project.project_id == project_id)
+        .unwrap();
+    assert!(planned_summary.mckee_structured);
+    assert_eq!(
+        serde_json::to_value(&planned_summary).unwrap()["mckee_structured"],
+        serde_json::json!(true)
+    );
+}
+
+#[tokio::test]
+async fn story_spine_stages_accepts_and_reads_back_through_status_and_entities() {
+    use spindle_core::subject::SubjectTable;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let project_id = session.scope.as_ref().unwrap().project_id.clone();
+
+    let series = bundle(
+        &svc,
+        &session,
+        PlanningLevel::Contract,
+        &[&root],
+        vec![planned(
+            "spine:series",
+            "create_story_spine",
+            story_spine_payload(None, None),
+        )],
+    )
+    .await;
+    assert!(
+        !series
+            .findings
+            .iter()
+            .any(|finding| finding.severity == PlanningFindingSeverity::Blocking)
+    );
+    let report = accept(&svc, &session, &series).await;
+    let series_id = report.operations[0].returned_ids["spine:series"].clone();
+    assert!(series_id.starts_with("story_spine:"));
+
+    let stored = svc.get_story_spine(&project_id, &series_id).await.unwrap();
+    assert!(stored.is_series_spine());
+    assert_eq!(stored.central_question, "Can Ada trust the heir?");
+    assert_eq!(stored.controlling_idea.value, "trust");
+    assert_eq!(stored.spine_axis, "trust");
+    assert_eq!(
+        stored.ending_type,
+        spindle_core::story_spine::StorySpineEnding::Ironic
+    );
+
+    let status = svc
+        .planning_status(PlanningStatusInput {
+            session_id: Some(session.id.clone()),
+            project_id: None,
+            branch_id: None,
+            target_range: None,
+            include_readiness: Some(false),
+        })
+        .await
+        .unwrap();
+    assert_eq!(status.story_spines.len(), 1);
+    assert_eq!(status.story_spines[0].story_spine_id, series_id);
+
+    let snapshot = svc
+        .get_entity(spindle_core::models::GetEntityInput {
+            project_id: project_id.clone(),
+            table: SubjectTable::StorySpine,
+            entity_id: series_id.clone(),
+            branch_id: None,
+        })
+        .await
+        .unwrap();
+    let spindle_core::subject_snapshot::SubjectKindSpecific::StorySpine(details) =
+        snapshot.kind_specific()
+    else {
+        panic!("expected a Story Spine subject snapshot");
+    };
+    assert_eq!(details.central_question, "Can Ada trust the heir?");
+    assert_eq!(details.spine_axis, "trust");
+
+    let book = bundle(
+        &svc,
+        &session,
+        PlanningLevel::Contract,
+        &[&root, &series],
+        vec![planned(
+            "spine:book1",
+            "create_story_spine",
+            story_spine_payload(Some(&series_id), Some(1)),
+        )],
+    )
+    .await;
+    let report = accept(&svc, &session, &book).await;
+    let book_id = report.operations[0].returned_ids["spine:book1"].clone();
+    let stored_book = svc.get_story_spine(&project_id, &book_id).await.unwrap();
+    assert_eq!(stored_book.book_number, Some(1));
+    assert_eq!(
+        stored_book.series_spine_id.as_deref(),
+        Some(series_id.as_str())
+    );
+
+    let mut second_series = artifact(&session, "spine:second-series");
+    second_series.level = PlanningLevel::Contract;
+    second_series
+        .parents
+        .insert(root.id.clone(), root.payload_hash.clone());
+    second_series.operations = vec![planned(
+        "spine:second-series",
+        "create_story_spine",
+        story_spine_payload(None, None),
+    )];
+    assert!(
+        svc.stage_planning(second_series).await.is_err(),
+        "a project must reject a second series Story Spine"
+    );
+}
+
+#[tokio::test]
+async fn incomplete_story_spine_fields_are_blocking_and_cannot_be_accepted() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+
+    let cases = [
+        (
+            "central_question",
+            "story_spine_missing_central_question",
+            serde_json::json!({
+                "central_question": "",
+                "controlling_idea": {"value": "trust", "cause": "help accepted"},
+                "spine_axis": "trust",
+                "ending_type": "idealist"
+            }),
+        ),
+        (
+            "controlling_idea/value",
+            "story_spine_missing_controlling_idea_value",
+            serde_json::json!({
+                "central_question": "Can Ada trust?",
+                "controlling_idea": {"value": "", "cause": "help accepted"},
+                "spine_axis": "trust",
+                "ending_type": "idealist"
+            }),
+        ),
+        (
+            "controlling_idea/cause",
+            "story_spine_missing_controlling_idea_cause",
+            serde_json::json!({
+                "central_question": "Can Ada trust?",
+                "controlling_idea": {"value": "trust", "cause": ""},
+                "spine_axis": "trust",
+                "ending_type": "idealist"
+            }),
+        ),
+        (
+            "spine_axis",
+            "story_spine_missing_spine_axis",
+            serde_json::json!({
+                "central_question": "Can Ada trust?",
+                "controlling_idea": {"value": "trust", "cause": "help accepted"},
+                "spine_axis": "",
+                "ending_type": "idealist"
+            }),
+        ),
+    ];
+
+    for (index, (field, code, payload)) in cases.into_iter().enumerate() {
+        let output_ref = format!("spine:missing-{index}");
+        let mut proposal = artifact(&session, &output_ref);
+        proposal.level = PlanningLevel::Contract;
+        proposal
+            .parents
+            .insert(root.id.clone(), root.payload_hash.clone());
+        proposal.operations = vec![planned(&output_ref, "create_story_spine", payload)];
+        let staged = svc.stage_planning(proposal).await.unwrap();
+        let finding = staged
+            .findings
+            .iter()
+            .find(|finding| finding.code == code)
+            .unwrap_or_else(|| panic!("missing finding for {field}"));
+        assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+        assert!(
+            finding.path.ends_with(&format!("/input/{field}")),
+            "unexpected path {} for {field}",
+            finding.path
+        );
+
+        let mut decision = decision(&session, &staged);
+        decision.decision = PlanningDecision::Accept;
+        assert!(
+            svc.decide_planning(decision).await.is_err(),
+            "a blocking Story Spine must not be accepted"
+        );
+    }
+}
+
+#[tokio::test]
+async fn story_spine_is_rejected_for_existing_non_mckee_projects_after_v0057_upgrade() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let _warm = crate::sqlite::SqlitePool::open(&tmp.path().join("warm.db"))
+        .await
+        .unwrap();
+    let path = tmp.path().join("legacy.db");
+    {
+        let mut conn = rusqlite::Connection::open(&path).unwrap();
+        crate::sqlite::migrations::runner()
+            .set_target(refinery::Target::Version(56))
+            .run(&mut conn)
+            .unwrap();
+        conn.execute(
+            "INSERT INTO project(id,name,project_type,genre,reader_contract,created_at,updated_at) \
+             VALUES('project:legacy','Legacy','novel','mystery',\
+             '{\"promise\":\"p\",\"style_notes\":[],\"boundaries\":[]}',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bible_branch(id,project_id,parent_branch_id,name,status,created_at) \
+             VALUES('bible_branch:legacy','project:legacy',NULL,'main','active',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE project SET active_branch_id='bible_branch:legacy' WHERE id='project:legacy'",
+            [],
+        )
+        .unwrap();
+    }
+    let pool = crate::sqlite::SqlitePool::open(&path).await.unwrap();
+    let repo = Repository::with_model_router(
+        pool,
+        tmp.path().join("data"),
+        crate::ai::ModelRouter::local_only(),
+    );
+    let svc = SqliteSpindleService::new(repo);
+    let project = svc.repository.get_project("project:legacy").await.unwrap();
+    assert!(
+        !project.mckee_structured,
+        "V0057 must not backfill the McKee marker"
+    );
+    let story_spines = svc.list_story_spines("project:legacy").await.unwrap();
+    assert!(story_spines.is_empty());
+
+    let session = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "Existing project".into(),
+            scope: Some(PlanningScope {
+                project_id: "project:legacy".into(),
+                branch_id: "bible_branch:legacy".into(),
+            }),
+        })
+        .await
+        .unwrap();
+    let mut proposal = artifact(&session, "spine:legacy");
+    proposal.level = PlanningLevel::Contract;
+    proposal.operations = vec![planned(
+        "spine:legacy",
+        "create_story_spine",
+        story_spine_payload(None, None),
+    )];
+    assert!(
+        svc.stage_planning(proposal).await.is_err(),
+        "existing projects cannot opt into Story Spines"
+    );
+}

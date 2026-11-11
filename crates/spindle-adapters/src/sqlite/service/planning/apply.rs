@@ -459,7 +459,9 @@ impl SqliteSpindleService {
                 p.artifact.level,
                 matches!(
                     &item.operation,
-                    PlanningOperation::UpdateReaderContract(_) | PlanningOperation::CreateBook(_)
+                    PlanningOperation::UpdateReaderContract(_)
+                        | PlanningOperation::CreateBook(_)
+                        | PlanningOperation::CreateStorySpine(_)
                 ),
             )
             .await?;
@@ -533,7 +535,7 @@ impl SqliteSpindleService {
                         && !value.reader_contract.promise.trim().is_empty(),
                     "project name and reader promise must be nonempty"
                 );
-                let out = self.create_project(value).await?;
+                let out = self.create_mckee_project(value).await?;
                 ids.insert(item.output_ref.clone(), out.project_id.clone());
                 ids.insert(format!("{}:book", item.output_ref), out.book_id.clone());
                 ids.insert(
@@ -740,6 +742,13 @@ impl SqliteSpindleService {
                     .await?;
                 ids.insert(item.output_ref.clone(), project.project_id.clone());
                 PlanningAppliedOutput::UpdateReaderContract(Box::new(out))
+            }
+            CreateStorySpine(_) => {
+                let out = self
+                    .create_story_spine(serde_json::from_value(input)?)
+                    .await?;
+                ids.insert(item.output_ref.clone(), out.story_spine_id.clone());
+                PlanningAppliedOutput::CreateStorySpine(Box::new(out))
             }
         };
         Ok((output, ids, root))
