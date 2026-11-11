@@ -113,6 +113,9 @@ async fn narrative_entity_creates_round_trip() {
             }],
             connected_conflict_ids: Vec::new(),
             connected_theme_ids: Vec::new(),
+            value_axis: None,
+            subplot_job: None,
+            is_main_plot: false,
         })
         .await
         .unwrap();

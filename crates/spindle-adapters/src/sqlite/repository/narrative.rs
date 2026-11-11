@@ -29,6 +29,9 @@ impl Repository {
             .context("serializing connected_conflict_ids")?;
         let connected_theme_json = serde_json::to_string(&input.connected_theme_ids)
             .context("serializing connected_theme_ids")?;
+        let value_axis = input.value_axis.clone();
+        let subplot_job = input.subplot_job.map(|job| job.as_str().to_string());
+        let main_plot = input.is_main_plot;
         let now = timestamp_to_micros(chrono::Utc::now());
 
         self.inner
@@ -37,8 +40,9 @@ impl Repository {
                 conn.execute(
                     "INSERT INTO plot_line (id, project_id, branch_id, name, normalized_name, \
                      plot_type, summary, status, convergence_points, notes, archived_at, \
-                     created_at, updated_at, connected_conflict_ids, connected_theme_ids) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, ?10, ?10, ?11, ?12)",
+                     created_at, updated_at, connected_conflict_ids, connected_theme_ids, \
+                     value_axis, subplot_job, main_plot) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, ?10, ?10, ?11, ?12, ?13, ?14, ?15)",
                     rusqlite::params![
                         &id,
                         &project_id,
@@ -52,6 +56,9 @@ impl Repository {
                         now,
                         &connected_conflict_json,
                         &connected_theme_json,
+                        &value_axis,
+                        &subplot_job,
+                        main_plot,
                     ],
                 )?;
                 Ok(())

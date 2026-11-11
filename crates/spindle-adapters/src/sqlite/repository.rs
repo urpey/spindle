@@ -762,6 +762,7 @@ mod imports;
 mod narrative;
 mod planning;
 pub(crate) use planning::apply::resolve_operation as resolve_planning_operation;
+pub(crate) use planning::describe_blocking_finding;
 pub(crate) use planning::output_refs as planning_output_refs;
 pub(crate) use planning::{
     PlanningAttemptClaim, PlanningSessionMetadataUpdate, PlanningStagedCommitCandidate,
@@ -1299,6 +1300,14 @@ fn column_is_updatable(table: &str, column: &str) -> bool {
             | ("plot_line", "connected_conflict_ids")
             | ("plot_line", "connected_theme_ids")
             | ("plot_line", "convergence_points")
+            // McKee Main Plot / Subplot structure (V0058). `main_plot` is the
+            // stored 0/1 column and the value `update_entity` writes after
+            // mapping the public `is_main_plot` field onto it; the public
+            // contract exposes no other spelling, and the service rejects a
+            // literal `main_plot` change key before this allowlist runs.
+            | ("plot_line", "value_axis")
+            | ("plot_line", "subplot_job")
+            | ("plot_line", "main_plot")
             | ("conflict", "stakes")
             | ("conflict", "resolution_summary")
             // Rich array fields. Settable at create_conflict time; without
@@ -3014,12 +3023,28 @@ fn batch_subject_kind(
         }
         SubjectTable::PlotLine => {
             let plot_line = find_by_id(&batch.plot_lines, &raw_id, |item| &item.id)?;
+            let subplot_job = plot_line
+                .subplot_job
+                .as_deref()
+                .map(|raw| {
+                    spindle_core::plot_line::SubplotJob::parse(raw).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "plot line {} has unknown subplot_job '{}'",
+                            plot_line.id,
+                            raw
+                        )
+                    })
+                })
+                .transpose()?;
             Ok((
                 plot_line.name.clone(),
                 SubjectKindSpecific::PlotLine(PlotLineDetails {
                     plot_type: plot_line.plot_type.clone(),
                     summary: plot_line.summary.clone(),
                     status: Some(plot_line.status.clone()),
+                    value_axis: plot_line.value_axis.clone(),
+                    subplot_job,
+                    is_main_plot: plot_line.main_plot,
                 }),
                 Provenance::asserted_by_author(plot_line.updated_at),
             ))

@@ -493,6 +493,9 @@ async fn plot_line_convergence_audit_fires_when_unlinked() {
             convergence_points: vec![placement(1, 1)],
             connected_conflict_ids: vec![conflict.conflict_id.clone()],
             connected_theme_ids: Vec::new(),
+            value_axis: None,
+            subplot_job: None,
+            is_main_plot: false,
         })
         .await
         .unwrap();
@@ -559,6 +562,9 @@ async fn plot_line_convergence_audit_linked_is_clean() {
         convergence_points: vec![placement(1, 1)],
         connected_conflict_ids: vec![conflict.conflict_id.clone()],
         connected_theme_ids: Vec::new(),
+        value_axis: None,
+        subplot_job: None,
+        is_main_plot: false,
     })
     .await
     .unwrap();
@@ -614,6 +620,9 @@ async fn plot_line_convergence_audit_no_connections_is_silent() {
         convergence_points: vec![placement(1, 1)],
         connected_conflict_ids: Vec::new(),
         connected_theme_ids: Vec::new(),
+        value_axis: None,
+        subplot_job: None,
+        is_main_plot: false,
     })
     .await
     .unwrap();

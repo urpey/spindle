@@ -3646,3 +3646,137 @@ async fn chapter_critic_dispatches_each_planned_window_and_aggregates() {
     assert_eq!(controller.scenes[0].ledger.scene_used().calls, 2);
     assert_eq!(server.join().unwrap(), 2, "one charged call per window");
 }
+
+#[tokio::test]
+async fn non_mckee_plot_lines_keep_their_existing_read_shape() {
+    use spindle_core::models::CreatePlotLineInput;
+    use spindle_core::subject::SubjectTable;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let project = svc
+        .create_project(CreateProjectInput {
+            name: "Existing project".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Unchanged".into(),
+                style_notes: vec![],
+                boundaries: vec![],
+            },
+        })
+        .await
+        .unwrap();
+    let legacy = svc
+        .create_plot_line(CreatePlotLineInput {
+            project_id: project.project_id.clone(),
+            name: "The old hunt".into(),
+            plot_type: "main".into(),
+            summary: "Tracks the heir.".into(),
+            status: None,
+            convergence_points: Vec::new(),
+            connected_conflict_ids: Vec::new(),
+            connected_theme_ids: Vec::new(),
+            value_axis: None,
+            subplot_job: None,
+            is_main_plot: false,
+        })
+        .await
+        .unwrap();
+    let snapshot = svc
+        .get_entity(spindle_core::models::GetEntityInput {
+            project_id: project.project_id.clone(),
+            table: SubjectTable::PlotLine,
+            entity_id: legacy.plot_line_id,
+            branch_id: None,
+        })
+        .await
+        .unwrap();
+    let value = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(
+        value["kind_specific"]["details"],
+        serde_json::json!({
+            "plot_type": "main",
+            "summary": "Tracks the heir.",
+            "status": "planted"
+        }),
+        "a non-McKee plot line must serialize exactly as before"
+    );
+}
+
+#[tokio::test]
+async fn v0058_upgrade_leaves_existing_plot_line_reads_unchanged() {
+    use spindle_core::subject::SubjectTable;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let _warm = SqlitePool::open(&tmp.path().join("warm.db")).await.unwrap();
+    let path = tmp.path().join("legacy.db");
+    {
+        let mut conn = rusqlite::Connection::open(&path).unwrap();
+        crate::sqlite::migrations::runner()
+            .set_target(refinery::Target::Version(57))
+            .run(&mut conn)
+            .unwrap();
+        conn.execute(
+            "INSERT INTO project(id,name,project_type,genre,reader_contract,created_at,updated_at) \
+             VALUES('project:legacy','Legacy','novel','mystery',\
+             '{\"promise\":\"p\",\"style_notes\":[],\"boundaries\":[]}',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bible_branch(id,project_id,parent_branch_id,name,status,created_at) \
+             VALUES('bible_branch:legacy','project:legacy',NULL,'main','active',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE project SET active_branch_id='bible_branch:legacy' WHERE id='project:legacy'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO plot_line(id,project_id,branch_id,name,normalized_name,plot_type,summary,status,\
+             convergence_points,notes,archived_at,created_at,updated_at,connected_conflict_ids,connected_theme_ids) \
+             VALUES('plot_line:legacy','project:legacy','bible_branch:legacy','The old hunt','the old hunt',\
+             'main','Tracks the heir.','planted','[]',NULL,NULL,1,1,'[]','[]')",
+            [],
+        )
+        .unwrap();
+    }
+    let pool = SqlitePool::open(&path).await.unwrap();
+    let repo = Repository::with_model_router(
+        pool,
+        tmp.path().join("legacy-data"),
+        crate::ai::ModelRouter::local_only(),
+    );
+    let svc = SqliteSpindleService::new(repo);
+
+    let row = svc
+        .repository
+        .get_plot_line("plot_line:legacy")
+        .await
+        .unwrap();
+    assert_eq!(row.value_axis, None);
+    assert_eq!(row.subplot_job, None);
+    assert!(!row.main_plot);
+
+    let snapshot = svc
+        .get_entity(spindle_core::models::GetEntityInput {
+            project_id: "project:legacy".into(),
+            table: SubjectTable::PlotLine,
+            entity_id: "plot_line:legacy".into(),
+            branch_id: None,
+        })
+        .await
+        .unwrap();
+    let value = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(
+        value["kind_specific"]["details"],
+        serde_json::json!({
+            "plot_type": "main",
+            "summary": "Tracks the heir.",
+            "status": "planted"
+        }),
+        "the V0058 upgrade must not add fields to an existing plot line's read"
+    );
+}

@@ -4373,6 +4373,73 @@ fn validate_character_aliases_value(value: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+/// Readable error for the one invalid Main Plot / Subplot combination: a Main
+/// Plot is not a Subplot, so it cannot carry a structural job. Rejecting is
+/// deliberate — silently dropping the job would hide a modelling mistake.
+fn reject_main_plot_subplot_job() -> anyhow::Error {
+    anyhow::anyhow!(
+        "plot_line cannot be both the Main Plot and a Subplot: a Main Plot has no \
+         subplot_job (clear it when is_main_plot=true)"
+    )
+}
+
+/// Shape-check the McKee plot-line fields on an `update_entity` change map.
+/// The columns carry only SQL `CHECK`s (or none), while the row readers parse a
+/// closed enum and the Main Plot is defined by the absence of a job, so an
+/// unknown job or a conflicting pair must fail before the write.
+fn validate_plot_line_changes(
+    changes: &std::collections::BTreeMap<String, serde_json::Value>,
+    current_subplot_job: Option<spindle_core::plot_line::SubplotJob>,
+    current_is_main_plot: bool,
+) -> Result<()> {
+    use spindle_core::plot_line::SubplotJob;
+    for (column, value) in changes {
+        match column.as_str() {
+            "value_axis" => {
+                anyhow::ensure!(
+                    value.is_null() || value.is_string(),
+                    "plot_line.value_axis must be a string or null, got {value}"
+                );
+            }
+            "subplot_job" => match value {
+                serde_json::Value::Null => {}
+                serde_json::Value::String(raw) => {
+                    anyhow::ensure!(
+                        SubplotJob::parse(raw).is_some(),
+                        "plot_line.subplot_job must be one of contradict, resonate, set_up, \
+                         complicate (or null), got '{raw}'"
+                    );
+                }
+                other => {
+                    anyhow::bail!("plot_line.subplot_job must be a string or null, got {other}")
+                }
+            },
+            "main_plot" => {
+                anyhow::ensure!(
+                    value.is_boolean(),
+                    "plot_line.is_main_plot must be a boolean, got {value}"
+                );
+            }
+            _ => {}
+        }
+    }
+    let is_main_plot = changes
+        .get("main_plot")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(current_is_main_plot);
+    let subplot_job = match changes.get("subplot_job") {
+        None => current_subplot_job,
+        Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(raw)) => SubplotJob::parse(raw),
+        // Shape errors were already reported above.
+        Some(_) => None,
+    };
+    if is_main_plot && subplot_job.is_some() {
+        return Err(reject_main_plot_subplot_job());
+    }
+    Ok(())
+}
+
 /// Validate a reader-contract field that must be a string.
 fn parse_contract_string(field: &str, value: &serde_json::Value) -> Result<String> {
     match value {

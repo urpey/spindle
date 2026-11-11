@@ -1,3 +1,4 @@
+use crate::plot_line::SubplotJob;
 pub use crate::serial::*;
 use crate::subject::SubjectTable;
 use crate::subject_snapshot::SubjectSnapshot;
@@ -4469,6 +4470,11 @@ pub struct BatchCreateTermsOutput {
     pub warnings: Vec<String>,
 }
 
+/// Update a supported entity by record id. `changes` is a field map validated
+/// per entity type. For `entity_type: "plot_line"` the McKee plot-line fields
+/// are `value_axis` (string or null), `subplot_job` (`contradict`, `resonate`,
+/// `set_up`, `complicate`, or null) and `is_main_plot` (boolean); the raw
+/// column spelling `main_plot` is rejected.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct UpdateEntityInput {
     pub entity_type: String,
@@ -4854,6 +4860,16 @@ pub struct CreatePlotLineInput {
     pub connected_conflict_ids: Vec<String>,
     #[serde(default)]
     pub connected_theme_ids: Vec<String>,
+    /// The Value Axis this plot line turns; a Main Plot carries the Spine Axis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_axis: Option<String>,
+    /// The one structural job a Subplot performs toward the Controlling Idea.
+    /// Absent on the Main Plot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subplot_job: Option<SubplotJob>,
+    /// Whether this is the project's one Main Plot. False for every Subplot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_main_plot: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

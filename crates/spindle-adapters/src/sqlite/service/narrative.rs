@@ -84,6 +84,9 @@ impl SqliteSpindleService {
         &self,
         input: CreatePlotLineInput,
     ) -> Result<CreatePlotLineOutput> {
+        if input.is_main_plot && input.subplot_job.is_some() {
+            return Err(reject_main_plot_subplot_job());
+        }
         self.repository.get_project(&input.project_id).await?;
         let plot = self.repository.create_plot_line(&input).await?;
         self.refresh_entity_index(

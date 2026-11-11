@@ -139,12 +139,27 @@ impl SqliteSpindleService {
             } else {
                 p.findings.clone()
             };
+            let blocking: Vec<&PlanningFinding> = p
+                .findings
+                .iter()
+                .chain(current_findings.iter())
+                .filter(|f| f.severity == PlanningFindingSeverity::Blocking)
+                .collect();
+            // The message carries the finding path and related refs so the
+            // author can locate the row or operation to repair, not just the
+            // code that fired. Stored findings and their fresh revalidation
+            // usually repeat the same finding, so render each code/path once.
+            let mut described = Vec::new();
+            for finding in &blocking {
+                let text = crate::sqlite::repository::describe_blocking_finding(finding);
+                if !described.contains(&text) {
+                    described.push(text);
+                }
+            }
             anyhow::ensure!(
-                !p.findings
-                    .iter()
-                    .chain(current_findings.iter())
-                    .any(|f| f.severity == PlanningFindingSeverity::Blocking),
-                "cannot accept planning proposal with blocking validation findings"
+                blocking.is_empty(),
+                "cannot accept planning proposal with blocking validation findings: {}",
+                described.join("; ")
             );
             let effective_gate = s
                 .policy

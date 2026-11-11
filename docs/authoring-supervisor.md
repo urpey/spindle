@@ -31,6 +31,12 @@ projects behave exactly as before. `planning_status` lists accepted spines, and
 `get_entity(table: "story_spine")` reads one wherever the profile exposes
 `get_entity`; the plan is read-only and no writing path depends on it.
 
+Plot lines carry the matching Main Plot / Subplot structure (Value Axis, closed
+Subplot job, Main Plot flag) decided during Series-Arc planning. `get_entity(
+table: "plot_line")` reads those fields back, but drafting does not yet enforce
+them: the supervisor consumes chapter plans and continuity records exactly as
+before, and a run on an unmarked project never sees the new fields.
+
 ## MCP Tools Interface
 
 The supervisor exposes 9 MCP tools through the `spindle-mcp` server:

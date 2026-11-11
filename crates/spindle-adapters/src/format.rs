@@ -4771,6 +4771,9 @@ mod open_threads_tests {
             updated_at: now,
             connected_conflict_ids: Vec::new(),
             connected_theme_ids: Vec::new(),
+            value_axis: None,
+            subplot_job: None,
+            main_plot: false,
         }
     }
 

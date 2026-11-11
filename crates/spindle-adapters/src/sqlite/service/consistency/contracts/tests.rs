@@ -3026,6 +3026,9 @@ async fn save_summary_populates_open_threads_from_unresolved_threads() {
         convergence_points: Vec::new(),
         connected_conflict_ids: Vec::new(),
         connected_theme_ids: Vec::new(),
+        value_axis: None,
+        subplot_job: None,
+        is_main_plot: false,
     })
     .await
     .unwrap();
@@ -3141,6 +3144,9 @@ async fn save_summary_open_threads_deterministic_across_rebuilds() {
         convergence_points: Vec::new(),
         connected_conflict_ids: Vec::new(),
         connected_theme_ids: Vec::new(),
+        value_axis: None,
+        subplot_job: None,
+        is_main_plot: false,
     })
     .await
     .unwrap();

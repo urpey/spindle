@@ -3,8 +3,8 @@
   "compatibility": {
     "default": {
       "tools": 181,
-      "input_bytes": 171201,
-      "full_bytes": 755548
+      "input_bytes": 172211,
+      "full_bytes": 762666
     },
     "new-book": {
       "tools": 14,
@@ -14,32 +14,32 @@
     "minimal": {
       "tools": 22,
       "input_bytes": 30863,
-      "full_bytes": 215291
+      "full_bytes": 219363
     },
     "write": {
       "tools": 122,
-      "input_bytes": 115318,
-      "full_bytes": 478966
+      "input_bytes": 116328,
+      "full_bytes": 485066
     },
     "import": {
       "tools": 40,
       "input_bytes": 21665,
-      "full_bytes": 231902
+      "full_bytes": 232920
     },
     "authoring": {
       "tools": 78,
-      "input_bytes": 88087,
-      "full_bytes": 346486
+      "input_bytes": 89097,
+      "full_bytes": 352586
     },
     "planning": {
       "tools": 38,
-      "input_bytes": 32352,
-      "full_bytes": 63746
+      "input_bytes": 33362,
+      "full_bytes": 64756
     },
     "release": {
       "tools": 62,
-      "input_bytes": 45503,
-      "full_bytes": 90953
+      "input_bytes": 45943,
+      "full_bytes": 91393
     },
     "research": {
       "tools": 15,
@@ -48,8 +48,8 @@
     },
     "revision": {
       "tools": 34,
-      "input_bytes": 22509,
-      "full_bytes": 57942
+      "input_bytes": 23079,
+      "full_bytes": 58512
     },
     "setup": {
       "tools": 9,
@@ -63,8 +63,8 @@
     },
     "workflow-authoring": {
       "tools": 74,
-      "input_bytes": 85883,
-      "full_bytes": 181212
+      "input_bytes": 86453,
+      "full_bytes": 181782
     },
     "workflow-import": {
       "tools": 20,
@@ -73,18 +73,18 @@
     },
     "workflow-write": {
       "tools": 44,
-      "input_bytes": 57282,
-      "full_bytes": 112396
+      "input_bytes": 57852,
+      "full_bytes": 112966
     },
     "worldbuilding": {
       "tools": 50,
-      "input_bytes": 48353,
-      "full_bytes": 84038
+      "input_bytes": 48923,
+      "full_bytes": 84608
     },
     "legacy-all": {
       "tools": 181,
-      "input_bytes": 171201,
-      "full_bytes": 755548
+      "input_bytes": 172211,
+      "full_bytes": 762666
     },
     "mckee": {
       "tools": 11,
