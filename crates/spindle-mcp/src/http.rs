@@ -1274,6 +1274,42 @@ agent = "test-agent"
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn console_settings_save_round_trips_rule_details_and_globals() {
+        let temp = tempdir().expect("temp dir");
+        let config = temp.path().join("spindle.toml");
+        write_agent_config(&config, SETTINGS_CONFIG);
+        let app = app_with_agent_config(&config).await;
+
+        let before = get_settings(&app).await;
+        let revision = before["revision"].as_str().expect("revision").to_string();
+        let mut document = before["document"].clone();
+        document["routing"][0]["purpose"] = serde_json::json!("review scenes");
+        document["routing"][0]["max_tokens"] = serde_json::json!(2048);
+        document["routing"][0]["temperature"] = serde_json::json!(0.4);
+        document["routing"][0]["stop"] = serde_json::json!(["</scene>"]);
+        document["health_check"] = serde_json::json!({"enabled": true, "timeout_ms": 2500});
+        document["route_import_to_explicit"] = serde_json::json!(true);
+        document["anti_slop"] = serde_json::json!({"disable": ["dialogue_filter"], "soften": [], "promote_to_hard": [], "experimental_structural": false});
+
+        let (status, saved) =
+            post_settings(&app, settings_save_body(&document, Some(&revision))).await;
+        assert_eq!(status.as_u16(), 200, "{saved}");
+
+        let after = get_settings(&app).await;
+        let rule = &after["document"]["routing"][0];
+        assert_eq!(rule["purpose"], "review scenes");
+        assert_eq!(rule["max_tokens"], 2048);
+        assert_eq!(rule["stop"][0], "</scene>");
+        assert_eq!(after["document"]["health_check"]["enabled"], true);
+        assert_eq!(after["document"]["health_check"]["timeout_ms"], 2500);
+        assert_eq!(after["document"]["route_import_to_explicit"], true);
+        assert_eq!(
+            after["document"]["anti_slop"]["disable"][0],
+            "dialogue_filter"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn console_settings_save_refuses_a_stale_view() {
         let temp = tempdir().expect("temp dir");
         let config = temp.path().join("spindle.toml");
@@ -1407,7 +1443,14 @@ agent = "offline-agent"
         for expected in [
             r#"data-field="endpoint""#,
             r#"data-field="api_key_env""#,
+            r#"data-field="max_context""#,
             r#"data-route-index=""#,
+            r#"data-rule-field="max_tokens""#,
+            r#"data-rule-field="temperature""#,
+            r#"data-rule-fallback=""#,
+            r#"data-global="health_check.enabled""#,
+            r#"data-global="route_import_to_explicit""#,
+            r#"data-global-list="anti_slop.disable""#,
             r#"expected_revision: settingsState.revision"#,
             r#"id="settings-save""#,
             r#"id="settings-add-agent""#,
@@ -2090,6 +2133,7 @@ agent = "offline-agent"
             "help.settings.routes",
             "help.settings.agents",
             "help.settings.test",
+            "help.settings.global",
         ] {
             for suffix in ["title", "body"] {
                 let full = format!("{key}.{suffix}");

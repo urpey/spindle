@@ -389,6 +389,9 @@
     <h2 data-i18n="settings.title"></h2>
     <p class="muted" id="settings-config-path"></p>
     <div id="settings-error"></div>
+    <h3><span data-i18n="settings.global"></span>
+      <button type="button" class="help" data-help="help-settings-global" aria-expanded="false" aria-controls="help-settings-global" data-i18n-aria-label="help.settings.global.title">!</button></h3>
+    <div class="card" id="settings-global"></div>
     <h3 data-i18n="settings.routes"></h3>
     <div class="card" id="settings-routes"></div>
     <div class="row" style="margin-top:12px">
@@ -411,6 +414,11 @@
     <div class="help-popover" id="help-settings-agents" role="dialog" aria-labelledby="help-settings-agents-title" hidden>
       <h2 id="help-settings-agents-title" data-i18n="help.settings.agents.title"></h2>
       <p data-i18n="help.settings.agents.body"></p>
+      <button type="button" class="help-close" data-i18n="help.close"></button>
+    </div>
+    <div class="help-popover" id="help-settings-global" role="dialog" aria-labelledby="help-settings-global-title" hidden>
+      <h2 id="help-settings-global-title" data-i18n="help.settings.global.title"></h2>
+      <p data-i18n="help.settings.global.body"></p>
       <button type="button" class="help-close" data-i18n="help.close"></button>
     </div>
     <div class="help-popover" id="help-settings-test" role="dialog" aria-labelledby="help-settings-test-title" hidden>
@@ -762,7 +770,28 @@
     "settings.testOk": "成功 · {latency} ms · {model}（{route}）",
     "settings.testFail": "失敗 · {latency} ms · {error}",
     "help.settings.test.title": "測試 agent 連線",
-    "help.settings.test.body": "送出一個很短的提示，走跟正式呼叫相同的 route 機制，回報延遲、回答的模型與一小段回覆。會消耗供應商額度；API key 變數沒設定時不會送出，直接告訴你原因。"
+    "help.settings.test.body": "送出一個很短的提示，走跟正式呼叫相同的 route 機制，回報延遲、回答的模型與一小段回覆。會消耗供應商額度；API key 變數沒設定時不會送出，直接告訴你原因。",
+    "settings.global": "全域設定",
+    "settings.healthCheck": "健康檢查",
+    "settings.healthTimeout": "逾時（毫秒）",
+    "settings.importExplicit": "匯入走 explicit agent",
+    "settings.antiSlop": "anti_slop",
+    "settings.antiSlopDisable": "停用（逗號分隔）",
+    "settings.antiSlopSoften": "放寬（逗號分隔）",
+    "settings.antiSlopPromote": "提升為硬性（逗號分隔）",
+    "settings.antiSlopStructural": "啟用結構性觀察（實驗）",
+    "settings.ruleDetails": "這條 route 的細節",
+    "settings.ruleFallback": "備援 agent",
+    "settings.rulePurpose": "用途說明",
+    "settings.ruleMaxTokens": "max tokens",
+    "settings.ruleTemperature": "temperature",
+    "settings.ruleRating": "限定評級",
+    "settings.ruleStop": "停止字串（逗號分隔）",
+    "settings.maxContext": "context 上限",
+    "settings.capabilities": "能力（逗號分隔）",
+    "settings.agentEmptyHint": "按上面的「新增 agent」建立第一個；填好後就能把 route 綁過去。",
+    "help.settings.global.title": "全域模型設定",
+    "help.settings.global.body": "健康檢查會在啟動時探測每個 agent 端點，逾時時間決定等待上限。匯入走 explicit agent 會讓書稿匯入沿用你為 explicit 內容指定的 agent。anti_slop 的清單可停用、放寬或提升某些寫作檢查；結構性觀察預設關閉。"
   },
   "en": {
     "app.title": "Spindle Operator Console",
@@ -1103,7 +1132,28 @@
     "settings.testOk": "OK · {latency} ms · {model} ({route})",
     "settings.testFail": "Failed · {latency} ms · {error}",
     "help.settings.test.title": "Testing an agent connection",
-    "help.settings.test.body": "Sends one short prompt through the same route machinery a real call uses and reports latency, the answering model and a short excerpt. It spends provider credit; when the API-key variable is unset nothing is sent and you get the reason instead."
+    "help.settings.test.body": "Sends one short prompt through the same route machinery a real call uses and reports latency, the answering model and a short excerpt. It spends provider credit; when the API-key variable is unset nothing is sent and you get the reason instead.",
+    "settings.global": "Global settings",
+    "settings.healthCheck": "Health checks",
+    "settings.healthTimeout": "Timeout (ms)",
+    "settings.importExplicit": "Route import to the explicit agent",
+    "settings.antiSlop": "anti_slop",
+    "settings.antiSlopDisable": "Disable (comma separated)",
+    "settings.antiSlopSoften": "Soften (comma separated)",
+    "settings.antiSlopPromote": "Promote to hard (comma separated)",
+    "settings.antiSlopStructural": "Structural observations (experimental)",
+    "settings.ruleDetails": "Details for this route",
+    "settings.ruleFallback": "Fallback agent",
+    "settings.rulePurpose": "Purpose",
+    "settings.ruleMaxTokens": "max tokens",
+    "settings.ruleTemperature": "temperature",
+    "settings.ruleRating": "Rating scope",
+    "settings.ruleStop": "Stop strings (comma separated)",
+    "settings.maxContext": "context limit",
+    "settings.capabilities": "Capabilities (comma separated)",
+    "settings.agentEmptyHint": "Use \"Add agent\" above to create the first one; then bind routes to it.",
+    "help.settings.global.title": "Global model settings",
+    "help.settings.global.body": "Health checks probe each agent endpoint at startup; the timeout bounds that wait. Routing import to the explicit agent makes manuscript import reuse the agent you chose for explicit content. The anti_slop lists disable, soften or promote individual checks; structural observations stay off by default."
   }
 }
 </script>
@@ -1787,20 +1837,80 @@ function settingsStatusText() {
   if (node) node.textContent = settingsDirty ? t("settings.dirty") : t("settings.clean");
 }
 
+function settingsPathGet(object, path) {
+  return path.split(".").reduce((node, part) => (node == null ? node : node[part]), object);
+}
+
+function settingsPathSet(object, path, value) {
+  const parts = path.split(".");
+  let node = object;
+  for (const part of parts.slice(0, -1)) {
+    if (node[part] == null || typeof node[part] !== "object") node[part] = {};
+    node = node[part];
+  }
+  node[parts[parts.length - 1]] = value;
+}
+
+function routeRule(index) {
+  const route = (settingsState.routes || [])[index];
+  if (!route || !settingsState.document) return null;
+  const rules = settingsState.document.routing || [];
+  return rules.find((rule) => rule.route === route.route_name
+    && (rule.rating || null) === (route.rating || null)) || null;
+}
+
+function renderSettingsGlobal() {
+  const box = $("settings-global");
+  const document_ = settingsState && settingsState.document;
+  if (!box || !document_) return;
+  const health = document_.health_check || (document_.health_check = { enabled: false, timeout_ms: 1500 });
+  const anti = document_.anti_slop || (document_.anti_slop = {});
+  box.innerHTML = `
+    <div class="row">
+      <label><input type="checkbox" data-global="health_check.enabled"${health.enabled ? " checked" : ""}> ${esc(t("settings.healthCheck"))}</label>
+      <label>${esc(t("settings.healthTimeout"))}</label>
+      <input type="number" min="100" data-global="health_check.timeout_ms" value="${esc(health.timeout_ms == null ? "" : health.timeout_ms)}" style="min-width:100px">
+      <label><input type="checkbox" data-global="route_import_to_explicit"${document_.route_import_to_explicit ? " checked" : ""}> ${esc(t("settings.importExplicit"))}</label>
+    </div>
+    <div class="row">
+      <label>${esc(t("settings.antiSlopDisable"))}</label><input data-global-list="anti_slop.disable" value="${esc((anti.disable || []).join(", "))}">
+      <label>${esc(t("settings.antiSlopSoften"))}</label><input data-global-list="anti_slop.soften" value="${esc((anti.soften || []).join(", "))}">
+      <label>${esc(t("settings.antiSlopPromote"))}</label><input data-global-list="anti_slop.promote_to_hard" value="${esc((anti.promote_to_hard || []).join(", "))}">
+      <label><input type="checkbox" data-global="anti_slop.experimental_structural"${anti.experimental_structural ? " checked" : ""}> ${esc(t("settings.antiSlopStructural"))}</label>
+    </div>`;
+}
+
 function renderSettingsDocument() {
   const routesBox = $("settings-routes"), agentsBox = $("settings-agents");
   const state = settingsState;
   const routes = state.routes || [], agents = state.document.agents || [];
   const agentIds = agents.map((agent) => agent.id).filter(Boolean);
+  renderSettingsGlobal();
   routesBox.innerHTML = routes.length
     ? `<div class="table-scroll"><table><thead><tr>
         <th>${esc(t("settings.route"))}</th><th>${esc(t("settings.routeAgent"))}</th><th>${esc(t("settings.adapter"))}</th>
-        <th>${esc(t("settings.model"))}</th><th>${esc(t("settings.features"))}</th></tr></thead><tbody>${routes.map((route, index) => `<tr>
+        <th>${esc(t("settings.model"))}</th><th>${esc(t("settings.features"))}</th></tr></thead><tbody>${routes.map((route, index) => {
+          const rule = routeRule(index);
+          const row = `<tr>
         <td><strong>${esc(route.route_name)}</strong>${route.rating ? `<br><span class="muted">${esc(route.rating)}</span>` : ""}</td>
         <td><select data-route-index="${index}"><option value="">${esc(t("settings.defaultAgent"))}</option>${agentIds.map((id) => `<option value="${esc(id)}"${route.agent_id === id ? " selected" : ""}>${esc(id)}</option>`).join("")}</select></td>
         <td>${esc(route.adapter_kind)}${route.is_local_stand_in ? `<br><span class="pill blocked">${esc(t("settings.localBadge"))}</span>` : ""}</td>
         <td>${esc(route.model_name)}</td>
-        <td>${(route.features || []).map((key) => esc(t(key))).join("、") || `<span class="muted">—</span>`}</td></tr>`).join("")}</tbody></table></div>`
+        <td>${(route.features || []).map((key) => esc(t(key))).join("、") || `<span class="muted">—</span>`}</td></tr>`;
+          if (!rule) return row;
+          const detail = `<tr><td colspan="5"><details><summary>${esc(t("settings.ruleDetails"))}</summary>
+            <div class="row">
+              <label>${esc(t("settings.ruleFallback"))}</label><select data-rule-fallback="${index}"><option value="">—</option>${agentIds.map((id) => `<option value="${esc(id)}"${rule.fallback === id ? " selected" : ""}>${esc(id)}</option>`).join("")}</select>
+              <label>${esc(t("settings.rulePurpose"))}</label><input data-rule-field="purpose" data-rule-index="${index}" value="${esc(rule.purpose || "")}" style="min-width:220px">
+              <label>${esc(t("settings.ruleMaxTokens"))}</label><input type="number" data-rule-field="max_tokens" data-rule-index="${index}" value="${esc(rule.max_tokens == null ? "" : rule.max_tokens)}" style="min-width:90px">
+              <label>${esc(t("settings.ruleTemperature"))}</label><input type="number" step="0.05" data-rule-field="temperature" data-rule-index="${index}" value="${esc(rule.temperature == null ? "" : rule.temperature)}" style="min-width:90px">
+            </div>
+            <div class="row">
+              <label>${esc(t("settings.ruleRating"))}</label><input data-rule-field="rating" data-rule-index="${index}" value="${esc(rule.rating || "")}">
+              <label>${esc(t("settings.ruleStop"))}</label><input data-rule-list="true" data-rule-field="stop" data-rule-index="${index}" value="${esc((rule.stop || []).join(", "))}" style="min-width:200px">
+            </div></details></td></tr>`;
+          return row + detail;
+        }).join("")}</tbody></table></div>`
     : `<div class="empty">${esc(t("settings.emptyRoutes"))}</div>`;
   agentsBox.innerHTML = agents.length
     ? agents.map((agent, index) => `<article class="work-item">
@@ -1817,13 +1927,17 @@ function renderSettingsDocument() {
         <div class="row">
           <label>${esc(t("settings.ratings"))}</label><input data-field="ratings" data-list="true" data-index="${index}" value="${esc((agent.ratings || []).join(", "))}">
           <label>${esc(t("settings.quality"))}</label><input data-field="quality_tier" data-index="${index}" value="${esc(agent.quality_tier || "")}">
-          <label>${esc(t("settings.notes"))}</label><input data-field="notes" data-index="${index}" value="${esc(agent.notes || "")}" style="min-width:220px">
+          <label>${esc(t("settings.maxContext"))}</label><input type="number" data-field="max_context" data-index="${index}" value="${esc(agent.max_context == null ? "" : agent.max_context)}" style="min-width:110px">
+          <label>${esc(t("settings.capabilities"))}</label><input data-field="capabilities" data-list="true" data-index="${index}" value="${esc((agent.capabilities || []).join(", "))}">
+          <label>${esc(t("settings.notes"))}</label><input data-field="notes" data-index="${index}" value="${esc(agent.notes || "")}" style="min-width:200px">
+        </div>
+        <div class="row">
           <button class="refresh" data-test-agent="${index}">${esc(t("settings.test"))}</button>
           <span class="muted" id="agent-test-${index}"></span>
           <button class="refresh" data-remove-agent="${index}">${esc(t("settings.remove"))}</button>
         </div>
       </article>`).join("")
-    : `<div class="empty">${esc(t("settings.emptyAgents"))}</div>`;
+    : `<div class="empty">${esc(t("settings.emptyAgents"))} ${esc(t("settings.agentEmptyHint"))}</div>`;
   settingsStatusText();
 }
 
@@ -1889,7 +2003,68 @@ function updateRoutingFromSelect(event) {
   return true;
 }
 
-document.addEventListener("input", updateSettingsFromInputs);
+function updateRuleFromInputs(event) {
+  const field = event.target.closest("[data-rule-field]");
+  if (!field || !settingsState || !settingsState.document) return false;
+  const rule = routeRule(Number(field.dataset.ruleIndex));
+  if (!rule) return false;
+  const key = field.dataset.ruleField;
+  const raw = field.value;
+  if (field.dataset.ruleList === "true") {
+    rule[key] = raw.split(",").map((value) => value.trim()).filter(Boolean);
+  } else if (key === "max_tokens" || key === "temperature") {
+    rule[key] = raw === "" ? null : Number(raw);
+  } else {
+    rule[key] = raw === "" ? null : raw;
+  }
+  settingsDirty = true;
+  settingsStatusText();
+  return true;
+}
+
+function updateRuleFallback(event) {
+  const select = event.target.closest("[data-rule-fallback]");
+  if (!select || !settingsState || !settingsState.document) return false;
+  const rule = routeRule(Number(select.dataset.ruleFallback));
+  if (!rule) return false;
+  rule.fallback = select.value || null;
+  settingsDirty = true;
+  settingsStatusText();
+  return true;
+}
+
+function updateSettingsGlobals(event) {
+  const document_ = settingsState && settingsState.document;
+  if (!document_) return false;
+  const global = event.target.closest("[data-global]");
+  if (global) {
+    const value = global.type === "checkbox"
+      ? global.checked
+      : global.type === "number"
+        ? (global.value === "" ? null : Number(global.value))
+        : global.value;
+    settingsPathSet(document_, global.dataset.global, value);
+    settingsDirty = true;
+    settingsStatusText();
+    return true;
+  }
+  const list = event.target.closest("[data-global-list]");
+  if (list) {
+    settingsPathSet(document_, list.dataset.globalList,
+      list.value.split(",").map((value) => value.trim()).filter(Boolean));
+    settingsDirty = true;
+    settingsStatusText();
+    return true;
+  }
+  return false;
+}
+
+document.addEventListener("input", (event) => {
+  if (updateSettingsGlobals(event)) return;
+  if (updateRuleFromInputs(event)) return;
+  updateSettingsFromInputs(event);
+});
+document.addEventListener("change", updateRuleFallback);
 document.addEventListener("change", updateRoutingFromSelect);
 document.addEventListener("click", (event) => {
   const testButton = event.target.closest("[data-test-agent]");

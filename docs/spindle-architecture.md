@@ -608,7 +608,13 @@ generic load errors; no pane keeps hard-coded copy. The Settings pane reads
 `GET /console/api/settings`, which returns the loaded config path and revision,
 each agent's API-key variable name with a set/unset flag (never a key value), the
 resolved routes, the features each route powers, and the editable config document;
-routes on the built-in local stand-in are marked "no model connected".
+routes on the built-in local stand-in are marked "no model connected". The editor
+covers the whole document: agents (identity, provider, endpoint, model, key
+variable, ratings, quality tier, context limit, capabilities, notes), per-route
+rule details (fallback agent, purpose, max tokens, temperature, rating scope, stop
+strings) for routes bound to an agent, and the global switches (health checks and
+timeout, import-to-explicit routing, `anti_slop` lists and the experimental
+structural switch).
 
 `POST /console/api/settings` saves that document: the whole configuration is
 validated with the startup parser (plus field-level errors for the editor), a
