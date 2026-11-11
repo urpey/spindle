@@ -1,4 +1,5 @@
 //! Initial-planning contracts. These never authorize in-run amendments.
+use crate::character_design::CharacterDesignView;
 use crate::models::*;
 use crate::plot_line::SubplotJob;
 use crate::story_spine::{ControllingIdea, StorySpine, StorySpineEnding};
@@ -698,6 +699,7 @@ pub struct PlanningReadinessReport {
 pub enum PlanningOperation {
     CreateProject(PlanningCreateProjectInput),
     CreateCharacter(Box<PlanningCreateCharacterInput>),
+    CreateCharacterDesign(Box<PlanningCreateCharacterDesignInput>),
     CreateLocation(PlanningCreateLocationInput),
     CreateWorldRule(PlanningCreateWorldRuleInput),
     CreateRelationship(PlanningCreateRelationshipInput),
@@ -780,6 +782,46 @@ pub struct PlanningCreateCharacterInput {
     #[serde(default)]
     pub emotional_profile: PlanningCharacterEmotionalProfileData,
     pub initial_state: Option<PlanningCharacterStatePatch>,
+}
+
+/// Stage a Character Design for a character introduced at the Cast & World
+/// level. All text fields are defaulted so an incomplete design can be staged
+/// with blocking findings instead of disappearing as a deserialization error.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningCreateCharacterDesignInput {
+    /// The character this design belongs to (an existing id or a proposal ref).
+    pub character_id: PlanningRef,
+    /// Two to five contradictions that give the character dimension.
+    #[serde(default)]
+    pub contradictions: Vec<String>,
+    /// The self the character shows the world.
+    #[serde(default)]
+    pub public_self: String,
+    /// The self the character shares with intimates.
+    #[serde(default)]
+    pub personal_self: String,
+    /// The self the character keeps to themselves.
+    #[serde(default)]
+    pub private_self: String,
+    /// The self the character hides even from themselves; stored as a secret
+    /// canonical fact and never exposed by non-planning reads.
+    #[serde(default)]
+    pub hidden_self: String,
+    /// What the character wants on the page.
+    #[serde(default)]
+    pub conscious_desire: String,
+    /// What the character wants beneath the page; stored as a secret canonical
+    /// fact and never exposed by non-planning reads.
+    #[serde(default)]
+    pub unconscious_desire: String,
+    /// The pressure this character puts on the protagonist.
+    #[serde(default)]
+    pub pressure_on_protagonist: String,
+    /// Planner-written observable behaviour cues derived from the hidden layer
+    /// and the unconscious desire.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub behavior_cues: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1233,6 +1275,9 @@ pub struct PlanningCharacterArcMilestone {
     pub unlocks: Vec<String>,
     #[serde(default)]
     pub reached_at: Option<PlanningStoryPlacement>,
+    /// Planned change-or-reveal kind; absent means unclassified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ArcMilestoneKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1800,6 +1845,12 @@ pub struct PlanningStatusOutput {
     /// Persisted Story Spines for the selected session's project, when attached.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub story_spines: Vec<StorySpine>,
+    /// Persisted Character Designs for the selected session's project, when
+    /// attached. Planning reads are full reads: each view carries the hidden
+    /// layer and unconscious desire text from its secret canonical facts.
+    /// Skipped when empty so existing sessions' output is unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub character_designs: Vec<CharacterDesignView>,
     /// Readiness report for the selected session, when its project is attached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readiness: Option<PlanningReadinessSummary>,
@@ -2099,4 +2150,5 @@ pub enum PlanningAppliedOutput {
     PlanChapter(Box<PlanChapterOutput>),
     UpdateReaderContract(Box<UpdateEntityOutput>),
     CreateStorySpine(Box<crate::story_spine::CreateStorySpineOutput>),
+    CreateCharacterDesign(Box<crate::character_design::CreateCharacterDesignOutput>),
 }

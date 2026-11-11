@@ -587,6 +587,8 @@ async fn all_human_fixture_applies_allowlist_and_reads_six_complete_manifests() 
     let cast=bundle(&svc,&s,PlanningLevel::CastWorld,&[&root],vec![
   planned("cast:ada","create_character",json!({"name":"Ada","summary":"Harbor archivist","role":"protagonist"})),
   planned("cast:ben","create_character",json!({"name":"Ben","summary":"Missing heir","role":"opposition"})),
+  planned("design:ada","create_character_design",character_design_payload("cast:ada", &["generous", "ruthless"])),
+  planned("design:ben","create_character_design",character_design_payload("cast:ben", &["proud", "ashamed"])),
   planned("place:harbor","create_location",json!({"name":"Harbor","kind":"city","summary":"A tidal port"})),
   planned("rule:tides","create_world_rule",json!({"rule_name":"Harbor tides","rule_type":"physics","description":"The tidal gate opens at dawn"})),
   planned("relationship:rivals","create_relationship",json!({"character_a_id":reference("cast:ada"),"character_b_id":reference("cast:ben"),"relationship_type":"rivals","initial_trust":0,"initial_tension":3})),
@@ -771,9 +773,9 @@ async fn receipt_failure_keeps_committed_prefix_and_retries_without_duplicate_en
                 json!({"name":"Ada","summary":"Archivist","role":"lead"}),
             ),
             planned(
-                "cast:b",
-                "create_character",
-                json!({"name":"Ben","summary":"Heir","role":"support"}),
+                "design:a",
+                "create_character_design",
+                character_design_payload("cast:a", &["kind", "cold"]),
             ),
             planned(
                 "place:port",
@@ -790,7 +792,10 @@ async fn receipt_failure_keeps_committed_prefix_and_retries_without_duplicate_en
  }).await.unwrap();
     let mut d = decision(&s, &p);
     d.decision = PlanningDecision::Accept;
-    let failed = svc.apply_planning(d.clone()).await.unwrap();
+    let failed = svc
+        .apply_planning(d.clone())
+        .await
+        .unwrap_or_else(|error| panic!("apply preflight failed: {error:#}"));
     assert!(failed.error.is_some());
     assert!(!failed.complete);
     assert_eq!(
@@ -817,7 +822,10 @@ async fn receipt_failure_keeps_committed_prefix_and_retries_without_duplicate_en
         .read(|c| c.query_row("SELECT COUNT(*) FROM character", [], |r| r.get(0)))
         .await
         .unwrap();
-    assert_eq!(count, 1, "failed receipt must roll back its character too");
+    assert_eq!(
+        count, 1,
+        "the committed character prefix survives a later failed receipt"
+    );
     assert!(
         svc.decide_planning(decision(&s, &p)).await.is_err(),
         "partially applied intent cannot be rejected as unwritten history"
@@ -832,7 +840,7 @@ async fn receipt_failure_keeps_committed_prefix_and_retries_without_duplicate_en
         .read(|c| c.query_row("SELECT COUNT(*) FROM character", [], |r| r.get(0)))
         .await
         .unwrap();
-    assert_eq!(count, 2);
+    assert_eq!(count, 1, "retry must not duplicate the committed character");
 }
 
 #[tokio::test]
@@ -1163,11 +1171,18 @@ async fn active_run_freezes_roots_and_existing_plans_but_allows_missing_future_c
         &s,
         PlanningLevel::CastWorld,
         &[&root],
-        vec![planned(
-            "cast:new",
-            "create_character",
-            json!({"name":"New lead","summary":"Late root","role":"lead"}),
-        )],
+        vec![
+            planned(
+                "cast:new",
+                "create_character",
+                json!({"name":"New lead","summary":"Late root","role":"lead"}),
+            ),
+            planned(
+                "design:new",
+                "create_character_design",
+                character_design_payload("cast:new", &["bold", "careful"]),
+            ),
+        ],
     )
     .await;
     let mut d = decision(&s, &cast);
@@ -1233,11 +1248,18 @@ async fn deferred_search_failure_stays_queued_without_unapplying_canon() {
         &s,
         PlanningLevel::CastWorld,
         &[&root],
-        vec![planned(
-            "cast:ada",
-            "create_character",
-            json!({"name":"Ada","summary":"Archivist","role":"lead"}),
-        )],
+        vec![
+            planned(
+                "cast:ada",
+                "create_character",
+                json!({"name":"Ada","summary":"Archivist","role":"lead"}),
+            ),
+            planned(
+                "design:ada",
+                "create_character_design",
+                character_design_payload("cast:ada", &["warm", "guarded"]),
+            ),
+        ],
     )
     .await;
     let report = accept(&svc, &s, &p).await;
@@ -1787,6 +1809,42 @@ async fn route_generation_real_agent_stages_all_levels_and_applies_only_on_human
                         "summary": "Harbor magistrate",
                         "role": "antagonist",
                         "realm": null
+                    }
+                }
+            },
+            {
+                "output_ref": "design:ada",
+                "operation": {
+                    "operation": "create_character_design",
+                    "input": {
+                        "character_id": {"kind": "proposal_ref", "value": "cast:ada"},
+                        "contradictions": ["keeps every chart", "cannot read her own heart"],
+                        "public_self": "Harbor chart-keeper",
+                        "personal_self": "Raises her nephew alone",
+                        "private_self": "Believes the missing heir is alive",
+                        "hidden_self": "She forged the manifest herself",
+                        "conscious_desire": "Clear her family name",
+                        "unconscious_desire": "To be forgiven for the forgery",
+                        "pressure_on_protagonist": "Withholds the chart that would convict her",
+                        "behavior_cues": ["straightens the chart corners before answering"]
+                    }
+                }
+            },
+            {
+                "output_ref": "design:corin",
+                "operation": {
+                    "operation": "create_character_design",
+                    "input": {
+                        "character_id": {"kind": "proposal_ref", "value": "cast:corin"},
+                        "contradictions": ["sworn to the harbor", "loyal only to his sister"],
+                        "public_self": "Harbor magistrate",
+                        "personal_self": "Quiet patron of the tide school",
+                        "private_self": "Keeps a second ledger",
+                        "hidden_self": "He signed the forged manifest too",
+                        "conscious_desire": "Keep the harbor from rioting",
+                        "unconscious_desire": "To be caught",
+                        "pressure_on_protagonist": "Offers protection at the price of silence",
+                        "behavior_cues": ["always leaves one chair empty"]
                     }
                 }
             },
@@ -5760,6 +5818,7 @@ async fn phase_d_validator_enforces_promise_schedules_pov_rotation_pacing_curves
                     placement: Some(phase_d_place(1, 4, 1)),
                     unlocks: vec![],
                     reached_at: None,
+                    kind: None,
                 },
                 PlanningCharacterArcMilestone {
                     label: "Early".into(),
@@ -5767,6 +5826,7 @@ async fn phase_d_validator_enforces_promise_schedules_pov_rotation_pacing_curves
                     placement: Some(phase_d_place(1, 2, 1)),
                     unlocks: vec![],
                     reached_at: None,
+                    kind: None,
                 },
                 PlanningCharacterArcMilestone {
                     label: "Close".into(),
@@ -5774,6 +5834,7 @@ async fn phase_d_validator_enforces_promise_schedules_pov_rotation_pacing_curves
                     placement: Some(phase_d_place(1, 3, 1)),
                     unlocks: vec![],
                     reached_at: None,
+                    kind: None,
                 },
             ],
             thematic_purpose: "Courage".into(),
@@ -8131,5 +8192,504 @@ async fn mckee_plot_line_gate_sees_parent_branch_rows_and_catches_a_child_duplic
     assert!(
         error.contains("/existing_plot_lines") && error.contains("related: plot_line:"),
         "the duplicate finding must locate both Main Plot rows: {error}"
+    );
+}
+
+fn character_design_payload(character_key: &str, contradictions: &[&str]) -> serde_json::Value {
+    serde_json::json!({
+        "character_id": reference(character_key),
+        "contradictions": contradictions,
+        "public_self": "Harbor archivist who keeps the tide tables",
+        "personal_self": "Loyal to the sister she raised",
+        "private_self": "Fears deep water after the wreck",
+        "hidden_self": "She caused the fire that killed her brother",
+        "conscious_desire": "Find the missing heir and clear her name",
+        "unconscious_desire": "To be punished for the fire",
+        "pressure_on_protagonist": "Makes the protagonist choose between truth and safety",
+        "behavior_cues": ["counts the exits before she speaks", "refuses praise"]
+    })
+}
+
+#[tokio::test]
+async fn mckee_character_design_stages_accepts_and_reads_back_full_hidden_text() {
+    use serde_json::json;
+    use spindle_core::models::{GetCharacterSnapshotInput, GetEntityInput};
+    use spindle_core::subject::SubjectTable;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (s, root) = accepted_root(&svc).await;
+    let because = |contradictions: &[&str]| character_design_payload("cast:ada", contradictions);
+    let cast = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![
+            planned(
+                "cast:ada",
+                "create_character",
+                json!({"name":"Ada","summary":"Harbor archivist","role":"protagonist"}),
+            ),
+            planned(
+                "design:ada",
+                "create_character_design",
+                because(&[
+                    "generous with strangers",
+                    "ruthless with family",
+                    "afraid of water",
+                ]),
+            ),
+        ],
+    )
+    .await;
+    assert!(
+        cast.findings.is_empty(),
+        "a complete Character Design must not produce findings: {:?}",
+        cast.findings
+    );
+    let report = accept(&svc, &s, &cast).await;
+    let ada_id = report
+        .operations
+        .iter()
+        .find_map(|operation| operation.returned_ids.get("cast:ada"))
+        .expect("character id")
+        .clone();
+    let design_id = report
+        .operations
+        .iter()
+        .find_map(|operation| operation.returned_ids.get("design:ada"))
+        .expect("character design id")
+        .clone();
+    assert!(design_id.starts_with("character_design:"));
+
+    let scope = s.scope.clone().unwrap();
+    let design = svc
+        .repository
+        .get_character_design_for_character(&scope.project_id, &ada_id)
+        .await
+        .unwrap()
+        .expect("persisted design");
+    assert_eq!(design.character_design_id, design_id);
+    assert_eq!(design.contradictions.len(), 3);
+    let hidden = svc
+        .repository
+        .get_canonical_fact(&design.hidden_self_fact_id)
+        .await
+        .unwrap();
+    assert!(hidden.secret, "the hidden layer must be a secret fact");
+    assert_eq!(
+        hidden.value_text.as_deref(),
+        Some("She caused the fire that killed her brother")
+    );
+    assert_eq!(hidden.subject_table, "character");
+    assert_eq!(hidden.subject_id.as_deref(), Some(ada_id.as_str()));
+    let unconscious = svc
+        .repository
+        .get_canonical_fact(&design.unconscious_desire_fact_id)
+        .await
+        .unwrap();
+    assert!(unconscious.secret);
+    assert_eq!(
+        unconscious.value_text.as_deref(),
+        Some("To be punished for the fire")
+    );
+
+    // Circle of trust: the character is the only initial holder of each secret.
+    for fact_id in [
+        &design.hidden_self_fact_id,
+        &design.unconscious_desire_fact_id,
+    ] {
+        let circle = svc
+            .repository
+            .secret_circle_members(&scope.project_id, &scope.branch_id, fact_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            circle.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec![ada_id.as_str()]
+        );
+    }
+
+    // Planning tools read the full design, hidden text included.
+    let status = svc
+        .planning_status(PlanningStatusInput {
+            session_id: Some(s.id.clone()),
+            project_id: None,
+            branch_id: None,
+            target_range: None,
+            include_readiness: Some(false),
+        })
+        .await
+        .unwrap();
+    assert_eq!(status.character_designs.len(), 1);
+    assert_eq!(
+        status.character_designs[0].hidden_self,
+        "She caused the fire that killed her brother"
+    );
+    assert_eq!(
+        status.character_designs[0].unconscious_desire,
+        "To be punished for the fire"
+    );
+    assert_eq!(
+        status.character_designs[0].behavior_cues,
+        vec![
+            "counts the exits before she speaks".to_string(),
+            "refuses praise".to_string()
+        ]
+    );
+
+    // Non-planning reads expose only the redacted slice.
+    let snapshot = svc
+        .get_character_snapshot(GetCharacterSnapshotInput {
+            project_id: scope.project_id.clone(),
+            character_id: ada_id.clone(),
+            branch_id: None,
+        })
+        .await
+        .unwrap();
+    let redacted = snapshot
+        .character_design
+        .as_ref()
+        .expect("redacted design slice");
+    assert_eq!(redacted.contradictions.len(), 3);
+    assert_eq!(
+        redacted.public_self,
+        "Harbor archivist who keeps the tide tables"
+    );
+    let snapshot_json = serde_json::to_string(&snapshot).unwrap();
+    assert!(!snapshot_json.contains("She caused the fire that killed her brother"));
+    assert!(!snapshot_json.contains("To be punished for the fire"));
+    assert!(!snapshot_json.contains("hidden_self_fact_id"));
+    assert!(!snapshot_json.contains("unconscious_desire_fact_id"));
+
+    let entity = svc
+        .get_entity(GetEntityInput {
+            project_id: scope.project_id.clone(),
+            table: SubjectTable::Character,
+            entity_id: ada_id.clone(),
+            branch_id: None,
+        })
+        .await
+        .unwrap();
+    let entity_json = serde_json::to_string(&entity).unwrap();
+    assert!(!entity_json.contains("She caused the fire that killed her brother"));
+    assert!(!entity_json.contains("To be punished for the fire"));
+    assert!(!entity_json.contains("character_design.hidden_self"));
+}
+
+#[tokio::test]
+async fn mckee_character_design_gate_blocks_missing_few_many_and_duplicate_designs() {
+    use serde_json::json;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (s, root) = accepted_root(&svc).await;
+
+    // Missing design for a character the artifact introduces.
+    let missing = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![planned(
+            "cast:one",
+            "create_character",
+            json!({"name":"One","summary":"First","role":"support"}),
+        )],
+    )
+    .await;
+    let finding = missing
+        .findings
+        .iter()
+        .find(|finding| finding.code == "character_design_missing")
+        .expect("missing design finding");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+    assert_eq!(finding.path, "/operations/0/operation");
+    assert_eq!(finding.related_refs, vec!["cast:one".to_string()]);
+    let error = reject_planning(&svc, &s, &missing).await;
+    assert!(error.contains("character_design_missing"), "{error}");
+
+    // Fewer than two contradictions.
+    let too_few = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![
+            planned(
+                "cast:two",
+                "create_character",
+                json!({"name":"Two","summary":"Second","role":"support"}),
+            ),
+            planned(
+                "design:two",
+                "create_character_design",
+                character_design_payload("cast:two", &["lonely"]),
+            ),
+        ],
+    )
+    .await;
+    assert_blocking_design_finding(&too_few, "character_design_too_few_contradictions");
+    reject_planning(&svc, &s, &too_few).await;
+
+    // More than five contradictions.
+    let too_many = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![
+            planned(
+                "cast:three",
+                "create_character",
+                json!({"name":"Three","summary":"Third","role":"support"}),
+            ),
+            planned(
+                "design:three",
+                "create_character_design",
+                character_design_payload("cast:three", &["a", "b", "c", "d", "e", "f"]),
+            ),
+        ],
+    )
+    .await;
+    assert_blocking_design_finding(&too_many, "character_design_too_many_contradictions");
+    reject_planning(&svc, &s, &too_many).await;
+
+    // Two designs for one character in the same artifact.
+    let duplicate = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![
+            planned(
+                "cast:four",
+                "create_character",
+                json!({"name":"Four","summary":"Fourth","role":"support"}),
+            ),
+            planned(
+                "design:four-a",
+                "create_character_design",
+                character_design_payload("cast:four", &["kind", "cold"]),
+            ),
+            planned(
+                "design:four-b",
+                "create_character_design",
+                character_design_payload("cast:four", &["brave", "afraid"]),
+            ),
+        ],
+    )
+    .await;
+    assert_blocking_design_finding(&duplicate, "character_design_duplicate");
+    reject_planning(&svc, &s, &duplicate).await;
+
+    // A valid design accepts and persists.
+    let valid = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![
+            planned(
+                "cast:ada",
+                "create_character",
+                json!({"name":"Ada","summary":"Archivist","role":"protagonist"}),
+            ),
+            planned(
+                "design:ada",
+                "create_character_design",
+                character_design_payload("cast:ada", &["generous", "ruthless"]),
+            ),
+        ],
+    )
+    .await;
+    assert!(valid.findings.is_empty(), "{:?}", valid.findings);
+    let report = accept(&svc, &s, &valid).await;
+    let ada_id = report
+        .operations
+        .iter()
+        .find_map(|operation| operation.returned_ids.get("cast:ada"))
+        .expect("character id")
+        .clone();
+
+    // A second design for the already-designed character is rejected before
+    // acceptance and cannot reach the write path.
+    let mut second = artifact(&s, "design:again");
+    second.level = PlanningLevel::CastWorld;
+    second
+        .parents
+        .insert(root.id.clone(), root.payload_hash.clone());
+    second.operations = vec![planned(
+        "design:again",
+        "create_character_design",
+        json!({
+            "character_id": {"kind":"existing_record_id","value": ada_id},
+            "contradictions": ["kind", "cold"],
+            "public_self":"x","personal_self":"y","private_self":"z",
+            "hidden_self":"h","conscious_desire":"c","unconscious_desire":"u",
+            "pressure_on_protagonist":"p","behavior_cues":[]
+        }),
+    )];
+    let second = svc.stage_planning(second).await.unwrap();
+    assert_blocking_design_finding(&second, "character_design_duplicate");
+    reject_planning(&svc, &s, &second).await;
+
+    let count: i64 = svc
+        .repository
+        .pool()
+        .read(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM character_design", [], |row| {
+                row.get(0)
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "only the accepted design may exist");
+}
+
+fn assert_blocking_design_finding(proposal: &PlanningProposal, code: &str) {
+    let finding = proposal
+        .findings
+        .iter()
+        .find(|finding| finding.code == code)
+        .unwrap_or_else(|| panic!("missing finding {code}: {:?}", proposal.findings));
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+}
+
+#[tokio::test]
+async fn non_mckee_projects_are_exempt_from_the_character_design_gate() {
+    use serde_json::json;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (s, root) = accepted_non_mckee_project(&svc).await;
+    let cast = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![planned(
+            "cast:mara",
+            "create_character",
+            json!({"name":"Mara","summary":"Warden","role":"protagonist"}),
+        )],
+    )
+    .await;
+    assert!(
+        cast.findings.is_empty(),
+        "a non-McKee cast must not gain Character Design findings: {:?}",
+        cast.findings
+    );
+    accept(&svc, &s, &cast).await;
+
+    let mara_id = svc
+        .repository
+        .list_characters_by_project_and_branch(
+            &s.scope.as_ref().unwrap().project_id,
+            &s.scope.as_ref().unwrap().branch_id,
+        )
+        .await
+        .unwrap()[0]
+        .id
+        .clone();
+    let mut design = artifact(&s, "design:mara");
+    design.level = PlanningLevel::CastWorld;
+    design
+        .parents
+        .insert(root.id.clone(), root.payload_hash.clone());
+    design.operations = vec![planned(
+        "design:mara",
+        "create_character_design",
+        json!({
+            "character_id": {"kind":"existing_record_id","value": mara_id},
+            "contradictions": ["kind", "cold"],
+            "public_self":"x","personal_self":"y","private_self":"z",
+            "hidden_self":"h","conscious_desire":"c","unconscious_desire":"u",
+            "pressure_on_protagonist":"p","behavior_cues":[]
+        }),
+    )];
+    let error = svc.stage_planning(design).await.unwrap_err().to_string();
+    assert!(
+        error.contains("character_design_requires_mckee_project"),
+        "existing projects cannot opt into Character Designs: {error}"
+    );
+}
+
+#[tokio::test]
+async fn v0058_to_v0059_upgrade_adds_character_design_without_touching_existing_rows() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let _warm = crate::sqlite::SqlitePool::open(&tmp.path().join("warm.db"))
+        .await
+        .unwrap();
+    let path = tmp.path().join("legacy.db");
+    {
+        let mut conn = rusqlite::Connection::open(&path).unwrap();
+        crate::sqlite::migrations::runner()
+            .set_target(refinery::Target::Version(58))
+            .run(&mut conn)
+            .unwrap();
+        conn.execute(
+            "INSERT INTO project(id,name,project_type,genre,reader_contract,created_at,updated_at) \
+             VALUES('project:legacy','Legacy','novel','mystery',\
+             '{\"promise\":\"p\",\"style_notes\":[],\"boundaries\":[]}',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bible_branch(id,project_id,parent_branch_id,name,status,created_at) \
+             VALUES('bible_branch:legacy','project:legacy',NULL,'main','active',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE project SET active_branch_id='bible_branch:legacy' WHERE id='project:legacy'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO character(id,project_id,branch_id,name,normalized_name,summary,role,created_at,updated_at) \
+             VALUES('character:legacy','project:legacy','bible_branch:legacy','Old Name','old name','Existing','support',1,1)",
+            [],
+        )
+        .unwrap();
+    }
+    let pool = crate::sqlite::SqlitePool::open(&path).await.unwrap();
+    let repo = Repository::with_model_router(
+        pool,
+        tmp.path().join("data"),
+        crate::ai::ModelRouter::local_only(),
+    );
+    let svc = SqliteSpindleService::new(repo);
+    let table_count: i64 = svc
+        .repository
+        .pool()
+        .read(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='character_design'",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(table_count, 1);
+    assert!(
+        svc.repository
+            .list_character_designs("project:legacy")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !svc.repository
+            .get_project("project:legacy")
+            .await
+            .unwrap()
+            .mckee_structured
+    );
+    assert!(
+        svc.repository
+            .get_character("character:legacy")
+            .await
+            .is_ok(),
+        "the existing character row must be untouched"
     );
 }

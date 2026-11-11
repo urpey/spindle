@@ -2103,6 +2103,7 @@ async fn get_entity_character_arc_projects_milestones() {
                 description: "Mara questions the oath.".into(),
                 unlocks: vec!["inner monologue".into()],
                 reached_at: None,
+                kind: None,
             }],
             thematic_purpose: "Claim agency.".into(),
             connected_theme_ids: Vec::new(),

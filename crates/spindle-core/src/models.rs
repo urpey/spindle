@@ -995,6 +995,21 @@ pub struct StatedConsequence {
     pub delivered: bool,
 }
 
+/// Whether an arc milestone is planned character growth (change) or a planned
+/// revelation (reveal), so the two are never conflated when drafting reports
+/// what a scene did. Additive: absent means unclassified, and pre-existing
+/// milestone JSON without the field keeps deserializing unchanged.
+///
+/// Variants deliberately carry no individual doc comments so schemars keeps
+/// emitting a plain closed enum instead of a `oneOf` of const objects (the
+/// same reason `SubplotJob` keeps its variants bare).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ArcMilestoneKind {
+    Change,
+    Reveal,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CharacterArcMilestone {
     pub label: String,
@@ -1008,6 +1023,11 @@ pub struct CharacterArcMilestone {
     /// keeps deserializing. Drives `arc_milestone_audit`.
     #[serde(default)]
     pub reached_at: Option<StoryPlacement>,
+    /// Planned kind of milestone: a character change or a revelation. Additive
+    /// and serde-defaulted so legacy milestone JSON stays readable and absent
+    /// kinds never appear in serialized output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ArcMilestoneKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -2751,6 +2771,14 @@ pub struct CharacterSnapshotOutput {
     pub current_state: Option<SnapshotCharacterStateSummary>,
     #[serde(default)]
     pub recent_appearances: Vec<SceneAppearanceSummary>,
+    /// Redacted Character Design slice (V0059/McKee): contradictions, public /
+    /// personal / private layers, conscious desire, pressure and behaviour
+    /// cues. The hidden layer and unconscious desire are deliberately absent
+    /// from this shape, so they never reach a profile-like read. Skipped when
+    /// the character (or project) has no design, keeping existing output
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_design: Option<crate::character_design::CharacterDesignRedactedView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -9543,6 +9571,52 @@ mod tests {
         .expect("missing profiles must deserialize");
         assert!(with_missing.voice_profile.vocabulary.is_empty());
         assert!(with_missing.emotional_profile.suppressed.is_empty());
+    }
+
+    #[test]
+    fn arc_milestone_kind_is_additive_and_legacy_json_still_deserializes() {
+        // Legacy milestone JSON (written before V0059) has no `kind`; it must
+        // keep deserializing and must serialize exactly as before.
+        let legacy = serde_json::json!({
+            "label": "Ask for help",
+            "description": "Ada trusts Ben",
+            "unlocks": []
+        });
+        let parsed: CharacterArcMilestone =
+            serde_json::from_value(legacy.clone()).expect("legacy milestone JSON");
+        assert_eq!(parsed.kind, None);
+        let reserialized = serde_json::to_value(&parsed).expect("serialize legacy milestone");
+        assert!(
+            reserialized.get("kind").is_none(),
+            "absent kind must not grow the wire shape: {reserialized}"
+        );
+
+        for (wire, expected) in [
+            ("change", ArcMilestoneKind::Change),
+            ("reveal", ArcMilestoneKind::Reveal),
+        ] {
+            let milestone: CharacterArcMilestone = serde_json::from_value(serde_json::json!({
+                "label": "Turn",
+                "description": "What the scene does",
+                "kind": wire
+            }))
+            .expect("milestone with kind");
+            assert_eq!(milestone.kind, Some(expected));
+            let round_tripped: CharacterArcMilestone =
+                serde_json::from_str(&serde_json::to_string(&milestone).unwrap()).unwrap();
+            assert_eq!(round_tripped, milestone);
+            assert_eq!(
+                serde_json::to_value(&milestone).unwrap()["kind"],
+                serde_json::json!(wire)
+            );
+        }
+
+        let unknown = serde_json::from_value::<CharacterArcMilestone>(serde_json::json!({
+            "label": "Turn",
+            "description": "What the scene does",
+            "kind": "growth"
+        }));
+        assert!(unknown.is_err(), "kind is a closed set");
     }
 
     #[test]

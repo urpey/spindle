@@ -535,9 +535,11 @@ fn check_level(level: PlanningLevel, op: &PlanningOperation, attached: bool) -> 
         UpdateReaderContract(_) | CreateStorySpine(_) => {
             level == PlanningLevel::Contract && attached
         }
-        CreateCharacter(_) | CreateLocation(_) | CreateWorldRule(_) | CreateRelationship(_) => {
-            level == PlanningLevel::CastWorld
-        }
+        CreateCharacter(_)
+        | CreateCharacterDesign(_)
+        | CreateLocation(_)
+        | CreateWorldRule(_)
+        | CreateRelationship(_) => level == PlanningLevel::CastWorld,
         CreatePlotLine(_)
         | CreateConflict(_)
         | CreateTheme(_)
@@ -692,6 +694,7 @@ fn output_type(op: &PlanningOperation) -> &'static str {
         CreateProject(_) | UpdateReaderContract(_) => "project",
         CreateStorySpine(_) => "story_spine",
         CreateCharacter(_) => "character",
+        CreateCharacterDesign(_) => "character_design",
         CreateLocation(_) => "location",
         CreateWorldRule(_) => "world_rule",
         CreateRelationship(_) => "relationship",
@@ -716,9 +719,9 @@ fn output_type(op: &PlanningOperation) -> &'static str {
 /// author can see exactly which field is missing or invalid. Every other
 /// blocking finding still rejects staging, as before.
 ///
-/// Story-Spine completeness (V0057) and the McKee Main Plot / Subplot checks
-/// (V0058) are recorded: the proposal stages, but acceptance is gated until the
-/// findings are repaired.
+/// Story-Spine completeness (V0057), the McKee Main Plot / Subplot checks
+/// (V0058) and the McKee Character Design gate (V0059) are recorded: the
+/// proposal stages, but acceptance is gated until the findings are repaired.
 const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "story_spine_missing_central_question",
     "story_spine_missing_controlling_idea_value",
@@ -729,6 +732,10 @@ const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "plot_line_main_axis_mismatch",
     "plot_line_subplot_missing_job",
     "plot_line_subplot_job_on_main",
+    "character_design_missing",
+    "character_design_too_few_contradictions",
+    "character_design_too_many_contradictions",
+    "character_design_duplicate",
 ];
 
 /// One blocking finding rendered for a caller-facing error string. The path
@@ -1969,6 +1976,172 @@ fn validate_mckee_plot_lines(
                               (surrounding whitespace is ignored)."
                     .to_string(),
             });
+        }
+    }
+    Ok(())
+}
+
+/// The McKee Character Design gate for Cast & World acceptance.
+///
+/// "Major character" is interpreted structurally: every character this
+/// artifact introduces through a `create_character` operation needs exactly
+/// one `create_character_design` in the same artifact. The cast seed at this
+/// level is intentionally minimal, so there is no separate `is_major` flag;
+/// characters added outside planning (direct `create_character`) are not
+/// retro-gated.
+///
+/// The gate records blocking findings on the staged proposal (missing design,
+/// fewer than 2 or more than 5 contradictions, a duplicate target) and
+/// acceptance refuses until they are repaired. Non-McKee projects are exempt
+/// entirely; asking such a project for a design is a staging error, because
+/// the operation only exists for McKee structure.
+fn validate_mckee_character_designs(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &Option<PlanningScope>,
+    findings: &mut Vec<PlanningFinding>,
+) -> Result<()> {
+    if input.level != PlanningLevel::CastWorld {
+        return Ok(());
+    }
+    let Some(scope) = scope else {
+        // A pre-project root chain has no project/branch to evaluate yet.
+        return Ok(());
+    };
+    let mckee_structured: i64 = conn.query_row(
+        "SELECT mckee_structured FROM project WHERE id=?1",
+        [&scope.project_id],
+        |row| row.get(0),
+    )?;
+
+    let mut characters: Vec<(usize, String)> = Vec::new();
+    let mut designs: Vec<(usize, String)> = Vec::new();
+    for (index, item) in input.operations.iter().enumerate() {
+        match &item.operation {
+            PlanningOperation::CreateCharacter(_) => {
+                characters.push((index, item.output_ref.clone()));
+            }
+            PlanningOperation::CreateCharacterDesign(design) => {
+                let target = match &design.character_id {
+                    PlanningRef::ProposalRef(value) => value.clone(),
+                    PlanningRef::ExistingRecordId(value) => value.clone(),
+                };
+                designs.push((index, target));
+            }
+            _ => {}
+        }
+    }
+
+    if mckee_structured != 1 {
+        for (index, _) in &designs {
+            findings.push(PlanningFinding {
+                code: "character_design_requires_mckee_project".to_string(),
+                severity: PlanningFindingSeverity::Blocking,
+                path: format!("/operations/{index}/operation"),
+                related_refs: vec![input.operations[*index].output_ref.clone()],
+                expected: "McKee-structured project".to_string(),
+                actual: "project was not created through the planning root".to_string(),
+                repair_hint: "Character Designs are available only to projects created through \
+                              the new-book planning flow; existing projects cannot opt in."
+                    .to_string(),
+            });
+        }
+        return Ok(());
+    }
+
+    // One design per introduced character, located by the create_character
+    // output ref the design's proposal ref points at.
+    for (character_index, character_ref) in &characters {
+        if !designs.iter().any(|(_, target)| target == character_ref) {
+            findings.push(PlanningFinding {
+                code: "character_design_missing".to_string(),
+                severity: PlanningFindingSeverity::Blocking,
+                path: format!("/operations/{character_index}/operation"),
+                related_refs: vec![character_ref.clone()],
+                expected: format!("one create_character_design operation for '{character_ref}'"),
+                actual: "no Character Design".to_string(),
+                repair_hint: "Add a create_character_design operation at the Cast & World level \
+                              for this character, with 2 to 5 contradictions, the four layers of \
+                              self, conscious and unconscious desire, and the pressure it puts on \
+                              the protagonist."
+                    .to_string(),
+            });
+        }
+    }
+
+    let mut seen: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for (index, target) in &designs {
+        let design = match &input.operations[*index].operation {
+            PlanningOperation::CreateCharacterDesign(design) => design,
+            _ => continue,
+        };
+        let count = spindle_core::character_design::contradiction_count(&design.contradictions);
+        if count < spindle_core::character_design::MIN_CHARACTER_DESIGN_CONTRADICTIONS {
+            findings.push(PlanningFinding {
+                code: "character_design_too_few_contradictions".to_string(),
+                severity: PlanningFindingSeverity::Blocking,
+                path: format!("/operations/{index}/operation/input/contradictions"),
+                related_refs: vec![target.clone()],
+                expected: format!(
+                    "{}..={} contradictions",
+                    spindle_core::character_design::MIN_CHARACTER_DESIGN_CONTRADICTIONS,
+                    spindle_core::character_design::MAX_CHARACTER_DESIGN_CONTRADICTIONS
+                ),
+                actual: format!("{count} contradiction(s)"),
+                repair_hint: "Give the Character Design at least two contradictions that give \
+                              the character dimension."
+                    .to_string(),
+            });
+        } else if count > spindle_core::character_design::MAX_CHARACTER_DESIGN_CONTRADICTIONS {
+            findings.push(PlanningFinding {
+                code: "character_design_too_many_contradictions".to_string(),
+                severity: PlanningFindingSeverity::Blocking,
+                path: format!("/operations/{index}/operation/input/contradictions"),
+                related_refs: vec![target.clone()],
+                expected: format!(
+                    "{}..={} contradictions",
+                    spindle_core::character_design::MIN_CHARACTER_DESIGN_CONTRADICTIONS,
+                    spindle_core::character_design::MAX_CHARACTER_DESIGN_CONTRADICTIONS
+                ),
+                actual: format!("{count} contradiction(s)"),
+                repair_hint: "Keep at most five contradictions; fold the rest into the four \
+                              layers of self."
+                    .to_string(),
+            });
+        }
+        if let Some(first) = seen.insert(target.clone(), *index) {
+            findings.push(PlanningFinding {
+                code: "character_design_duplicate".to_string(),
+                severity: PlanningFindingSeverity::Blocking,
+                path: format!("/operations/{index}/operation/input/character_id"),
+                related_refs: vec![target.clone()],
+                expected: "one Character Design per character".to_string(),
+                actual: format!("operations {first} and {index} both design '{target}'"),
+                repair_hint: "A character has exactly one Character Design; merge the design \
+                              fields into one create_character_design operation."
+                    .to_string(),
+            });
+        }
+        if let PlanningRef::ExistingRecordId(character_id) = &design.character_id {
+            let exists: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM character_design \
+                 WHERE project_id=?1 AND character_id=?2)",
+                rusqlite::params![&scope.project_id, character_id],
+                |row| row.get(0),
+            )?;
+            if exists {
+                findings.push(PlanningFinding {
+                    code: "character_design_duplicate".to_string(),
+                    severity: PlanningFindingSeverity::Blocking,
+                    path: format!("/operations/{index}/operation/input/character_id"),
+                    related_refs: vec![character_id.clone()],
+                    expected: "a character with no existing Character Design".to_string(),
+                    actual: "the character already has an accepted Character Design".to_string(),
+                    repair_hint: "An accepted Character Design is frozen; do not stage a second \
+                                  design for the same character."
+                        .to_string(),
+                });
+            }
         }
     }
     Ok(())
@@ -3923,6 +4096,7 @@ fn validate_stage_input_in_conn_excluding(
     );
 
     validate_mckee_plot_lines(conn, input, &s.scope, &mut findings)?;
+    validate_mckee_character_designs(conn, input, &s.scope, &mut findings)?;
 
     Ok(findings)
 }

@@ -2646,6 +2646,17 @@ impl SqliteSpindleService {
             if !fact.secret {
                 continue;
             }
+            // Character Design secrets are author-only: planning tools read the
+            // full text, and every non-planning carrier (this one included)
+            // strips them. They never get a [SECRETS IN PLAY] envelope because
+            // the writer-facing rendering is the design's behaviour cues, not
+            // the hidden layer or unconscious desire.
+            if spindle_core::character_design::is_character_design_fact(&fact.predicate) {
+                gate.gated_fact_ids.insert(fact.id.clone());
+                gate.withheld_snapshot_facts
+                    .insert(snapshot_fact_string(fact));
+                continue;
+            }
             // Circle-at-cursor: derived from the linked knowledge rows.
             let circle: Vec<(String, Option<i64>)> = self
                 .repository
@@ -2837,11 +2848,18 @@ impl SqliteSpindleService {
         let snapshot = self
             .canon_routed_subject_snapshot(&input.project_id, &branch.id, &subject, &placement)
             .await?;
+        // Profile-like reads get the redacted design only. The hidden layer and
+        // unconscious desire live in secret canonical facts that subject
+        // snapshots already strip, so there is nothing to leak here.
+        let character_design = self
+            .get_character_design_redacted(&input.project_id, &character.id)
+            .await?;
 
         Ok(CharacterSnapshotOutput {
             voice_profile: snapshot.voice_profile().cloned(),
             current_state: snapshot.current_state().cloned(),
             recent_appearances: snapshot.recent_appearances().to_vec(),
+            character_design,
             snapshot,
         })
     }

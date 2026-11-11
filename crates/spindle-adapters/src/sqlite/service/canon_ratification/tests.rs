@@ -639,6 +639,7 @@ mod ratify {
                         description: "kills for the first time".to_string(),
                         unlocks: Vec::new(),
                         reached_at: None,
+                        kind: None,
                     },
                     spindle_core::models::CharacterArcMilestone {
                         label: "the reckoning".to_string(),
@@ -646,6 +647,7 @@ mod ratify {
                         description: "faces the villain".to_string(),
                         unlocks: Vec::new(),
                         reached_at: None,
+                        kind: None,
                     },
                 ],
                 thematic_purpose: "coming of age".to_string(),
@@ -718,6 +720,7 @@ mod ratify {
                     description: "kills".to_string(),
                     unlocks: Vec::new(),
                     reached_at: None,
+                    kind: None,
                 }],
                 thematic_purpose: "coming of age".to_string(),
                 connected_theme_ids: Vec::new(),

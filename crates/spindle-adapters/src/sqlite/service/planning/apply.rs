@@ -2,6 +2,7 @@ use super::*;
 use crate::sqlite::repository::resolve_planning_operation;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use spindle_core::character_design::CreateCharacterDesignInput;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn digest(value: &impl serde::Serialize) -> Result<String> {
@@ -566,6 +567,12 @@ impl SqliteSpindleService {
                 CreateCharacterInput,
                 CreateCharacter,
                 character_id
+            ),
+            CreateCharacterDesign(_) => invoke!(
+                create_character_design,
+                CreateCharacterDesignInput,
+                CreateCharacterDesign,
+                character_design_id
             ),
             CreateLocation(_) => invoke!(
                 create_location,
