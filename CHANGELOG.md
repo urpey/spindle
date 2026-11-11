@@ -39,6 +39,28 @@
   projects keep no rows.
 - Add the `character-design` reference to the `story-structure` skill and the
   `mckee` profile.
+- Add the ordered Act list to the planning schedule for McKee projects
+  (`PlanningSchedule.acts`): order, climax scene placeholder, the Spine Axis
+  Charge after the climax, the part of the Central Question the Act answers and
+  the final-Act flag. Acts are schedule metadata, never story records and never
+  editable through canon deltas (ADR 0006); there is no new table or migration.
+- Validate Acts at Series-Arc and Book acceptance: an unchanged adjacent
+  Charge, an unmarked final Act, non-contiguous/duplicate/non-positive orders,
+  an empty Central-Question part and missing or non-positive climax coordinates
+  are blocking findings recorded on the staged proposal; a non-increasing depth
+  progression is advisory only. Book acceptance re-checks the merged accepted
+  Act list, so a later decision can refine one Act but cannot clash with its
+  accepted neighbours.
+- Enforce the reserved Act climax placeholder in Chapter and Scene batches: a
+  plan for a chapter containing an accepted Act climax must include a scene at
+  that `scene_order`, or acceptance is refused (`act_climax_scene_missing`).
+- Derive `act_breakpoints` from the Act list for McKee projects instead of
+  accepting an authored map; keys are `act_<order>` and values normalize
+  against the highest Act climax chapter in the book (single Act = 1.0).
+  Non-McKee projects keep authored breakpoints unchanged.
+- Add the `value-turns` reference to the `story-structure` skill and the
+  `mckee` profile: Value Axis, Charge spectrum, Value Turn, Gap, the three
+  structural levels, and how to check Act climax Charges and depth progression.
 
 ## 0.3.0 — 2026-11-09
 

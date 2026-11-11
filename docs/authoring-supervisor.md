@@ -49,6 +49,19 @@ those layers in full. Arc milestones expose an optional `kind` (`change` /
 `reveal`) wherever milestones are read, and a missing kind means unclassified
 — drafting behaviour is unchanged.
 
+Series-Arc and Book planning also decide an ordered Act list
+(`PlanningSchedule.acts`), each Act reserving a climax scene placeholder and
+the Charge the Spine Axis holds after it (see
+[planning engine](planning-engine-design.md)). Acts are planning intent, not
+canon: the supervisor never turns them into timeline events or canonical facts,
+and they are not editable through canon deltas. Chapter plans are still the
+source of truth for pre-draft requirements; the difference for a McKee project
+is that a plan for a chapter containing an accepted Act climax must include the
+reserved scene, so `authoring_prepare_run` cannot pass a batch that skipped the
+placeholder. `act_breakpoints` are derived from the Act list for these
+projects, so `create_pacing_curve` refuses an authored map; pacing curves on
+unmarked projects are unchanged.
+
 ## MCP Tools Interface
 
 The supervisor exposes 9 MCP tools through the `spindle-mcp` server:

@@ -897,7 +897,7 @@ Run this sequence when you start a new implementation task.
 
 Core `planning` contracts define closed operations with typed existing/proposal
 references, `PlanningArtifactV1` envelopes, structured schedules (`promise_events`,
-`pov_plan`, `intensity_targets`), RFC 6901 JSON-pointer validation findings, and
+`pov_plan`, `intensity_targets`, `acts`), RFC 6901 JSON-pointer validation findings, and
 session/call budget receipts. V0049 adds pre-project sessions, proposals and the
 operation ledger; V0050 adds apply attempt history, operation audit/output fields
 and a deferred search-index queue; V0052 adds `planning_generation_attempt` for
@@ -1002,6 +1002,23 @@ contradictions, and duplicate designs are blocking findings recorded on the
 proposal (`character_design_*`) that refuse acceptance; characters added
 outside planning are not retro-gated. Non-McKee projects are exempt, and
 staging a design for one is rejected.
+
+The Act list lives on the planning schedule (`PlanningSchedule.acts`) as
+outline intent, never as a story record (ADR 0006). Each entry carries an
+`order`, a climax scene placeholder, the Spine Axis Charge after its climax,
+the `central_question_part` it answers, and `answers_central_question` for the
+final Act. There is no new table or migration: accepted proposals keep their
+schedule, and `planning_status` reads it back on the proposal summary. For
+McKee projects, Series-Arc and Book acceptance merge applied, staged-ancestor
+and current artifacts' Acts by order (later decisions override) and record
+blocking findings for an unchanged adjacent Charge, an unmarked final Act,
+non-contiguous or duplicate orders, empty question parts and missing/positive
+climax coordinates; a non-increasing depth progression is advisory only.
+Chapter and Scene artifacts that plan a chapter containing an accepted Act
+climax must include a scene at the reserved `scene_order`
+(`act_climax_scene_missing`). `act_breakpoints` are derived from the Act list
+for McKee projects (authored maps are refused) and stay authored for unmarked
+projects.
 
 The hidden layer and the unconscious desire are not plain columns: they are
 registered as secret canonical facts (`secret = 1`, one `knowledge_fact` row

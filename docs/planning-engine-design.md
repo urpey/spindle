@@ -194,7 +194,8 @@ PlanningArtifactV1 {
   schema_version: 1, session_id, level, parent_hashes, intent_hash,
   operations: [TypedPlanningOperation],
   schedule: {promise_events: [PlannedPromiseEvent],
-             chapter_povs: [PlannedPov], scene_intensities: [PlannedIntensity]},
+             pov_plan: [PlannedPov], intensity_targets: [PlannedIntensity],
+             acts: [PlannedAct]},
   assumptions: [string], author_questions: [Question], rationale: string
 }
 TypedPlanningOperation = CreateCharacter | CreateCharacterDesign |
@@ -298,6 +299,56 @@ personal and private selves are not part of the writer-facing slice). Secret
 fact ids, values and concealment notes never leave the planning surface. Arc milestones gain an optional `kind` (`change` / `reveal`);
 both are stored in the milestone JSON, and legacy milestone JSON without the
 field keeps deserializing and serializing unchanged.
+
+`PlanningSchedule.acts` (Series-Arc and Book) carries the ordered **Act list**
+as schedule metadata, not as a story record. One entry is `order` (1-based,
+unique), a `climax` scene placeholder (`book_number`, `chapter_number`,
+`scene_order`), the `charge` the Spine Axis holds after that climax, the
+`central_question_part` the Act answers, and `answers_central_question` (true
+only on the final Act). The field is additive and serde-defaulted: existing
+artifacts without `acts` serialize exactly as before, and there is no new table
+or migration. Acts are outline intent (ADR 0006) and are never writable through
+canon deltas.
+
+Acceptance validation for McKee projects evaluates the Act list a decision
+would leave behind: applied proposals on the session branch, then staged
+ancestors in the same approved closure, then the artifact's own list. A later
+decision overrides an Act with the same `order`; an Act the later decision does
+not mention keeps the earlier entry. That merge is also the deterministic
+accepted-Act read used by derived breakpoints and the climax placeholder gate,
+and it lets a Book-level proposal refine one Act without restating the whole
+list. An empty Act list adds no finding: the fixed gates below are the Act
+validation rules, and an empty list is not a new blocking rule.
+
+Blocking findings are recorded on the staged proposal (they stage, acceptance
+refuses): an Act climax whose full Charge (sign and depth) equals the previous
+Act's; the highest-order Act not marked `answers_central_question`; orders that
+are not `1..=n`, duplicated, or non-positive; an empty
+`central_question_part`; a missing or non-positive climax placement; a missing
+`scene_order`; and a missing Charge. The advisory `act_depth_not_progressing`
+compares depth ranks (positive = 0, contrary = 1, contradictory = 2,
+negation of the negation = 3) and warns when they are not strictly increasing;
+it never blocks acceptance.
+
+A Chapter or Scene artifact that plans a chapter containing an accepted Act
+climax must include a planned scene at the reserved `scene_order`. A missing
+scene records the blocking `act_climax_scene_missing` finding and refuses
+acceptance, so the placeholder an accepted Act reserved cannot be skipped when
+its chapter is detailed.
+
+For McKee projects `act_breakpoints` are derived, not authored. A
+`create_pacing_curve` operation carrying a non-empty authored map records the
+blocking `act_breakpoints_authored_for_mckee` finding (and the direct
+`create_pacing_curve` tool refuses it with the same repair hint); an empty map
+is filled before the row is written. Derivation is deterministic: keys are
+`act_<order>`, and each value is the Act climax chapter divided by the highest
+Act-climax chapter in that book. Spindle does not know a book's exact final
+chapter count at planning time, so the highest Act climax is the fallback
+denominator; a single Act therefore yields `1.0`, an Act with no climax in the
+requested book contributes nothing (an empty map when none do), and every value
+is clamped to `(0.0, 1.0]`. Applied proposal schedules supply the Acts even
+when the curve is accepted in the same batch as the Act list. Non-McKee
+projects keep authored breakpoints byte for byte.
 
 Each variant wraps the existing core input shape with typed proposal references
 in ID slots. The dispatcher is a closed allowlist, not an arbitrary tool name

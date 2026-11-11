@@ -1,6 +1,6 @@
 [
   {
-    "description": "McKee story-structure core with the Story Spine and Character Design references.",
+    "description": "McKee story-structure core with the Story Spine, Character Design and Value Turns references.",
     "name": "mckee",
     "tools": [
       "get_entity",
@@ -19,7 +19,8 @@
       "spindle",
       "story-structure",
       "story-structure/character-design",
-      "story-structure/story-spine"
+      "story-structure/story-spine",
+      "story-structure/value-turns"
     ]
   },
   {

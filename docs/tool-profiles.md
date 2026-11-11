@@ -29,7 +29,7 @@ generated profiles are opt-in:
 | worldbuilding | Worldbuilder + character creator | 50 | 49,431 | 85,116 |
 | planning | Plot architect | 38 | 33,616 | 65,010 |
 | new-book | New-book entry: planning sessions, human gates and handoff | 14 | 20,204 | 26,730 |
-| mckee | Story-structure core + Story Spine and Character Design references | 11 | 18,462 | 22,860 |
+| mckee | Story-structure core + Story Spine, Character Design and Value Turns references | 11 | 18,462 | 22,860 |
 | research | Researcher | 15 | 7,584 | 20,247 |
 | style | Editor core + style reference | 43 | 34,159 | 94,402 |
 | release | Editor + bible librarian + canon steward | 62 | 46,197 | 91,647 |

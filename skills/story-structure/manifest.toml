@@ -17,3 +17,10 @@ path = "references/character-design.md"
 trigger = "Load when designing or repairing a character's Character Design (contradictions, the four layers of self, conscious and unconscious desire, pressure on the protagonist, behaviour cues) or when deciding whether an arc milestone is a change or a reveal."
 profiles = ["default"]
 tools = []
+
+[[references]]
+name = "value-turns"
+path = "references/value-turns.md"
+trigger = "Load when judging or repairing a Value Turn, a Charge, a Gap, a broken value chain, or whether a Scene, Sequence or Act actually turns the Spine Axis, including Act climax Charges, depth progression and the reserved Act climax placeholder."
+profiles = ["default"]
+tools = []
