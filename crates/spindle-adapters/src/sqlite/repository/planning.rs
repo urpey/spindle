@@ -2283,7 +2283,7 @@ fn validate_stage_input_in_conn_excluding(
                             expected: "one sub-spine per book".to_string(),
                             actual: format!("book {book} already has a sub-spine"),
                             repair_hint:
-                                "Each book has at most one Story Spine sub-spine; revise the existing one instead."
+                                "Each book has at most one Story Spine sub-spine; an accepted sub-spine cannot be replaced by this operation."
                                     .to_string(),
                         });
                     }

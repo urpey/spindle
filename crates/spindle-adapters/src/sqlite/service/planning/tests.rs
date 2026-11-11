@@ -7060,6 +7060,69 @@ async fn planning_created_project_is_mckee_and_direct_create_project_is_not() {
 }
 
 #[tokio::test]
+async fn non_mckee_contract_prompt_does_not_advertise_create_story_spine() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let direct = svc
+        .create_project(CreateProjectInput {
+            name: "Existing".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Unchanged".into(),
+                style_notes: vec![],
+                boundaries: vec![],
+            },
+        })
+        .await
+        .unwrap();
+    let session = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "Revisit the reader contract of an existing project.".into(),
+            scope: Some(PlanningScope {
+                project_id: direct.project_id,
+                branch_id: direct.branch_id,
+            }),
+        })
+        .await
+        .unwrap();
+
+    // No review route on the local-only router parks the level for the host, so
+    // the exact prompt the model would receive comes back without a model call.
+    let report = svc
+        .advance_planning(AdvancePlanningInput {
+            session_id: session.id.clone(),
+            scope: session.scope.clone(),
+            level: Some(PlanningLevel::Contract),
+            parents: None,
+            target_range: None,
+            allow_review_backend: Some(false),
+            rating_ceiling: None,
+            budget: None,
+            host_submission: None,
+            retry_key: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, PlanningSessionOutcome::NeedsRoute);
+    let prompt = &report
+        .host_request
+        .as_ref()
+        .expect("host fallback prompt")
+        .user_prompt;
+    // The prompt's output schema necessarily mentions every typed operation, so
+    // the advertised list is checked on its own line.
+    let allowed_line = prompt
+        .lines()
+        .find(|line| line.starts_with("allowed_operations: "))
+        .expect("allowed_operations line");
+    assert_eq!(
+        allowed_line.trim_end(),
+        "allowed_operations: update_reader_contract",
+        "non-McKee attached contract prompt must not advertise create_story_spine"
+    );
+}
+
+#[tokio::test]
 async fn story_spine_stages_accepts_and_reads_back_through_status_and_entities() {
     use spindle_core::subject::SubjectTable;
 
