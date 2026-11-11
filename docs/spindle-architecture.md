@@ -928,12 +928,13 @@ queue, and pending refresh counts remain visible if indexing fails.
 Projects created through the planning (`new-book`) root carry
 `project.mckee_structured = 1`; every other project keeps 0, omits the field
 from its payloads and cannot be switched. McKee behaviour is gated on this
-marker. The contract level stages a typed `CreateStorySpine` operation
-(`spindle_core::story_spine`); accepted spines live in the project-level
-`story_spine` table (shared by all branches, because the spine is series
-intent, not branch canon) and read back through `planning_status` and the
-`story_spine` subject table in `get_entity`. MCP serves `story_spine` entity
-reads only to profiles that expose planning tools. `spindle_core::charge`
+marker; the contract prompt advertises `create_story_spine` only for a marked
+attached project, and staging rejects a spine anywhere else. The contract level
+stages a typed `CreateStorySpine` operation (`spindle_core::story_spine`);
+accepted spines live in the project-level `story_spine` table (shared by all
+branches, because the spine is series intent, not branch canon) and read back
+through `planning_status` and the `story_spine` subject table in `get_entity`
+(any profile that exposes `get_entity` can read one). `spindle_core::charge`
 defines the closed **Charge** type (sign plus four-step depth) used by later
 McKee structure work. See [GLOSSARY](../GLOSSARY.md),
 [ADR 0006](adr/0006-acts-and-sequences-are-outline-intent.md) and

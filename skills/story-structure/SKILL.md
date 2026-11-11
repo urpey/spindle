@@ -39,7 +39,7 @@ McKee 專案建立後，脊柱透過規劃操作進入人類審查，不會由�
 ## 讀回與可見性
 
 - `planning_status` 回傳已接受的 `story_spines`，可用來核對系列脊柱與各書 sub-spine。
-- `get_entity` 可用 `table: "story_spine"` 讀取單一脊柱。這個讀取需要 planning 工具的可見性；一般寫作 profile 不應看到它。
+- `get_entity` 可用 `table: "story_spine"` 讀取單一脊柱；只要 profile 提供 `get_entity` 就能讀，不需要 planning 工具。
 - 若作者只需要創作方向，回傳 Central Question、Controlling Idea、Counter-Idea、Spine Axis 與 ending type 的摘要，不要長篇轉貼整個規劃 artifact。
 
 ## 判斷準則

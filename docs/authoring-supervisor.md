@@ -28,9 +28,8 @@ McKee-structured and may carry an accepted Story Spine (see
 [planning engine](planning-engine-design.md)). The Story Spine is planning
 intent: authoring runs do not read or enforce it yet, and runs on unmarked
 projects behave exactly as before. `planning_status` lists accepted spines, and
-`get_entity` can read `table: "story_spine"` only when the active tool profile
-exposes planning tools (for example `new-book` or `mckee`); a writing-only
-profile receives an explicit visibility error instead of the spine.
+`get_entity(table: "story_spine")` reads one wherever the profile exposes
+`get_entity`; the plan is read-only and no writing path depends on it.
 
 ## MCP Tools Interface
 

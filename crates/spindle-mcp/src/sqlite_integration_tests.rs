@@ -10355,7 +10355,7 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
 }
 
 #[tokio::test]
-async fn mckee_story_spine_is_additive_and_entity_reads_require_planning_visibility() {
+async fn mckee_story_spine_is_additive_and_readable_through_entity_reads() {
     use crate::tools::{ToolRouter, ToolSerializationState};
     use spindle_core::planning::{
         BeginPlanningInput, DecidePlanningInput, PlanningCreateProjectInput,
@@ -10449,8 +10449,13 @@ async fn mckee_story_spine_is_additive_and_entity_reads_require_planning_visibil
         Some("write".to_string()),
         Arc::new(ToolSerializationState::default()),
     );
+    let mckee_router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        Some("mckee".to_string()),
+        Arc::new(ToolSerializationState::default()),
+    );
     let args = serde_json::json!({
-        "project_id": direct.project_id,
+        "project_id": direct.project_id.clone(),
         "table": "character",
         "entity_id": mara.character_id
     });
@@ -10468,6 +10473,66 @@ async fn mckee_story_spine_is_additive_and_entity_reads_require_planning_visibil
         !projects_json.contains("mckee_structured"),
         "existing non-McKee project output must remain byte-compatible"
     );
+
+    // A planning session attached to the same existing project must not grow
+    // any Story Spine or McKee surface on shared reads.
+    let existing_session = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "Revisit the reader contract of the existing project.".into(),
+            scope: Some(PlanningScope {
+                project_id: direct.project_id.clone(),
+                branch_id: direct.branch_id.clone(),
+            }),
+        })
+        .await
+        .unwrap();
+    let existing_status = mckee_router
+        .call_tool(
+            "planning_status",
+            Some(
+                serde_json::json!({
+                    "session_id": existing_session.id,
+                    "include_readiness": false
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(existing_status.is_error, Some(false));
+    let existing_status_json = serde_json::to_string(&existing_status).unwrap();
+    assert!(
+        !existing_status_json.contains("story_spine"),
+        "an existing project's planning status must not gain a Story Spine surface"
+    );
+
+    let writer_state = write_router
+        .call_tool(
+            "get_writer_state",
+            Some(
+                serde_json::json!({"project_id": direct.project_id.clone()})
+                    .as_object()
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(writer_state.is_error, Some(false));
+    let writer_state_json = serde_json::to_string(&writer_state).unwrap();
+    assert!(
+        !writer_state_json.contains("story_spine"),
+        "get_writer_state must not mention Story Spines for an existing project"
+    );
+    assert!(
+        !writer_state_json.contains("mckee_structured"),
+        "get_writer_state must not grow the McKee marker for an existing project"
+    );
+
+    // `get_entity` has never supported `table: "project"` (the service refuses
+    // it on `dev` too), so the project payload is checked through the shared
+    // reads above: `list_projects` and the `ProjectSummary` inside
+    // `get_writer_state`.
 
     // Build a McKee project through the actual planning apply path.
     let session = svc
@@ -10573,28 +10638,45 @@ async fn mckee_story_spine_is_additive_and_entity_reads_require_planning_visibil
     assert!(spine_report.error.is_none(), "{:?}", spine_report.error);
     let spine_id = spine_report.operations[0].returned_ids["spine:series"].clone();
 
-    let new_book_router = ToolRouter::with_tool_profile_and_serialization(
-        svc.clone(),
-        Some("new-book".to_string()),
-        Arc::new(ToolSerializationState::default()),
-    );
     let spine_args = serde_json::json!({
         "project_id": scope.project_id,
         "table": "story_spine",
         "entity_id": spine_id
     });
-    let spine_read = new_book_router
+    let spine_read = mckee_router
         .call_tool("get_entity", Some(spine_args.as_object().unwrap()))
         .await
         .unwrap();
     assert_eq!(
         spine_read.is_error,
         Some(false),
-        "planning-visible profile must read the Story Spine: {spine_read:?}"
+        "a profile with get_entity must read the Story Spine: {spine_read:?}"
     );
     let spine_json = serde_json::to_string(&spine_read).unwrap();
     assert!(spine_json.contains("Can Ada trust the heir?"));
 
+    // Schema/runtime agreement: get_entity advertises table=story_spine in every
+    // profile that carries it, so a write profile reads the same spine.
+    let write_spine_read = write_router
+        .call_tool("get_entity", Some(spine_args.as_object().unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(
+        write_spine_read.is_error,
+        Some(false),
+        "get_entity schema and runtime must agree about table=story_spine: {write_spine_read:?}"
+    );
+    assert!(
+        serde_json::to_string(&write_spine_read)
+            .unwrap()
+            .contains("Can Ada trust the heir?")
+    );
+
+    let new_book_router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        Some("new-book".to_string()),
+        Arc::new(ToolSerializationState::default()),
+    );
     let status = new_book_router
         .call_tool(
             "planning_status",
@@ -10615,27 +10697,5 @@ async fn mckee_story_spine_is_additive_and_entity_reads_require_planning_visibil
             .unwrap()
             .contains("spine:series"),
         "planning_status must read back the accepted Story Spine operation"
-    );
-
-    let denied = write_router
-        .call_tool(
-            "get_entity",
-            Some(
-                serde_json::json!({
-                    "project_id": scope.project_id,
-                    "table": "story_spine",
-                    "entity_id": spine_report.operations[0].returned_ids["spine:series"]
-                })
-                .as_object()
-                .unwrap(),
-            ),
-        )
-        .await
-        .unwrap();
-    assert_eq!(denied.is_error, Some(true));
-    assert!(
-        serde_json::to_string(&denied)
-            .unwrap()
-            .contains("planning-tool visibility")
     );
 }
