@@ -74,8 +74,11 @@ Act 是 ordered list，數目由故事決定，不是固定三幕。每一個 Ac
 
 - 某個 Act 高潮的完整 Charge（sign 與 depth 都算）與前一個 Act 相同。第一個 Act 沒有比較對象，不檢查。
 - 最高 order 的最終 Act 沒有標記 `answers_central_question`。
+- 非最終的 Act 標記了 `answers_central_question=true`。只有最後一個 Act 能回答 Central Question。
 - Act 的 order 不是 1..=n、重複、非正數；`central_question_part` 空白；缺 climax、缺 `scene_order`、或 placement 不是正數。
-- 後續 Chapter／Scene batch 計畫了含某個已接受 Act 高潮的章節，卻沒有在該 `scene_order` 放一場 Scene。
+- 同一本書裡，後一個 Act 的高潮章號沒有比前一個 Act 大。跨書不比較章號，但仍要照 order 遞增；這條規則保證推導出的 act breakpoints 不會回頭。
+- 把 `schedule.acts` 放在 Series-Arc／Book 以外的層級。Act 只屬於這兩個層級；Chapter／Scene 的 batch 只計畫場景。
+- 後續 Chapter／Scene batch 計畫了含某個 Act 高潮的章節，卻沒有在該 `scene_order` 放一場 Scene。這裡的 Act 也包含同一批決策裡還沒接受、但已 staged 的父層 Act。
 
 **Advisory（只警告）**：
 
@@ -85,11 +88,12 @@ Act 是 ordered list，數目由故事決定，不是固定三幕。每一個 Ac
 
 ### 檢查 Act 的順序
 
-1. 先按 order 排序，確認 1..=n、沒有重複。
+1. 先按 order 排序，確認 1..=n、沒有重複，而且每個 Act 都在 Series-Arc／Book 這一層。
 2. 把每個 Act 的完整 Charge 寫出來，兩兩比較相鄰項；只在不同時才往下看 depth。
-3. 把 depth 換成 rank，確認是否嚴格遞增；不是就寫 advisory，不要逕自改成 blocking。
-4. 確認最高 order 的 Act 標記了 `answers_central_question`，且它的 `central_question_part` 真的回答了問題的一部分，而不是主題詞。
-5. 確認每個 climax placement 的 chapter／scene 座標可被後續 scene batch 找到；placeholder 是保留位，不是願望。
+3. 把同一本書裡的高潮章號照 order 排好，確認嚴格遞增；跨書不比章號。
+4. 把 depth 換成 rank，確認是否嚴格遞增；不是就寫 advisory，不要逕自改成 blocking。
+5. 確認最高 order 的 Act 標記了 `answers_central_question`（其他 Act 都不標），且它的 `central_question_part` 真的回答了問題的一部分，而不是主題詞。
+6. 確認每個 climax placement 的 chapter／scene 座標可被後續 scene batch 找到；placeholder 是保留位，不是願望。
 
 Act breakpoints 不是另一個要作者填的欄位：McKee 專案的 act breakpoints 由 Act list 推導（`act_<order>`，值是該 Act 高潮章號除以同書最高的 Act 高潮章號；只有一個 Act 時為 1.0）。若看到有人另外填 act breakpoints，請他刪掉，讓結構與 pacing 用同一份資料。
 

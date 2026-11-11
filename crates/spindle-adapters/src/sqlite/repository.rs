@@ -1627,6 +1627,24 @@ pub(crate) fn resolve_branch_lineage_in_conn(
     Ok(chain)
 }
 
+/// Whether a project carries the McKee structure marker.
+///
+/// The marker is written only by the planning `CreateProject` apply path
+/// (V0057), so every pre-existing project and every project created through the
+/// direct tool stays unmarked. Gates that use this helper are McKee-only; the
+/// shared read keeps the marker spelling in one place.
+pub(crate) fn project_is_mckee_in_conn(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+) -> rusqlite::Result<bool> {
+    let marker: i64 = conn.query_row(
+        "SELECT mckee_structured FROM project WHERE id=?1",
+        [project_id],
+        |row| row.get(0),
+    )?;
+    Ok(marker == 1)
+}
+
 /// Resolve the target branch for canon checks and writes anchored to a scene.
 /// If the project's active branch is `scene_branch_id` or a descendant branch
 /// that inherits from `scene_branch_id`, returns the active branch; otherwise

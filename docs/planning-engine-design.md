@@ -311,30 +311,40 @@ or migration. Acts are outline intent (ADR 0006) and are never writable through
 canon deltas.
 
 Acceptance validation for McKee projects evaluates the Act list a decision
-would leave behind: applied proposals on the session branch, then staged
-ancestors in the same approved closure, then the artifact's own list. A later
-decision overrides an Act with the same `order`; an Act the later decision does
-not mention keeps the earlier entry. That merge is also the deterministic
-accepted-Act read used by derived breakpoints and the climax placeholder gate,
-and it lets a Book-level proposal refine one Act without restating the whole
-list. An empty Act list adds no finding: the fixed gates below are the Act
-validation rules, and an empty list is not a new blocking rule.
+would leave behind: applied proposals visible from the session branch's
+lineage (farthest ancestor first, the session branch last, decision order
+within one branch), then staged ancestors in the same approved closure, then
+the artifact's own list. A later decision overrides an Act with the same
+`order`; an Act the later decision does not mention keeps the earlier entry. So
+a child branch inherits its parent's accepted Acts and overrides them with its
+own, and a Book-level proposal can refine one Act without restating the whole
+list. That merge is also the deterministic accepted-Act read used by derived
+breakpoints, and the same evaluated set feeds the climax placeholder gate, so a
+Chapter/Scene batch accepted together with its Act-bearing Series-Arc/Book
+parent in one `planning_decide` already enforces the reserved climax. An empty
+Act list adds no finding: the fixed gates below are the Act validation rules,
+and an empty list is not a new blocking rule. A non-empty `schedule.acts` on any
+level other than Series-Arc/Book is the blocking `act_schedule_wrong_level`
+finding instead: such a list is never Act-validated and must not leak into the
+accepted Acts.
 
 Blocking findings are recorded on the staged proposal (they stage, acceptance
 refuses): an Act climax whose full Charge (sign and depth) equals the previous
-Act's; the highest-order Act not marked `answers_central_question`; orders that
-are not `1..=n`, duplicated, or non-positive; an empty
-`central_question_part`; a missing or non-positive climax placement; a missing
-`scene_order`; and a missing Charge. The advisory `act_depth_not_progressing`
-compares depth ranks (positive = 0, contrary = 1, contradictory = 2,
-negation of the negation = 3) and warns when they are not strictly increasing;
-it never blocks acceptance.
+Act's; the highest-order Act not marked `answers_central_question`; a
+non-final Act marked `answers_central_question=true`; orders that are not
+`1..=n`, duplicated, or non-positive; climax chapters that do not rise strictly
+with `order` inside one book; an empty `central_question_part`; a missing or
+non-positive climax placement; a missing `scene_order`; and a missing Charge.
+The advisory `act_depth_not_progressing` compares depth ranks (positive = 0,
+contrary = 1, contradictory = 2, negation of the negation = 3) and warns when
+they are not strictly increasing; it never blocks acceptance.
 
-A Chapter or Scene artifact that plans a chapter containing an accepted Act
-climax must include a planned scene at the reserved `scene_order`. A missing
-scene records the blocking `act_climax_scene_missing` finding and refuses
-acceptance, so the placeholder an accepted Act reserved cannot be skipped when
-its chapter is detailed.
+A Chapter or Scene artifact that plans a chapter containing an Act climax must
+include a planned scene at the reserved `scene_order` (using the same evaluated
+Act set, so a staged ancestor's Acts already count). A missing scene records
+the blocking `act_climax_scene_missing` finding and refuses acceptance, so the
+placeholder an accepted Act reserved cannot be skipped when its chapter is
+detailed.
 
 For McKee projects `act_breakpoints` are derived, not authored. A
 `create_pacing_curve` operation carrying a non-empty authored map records the
@@ -346,9 +356,11 @@ Act-climax chapter in that book. Spindle does not know a book's exact final
 chapter count at planning time, so the highest Act climax is the fallback
 denominator; a single Act therefore yields `1.0`, an Act with no climax in the
 requested book contributes nothing (an empty map when none do), and every value
-is clamped to `(0.0, 1.0]`. Applied proposal schedules supply the Acts even
-when the curve is accepted in the same batch as the Act list. Non-McKee
-projects keep authored breakpoints byte for byte.
+lies in `(0.0, 1.0]`. Because climax chapters must rise strictly with `order`
+inside a book, the derived map is monotonic. Applied proposal schedules on the
+session branch's lineage supply the Acts even when the curve is accepted in the
+same batch as the Act list. Non-McKee projects keep authored breakpoints byte
+for byte.
 
 Each variant wraps the existing core input shape with typed proposal references
 in ID slots. The dispatcher is a closed allowlist, not an arbitrary tool name

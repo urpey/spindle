@@ -50,31 +50,39 @@ pub fn merge_planned_acts(base: &[PlannedAct], overlay: &[PlannedAct]) -> Vec<Pl
 /// count at planning time, so the highest Act-climax chapter in that book is
 /// used as the denominator: with climaxes at chapters 2 and 4 the breakpoints
 /// are `act_1 = 0.5` and `act_2 = 1.0`. A single Act therefore always yields
-/// `1.0`, and every other value stays in `(0.0, 1.0]`.
+/// `1.0`, and every other value stays in `(0.0, 1.0]`: the numerator is a
+/// positive chapter, the denominator is at least the numerator, so no clamp or
+/// guard is needed.
 ///
 /// Only Acts whose climax placement is in `book_number` contribute. A book with
 /// no Act climax (for example a later book of a series whose Acts were planned
 /// on another book) yields an empty map instead of borrowing another book's
 /// chapter numbers.
+///
+/// `acts` is expected to be a merged Act list, whose orders are unique (see
+/// [`merge_planned_acts`]). Should a caller pass a raw list with a repeated
+/// order, the later entry wins, matching the merge rule.
 pub fn derive_act_breakpoints(acts: &[PlannedAct], book_number: i32) -> BTreeMap<String, f64> {
-    let mut positions: Vec<(i32, i32)> = acts
-        .iter()
-        .filter_map(|act| {
-            let climax = act.climax.as_ref()?;
-            (act.order > 0 && climax.book_number == book_number && climax.chapter_number > 0)
-                .then_some((act.order, climax.chapter_number))
-        })
-        .collect();
-    positions.sort_unstable();
-    positions.dedup_by_key(|(order, _)| *order);
-    let Some(highest_chapter) = positions.iter().map(|(_, chapter)| *chapter).max() else {
+    let mut chapters_by_order: BTreeMap<i32, i32> = BTreeMap::new();
+    for act in acts {
+        let Some(climax) = act.climax.as_ref() else {
+            continue;
+        };
+        if act.order <= 0 || climax.book_number != book_number || climax.chapter_number <= 0 {
+            continue;
+        }
+        chapters_by_order.insert(act.order, climax.chapter_number);
+    }
+    let Some(highest_chapter) = chapters_by_order.values().copied().max() else {
         return BTreeMap::new();
     };
-    positions
+    chapters_by_order
         .into_iter()
         .map(|(order, chapter)| {
-            let value = (chapter as f64 / highest_chapter as f64).clamp(f64::MIN_POSITIVE, 1.0);
-            (format!("act_{order}"), value)
+            (
+                format!("act_{order}"),
+                chapter as f64 / highest_chapter as f64,
+            )
         })
         .collect()
 }
@@ -145,6 +153,19 @@ mod tests {
         );
         assert!(derive_act_breakpoints(&acts, 3).is_empty());
         assert!(derive_act_breakpoints(&[], 1).is_empty());
+    }
+
+    #[test]
+    fn a_repeated_order_keeps_the_later_entry() {
+        let acts = vec![
+            act(1, 1, 2, ChargeDepth::Contrary, false),
+            act(1, 1, 6, ChargeDepth::Contradictory, true),
+        ];
+        assert_eq!(
+            derive_act_breakpoints(&acts, 1),
+            BTreeMap::from([("act_1".to_string(), 1.0)]),
+            "an unmerged list follows the same later-wins rule as the merge"
+        );
     }
 
     #[test]

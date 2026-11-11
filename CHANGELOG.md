@@ -45,15 +45,23 @@
   the final-Act flag. Acts are schedule metadata, never story records and never
   editable through canon deltas (ADR 0006); there is no new table or migration.
 - Validate Acts at Series-Arc and Book acceptance: an unchanged adjacent
-  Charge, an unmarked final Act, non-contiguous/duplicate/non-positive orders,
-  an empty Central-Question part and missing or non-positive climax coordinates
-  are blocking findings recorded on the staged proposal; a non-increasing depth
+  Charge, an unmarked final Act, a non-final Act claiming
+  `answers_central_question`, climax chapters that do not rise with `order`
+  inside one book, non-contiguous/duplicate/non-positive orders, an empty
+  Central-Question part and missing or non-positive climax coordinates are
+  blocking findings recorded on the staged proposal; a non-increasing depth
   progression is advisory only. Book acceptance re-checks the merged accepted
   Act list, so a later decision can refine one Act but cannot clash with its
-  accepted neighbours.
+  accepted neighbours. Accepted Acts are read across the branch lineage, so a
+  child branch inherits its parent's Acts and can override them.
+- Reject `schedule.acts` on any level other than Series-Arc/Book
+  (`act_schedule_wrong_level`); such a list is never Act-validated and no longer
+  leaks into the accepted-Act merge.
 - Enforce the reserved Act climax placeholder in Chapter and Scene batches: a
-  plan for a chapter containing an accepted Act climax must include a scene at
-  that `scene_order`, or acceptance is refused (`act_climax_scene_missing`).
+  plan for a chapter containing an Act climax must include a scene at that
+  `scene_order`, or acceptance is refused (`act_climax_scene_missing`). The
+  gate evaluates the same Act set as the Act-list gate, so a chapter batch
+  accepted together with its staged Act parent is already checked.
 - Derive `act_breakpoints` from the Act list for McKee projects instead of
   accepting an authored map; keys are `act_<order>` and values normalize
   against the highest Act climax chapter in the book (single Act = 1.0).
