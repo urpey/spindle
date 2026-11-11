@@ -321,7 +321,6 @@
       "create_book",
       "create_chapter",
       "create_project",
-      "get_entity",
       "planning_advance",
       "planning_begin",
       "planning_decide",

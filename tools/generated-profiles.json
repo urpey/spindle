@@ -29,7 +29,6 @@
       "create_book",
       "create_chapter",
       "create_project",
-      "get_entity",
       "get_reference",
       "get_skill",
       "get_writer_state",

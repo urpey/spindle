@@ -160,13 +160,9 @@ pub struct WorldStateInput {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct StoryPlacement {
-    /// 1-based book number in story order.
     pub book_number: i32,
-    /// 1-based chapter number within the book.
     pub chapter_number: i32,
-    /// 1-based scene order within the chapter, when the placement names a scene.
     pub scene_order: Option<i32>,
-    /// Optional free-text note about the placement.
     pub note: Option<String>,
 }
 
