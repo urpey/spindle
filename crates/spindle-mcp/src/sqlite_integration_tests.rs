@@ -10353,3 +10353,289 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
         "{status}"
     );
 }
+
+#[tokio::test]
+async fn mckee_story_spine_is_additive_and_entity_reads_require_planning_visibility() {
+    use crate::tools::{ToolRouter, ToolSerializationState};
+    use spindle_core::planning::{
+        BeginPlanningInput, DecidePlanningInput, PlanningCreateProjectInput,
+        PlanningCreateStorySpineInput, PlanningDecision, PlanningLevel, PlanningOperation,
+        PlanningOperationItem, PlanningProposalStatus, PlanningReaderContract, PlanningScope,
+        StagePlanningInput,
+    };
+    use spindle_core::story_spine::{ControllingIdea, StorySpineEnding};
+    use std::sync::Arc;
+
+    let (_tmp, svc) = fresh_service().await;
+
+    // Public schema: get_entity exposes the new table and planning_status the
+    // persisted Story Spines. Both are additive fields.
+    let schema_router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        None,
+        Arc::new(ToolSerializationState::default()),
+    );
+    let tools = schema_router.list_tools();
+    let get_entity_schema = serde_json::to_value(
+        tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == "get_entity")
+            .expect("get_entity schema"),
+    )
+    .unwrap();
+    assert!(
+        get_entity_schema.to_string().contains("\"story_spine\""),
+        "get_entity must accept table=story_spine"
+    );
+    let planning_status_schema = serde_json::to_value(
+        tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == "planning_status")
+            .expect("planning_status schema"),
+    )
+    .unwrap();
+    assert!(
+        planning_status_schema.to_string().contains("story_spines"),
+        "planning_status must expose persisted Story Spines"
+    );
+
+    // A direct create_project stays non-McKee and unchanged on existing shared
+    // read paths.
+    let direct = svc
+        .create_project(CreateProjectInput {
+            name: "Legacy Project".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Unchanged".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    let mara = svc
+        .create_character(CreateCharacterInput {
+            aliases: Vec::new(),
+            project_id: direct.project_id.clone(),
+            name: "Mara".into(),
+            summary: "Warden.".into(),
+            role: "protagonist".into(),
+            realm: None,
+            voice_profile: CharacterVoiceProfileData {
+                tone: None,
+                vocabulary: Vec::new(),
+                sentence_structure: Vec::new(),
+                tics: Vec::new(),
+                forbidden_words: Vec::new(),
+                example_lines: Vec::new(),
+                established_in_scene_id: None,
+                updated_at: None,
+            },
+            emotional_profile: CharacterEmotionalProfileData {
+                base_emotions: BTreeMap::new(),
+                suppressed: Vec::new(),
+                triggers: Vec::new(),
+                defense_mechanisms: Vec::new(),
+                flex_range: None,
+            },
+            initial_state: None,
+        })
+        .await
+        .unwrap();
+
+    let write_router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        Some("write".to_string()),
+        Arc::new(ToolSerializationState::default()),
+    );
+    let args = serde_json::json!({
+        "project_id": direct.project_id,
+        "table": "character",
+        "entity_id": mara.character_id
+    });
+    let legacy_entity = write_router
+        .call_tool("get_entity", Some(args.as_object().unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(legacy_entity.is_error, Some(false));
+    let legacy_json = serde_json::to_string(&legacy_entity).unwrap();
+    assert!(!legacy_json.contains("story_spine"));
+    let projects = write_router.call_tool("list_projects", None).await.unwrap();
+    assert_eq!(projects.is_error, Some(false));
+    let projects_json = serde_json::to_string(&projects).unwrap();
+    assert!(
+        !projects_json.contains("mckee_structured"),
+        "existing non-McKee project output must remain byte-compatible"
+    );
+
+    // Build a McKee project through the actual planning apply path.
+    let session = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "A missing heir returns".into(),
+            scope: None,
+        })
+        .await
+        .unwrap();
+    let root = svc
+        .stage_planning(StagePlanningInput {
+            session_id: session.id.clone(),
+            scope: None,
+            intent_hash: session.intent_hash.clone(),
+            schema_version: 1,
+            level: PlanningLevel::Contract,
+            parents: BTreeMap::new(),
+            operations: vec![PlanningOperationItem {
+                output_ref: "project:root".into(),
+                operation: PlanningOperation::CreateProject(PlanningCreateProjectInput {
+                    name: "McKee Project".into(),
+                    project_type: "novel".into(),
+                    genre: "mystery".into(),
+                    reader_contract: PlanningReaderContract {
+                        promise: "Trust is tested".into(),
+                        style_notes: Vec::new(),
+                        boundaries: Vec::new(),
+                    },
+                }),
+            }],
+            rationale: "Accept the contract root".into(),
+            target_range: None,
+            schedule: Default::default(),
+            assumptions: Vec::new(),
+            author_questions: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let root_report = svc
+        .apply_planning(DecidePlanningInput {
+            session_id: session.id.clone(),
+            scope: None,
+            expected_hashes: BTreeMap::from([(root.id.clone(), root.payload_hash.clone())]),
+            decision: PlanningDecision::Accept,
+            actor: "author".into(),
+            note: "Approve contract".into(),
+        })
+        .await
+        .unwrap();
+    assert!(root_report.error.is_none(), "{:?}", root_report.error);
+    assert_eq!(
+        root_report.proposals[0].status,
+        PlanningProposalStatus::Applied
+    );
+    let attached = svc.get_planning_session(&session.id).await.unwrap();
+    let scope: PlanningScope = attached.scope.clone().unwrap();
+
+    let spine = svc
+        .stage_planning(StagePlanningInput {
+            session_id: session.id.clone(),
+            scope: Some(scope.clone()),
+            intent_hash: attached.intent_hash.clone(),
+            schema_version: 1,
+            level: PlanningLevel::Contract,
+            parents: BTreeMap::from([(root.id.clone(), root.payload_hash.clone())]),
+            operations: vec![PlanningOperationItem {
+                output_ref: "spine:series".into(),
+                operation: PlanningOperation::CreateStorySpine(PlanningCreateStorySpineInput {
+                    book_number: None,
+                    series_spine_id: None,
+                    central_question: "Can Ada trust the heir?".into(),
+                    controlling_idea: ControllingIdea {
+                        value: "trust".into(),
+                        cause: "Ada accepts help and the heir returns".into(),
+                    },
+                    counter_idea: "Trust is surrender".into(),
+                    spine_axis: "trust".into(),
+                    ending_type: StorySpineEnding::Ironic,
+                    inciting_incident: None,
+                    final_climax: None,
+                    theme_ids: Vec::new(),
+                }),
+            }],
+            rationale: "Stage the series spine".into(),
+            target_range: None,
+            schedule: Default::default(),
+            assumptions: Vec::new(),
+            author_questions: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let spine_report = svc
+        .apply_planning(DecidePlanningInput {
+            session_id: session.id.clone(),
+            scope: Some(scope.clone()),
+            expected_hashes: BTreeMap::from([(spine.id.clone(), spine.payload_hash.clone())]),
+            decision: PlanningDecision::Accept,
+            actor: "author".into(),
+            note: "Approve spine".into(),
+        })
+        .await
+        .unwrap();
+    assert!(spine_report.error.is_none(), "{:?}", spine_report.error);
+    let spine_id = spine_report.operations[0].returned_ids["spine:series"].clone();
+
+    let new_book_router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        Some("new-book".to_string()),
+        Arc::new(ToolSerializationState::default()),
+    );
+    let spine_args = serde_json::json!({
+        "project_id": scope.project_id,
+        "table": "story_spine",
+        "entity_id": spine_id
+    });
+    let spine_read = new_book_router
+        .call_tool("get_entity", Some(spine_args.as_object().unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(
+        spine_read.is_error,
+        Some(false),
+        "planning-visible profile must read the Story Spine: {spine_read:?}"
+    );
+    let spine_json = serde_json::to_string(&spine_read).unwrap();
+    assert!(spine_json.contains("Can Ada trust the heir?"));
+
+    let status = new_book_router
+        .call_tool(
+            "planning_status",
+            Some(
+                serde_json::json!({
+                    "session_id": attached.id,
+                    "include_readiness": false
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status.is_error, Some(false));
+    assert!(
+        serde_json::to_string(&status)
+            .unwrap()
+            .contains("spine:series"),
+        "planning_status must read back the accepted Story Spine operation"
+    );
+
+    let denied = write_router
+        .call_tool(
+            "get_entity",
+            Some(
+                serde_json::json!({
+                    "project_id": scope.project_id,
+                    "table": "story_spine",
+                    "entity_id": spine_report.operations[0].returned_ids["spine:series"]
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.is_error, Some(true));
+    assert!(
+        serde_json::to_string(&denied)
+            .unwrap()
+            .contains("planning-tool visibility")
+    );
+}

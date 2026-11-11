@@ -909,6 +909,14 @@ impl ToolRouter {
                     .await
             }
             "get_entity" => {
+                let requested = arguments.cloned().unwrap_or_default();
+                let wants_story_spine = requested.get("table").and_then(serde_json::Value::as_str)
+                    == Some("story_spine");
+                if wants_story_spine && !self.has_tool("planning_begin") {
+                    return Ok(structured_error_result(&anyhow::anyhow!(
+                        "story spine entity reads require planning-tool visibility"
+                    )));
+                }
                 self.invoke(arguments, |input| self.service.get_entity(input))
                     .await
             }
