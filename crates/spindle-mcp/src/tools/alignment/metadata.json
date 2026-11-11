@@ -636,6 +636,15 @@
         ],
         "tools": [],
         "trigger": "Load when writing, reviewing, or questioning a Story Spine (series or book sub-spine), its ending type, or its Central Question / Controlling Idea / Counter-Idea / Spine Axis."
+      },
+      {
+        "name": "story-structure/character-design",
+        "profiles": [
+          "default",
+          "mckee"
+        ],
+        "tools": [],
+        "trigger": "Load when designing or repairing a character's Character Design (contradictions, the four layers of self, conscious and unconscious desire, pressure on the protagonist, behaviour cues) or when deciding whether an arc milestone is a change or a reveal."
       }
     ],
     "requires_skills": [

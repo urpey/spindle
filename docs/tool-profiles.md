@@ -26,13 +26,13 @@ generated profiles are opt-in:
 | workflow-authoring | Scene-writer (all refs) + authoring-supervisor + setup | 74 | 86,453 | 181,782 |
 | workflow-import | Manuscript importer and source sync | 20 | 12,306 | 30,943 |
 | revision | Branch/revision/history workflow | 34 | 23,079 | 58,512 |
-| worldbuilding | Worldbuilder + character creator | 50 | 48,923 | 84,608 |
-| planning | Plot architect | 38 | 33,362 | 64,756 |
+| worldbuilding | Worldbuilder + character creator | 50 | 49,431 | 85,116 |
+| planning | Plot architect | 38 | 33,616 | 65,010 |
 | new-book | New-book entry: planning sessions, human gates and handoff | 14 | 20,204 | 26,730 |
-| mckee | Story-structure core + Story Spine reference | 11 | 18,462 | 22,860 |
+| mckee | Story-structure core + Story Spine and Character Design references | 11 | 18,462 | 22,860 |
 | research | Researcher | 15 | 7,584 | 20,247 |
 | style | Editor core + style reference | 43 | 34,159 | 94,402 |
-| release | Editor + bible librarian + canon steward | 62 | 45,943 | 91,393 |
+| release | Editor + bible librarian + canon steward | 62 | 46,197 | 91,647 |
 | setup | New-book setup reference | 9 | 4,180 | 9,270 |
 
 Every generated profile includes the shared entry core (`spindle`, 6 entry tools).

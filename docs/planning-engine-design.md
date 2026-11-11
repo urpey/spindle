@@ -57,7 +57,7 @@ until that parent is accepted.
 | --- | --- | --- |
 | Premise / series intent | Author premise, standalone/series/serial intent, genre, length horizon, audience/rating ceiling, POV/tense preferences, fixed ideas and forbidden outcomes. Preserve unknowns explicitly. | New planning-session intent record only; no generated canon yet. |
 | Reader contract | Emotional/genre promise, style notes, content boundaries; surface contradictions with the premise. | `create_project` with `ReaderContract` for a new project; explicit accepted changes through `update_entity` for an existing project. The partial-merge contract path exists at [service.rs:2139–2185][contract-write]. |
-| Cast & world seed | Minimal protagonist/opposition/support, wants and constraints, locations needed by the near horizon, relationships and hard world rules. No encyclopedia expansion. | Existing `create_character`, `create_location`, `create_relationship`, `create_world_rule`; optional factions/terms/etc. only when needed. Resolve returned IDs before dependent writes. See [service.rs:693–780][seed-writes], [service.rs:1196–1220][world-rule] and [plot-architect:50–66][horizons]. |
+| Cast & world seed | Minimal protagonist/opposition/support, wants and constraints, locations needed by the near horizon, relationships and hard world rules. No encyclopedia expansion. | Existing `create_character`, `create_location`, `create_relationship`, `create_world_rule`; on McKee projects every introduced character also needs a `create_character_design`. Optional factions/terms/etc. only when needed. Resolve returned IDs before dependent writes. See [service.rs:693–780][seed-writes], [service.rs:1196–1220][world-rule] and [plot-architect:50–66][horizons]. |
 | Series / current-arc outline | Central question, arc exit condition, book-level destinations, plot-line convergence, themes/conflicts, promises and character milestones. | Existing `create_plot_line`, `create_conflict`, `create_theme`, `create_motif`, `create_narrative_promise`, `create_character_arc`, `create_pacing_config`, `create_pacing_curve`, `set_arc_pacing_constraints`. Store series-intent prose in the new planning-session artifact; project contract and story records remain authoritative. No assumed existing series-outline table. |
 | Book / chapter plans | Ordered causal turns, chapter POV, target threads, expected intensity and scene budget. Future arcs stay coarse. | Reuse initial IDs returned by `create_project`; `create_book` / `create_chapter` for additional structure; `set_book_outline`, `set_chapter_outline`, then `plan_chapter`. A current arc is an outline section plus existing story records, not a new competing arc entity. |
 | Scene manifests | Concrete purpose, action/change, cast, location, rating, beats, promise movements and research flags for each scene. | Translate resolved references into complete `PlanChapterInput.scenes`; **planning does not call `save_scene_draft`**. Planned metadata stays intent, not realized events. |
@@ -197,7 +197,8 @@ PlanningArtifactV1 {
              chapter_povs: [PlannedPov], scene_intensities: [PlannedIntensity]},
   assumptions: [string], author_questions: [Question], rationale: string
 }
-TypedPlanningOperation = CreateCharacter | CreateLocation | CreateWorldRule |
+TypedPlanningOperation = CreateCharacter | CreateCharacterDesign |
+  CreateLocation | CreateWorldRule |
   CreateRelationship | CreatePlotLine | CreateConflict | CreateTheme |
   CreateMotif | CreateNarrativePromise | CreateCharacterArc |
   CreatePacingConfig | CreatePacingCurve | SetArcPacingConstraints |
@@ -256,6 +257,41 @@ V0058 is additive: existing rows keep NULL / 0 and unmarked projects need no
 action. They are not exempt, though — a McKee project's pre-existing plot lines
 must be completed through `update_entity` (`value_axis`, `subplot_job`,
 `is_main_plot`) before the next Series-Arc/Book acceptance, or the gate blocks.
+
+`CreateCharacterDesign` (Cast & World level, McKee only) stages one Character
+Design per character: 2–5 contradictions, `public_self`, `personal_self`,
+`private_self`, `hidden_self`, `conscious_desire`, `unconscious_desire`,
+`pressure_on_protagonist` and planner-written `behavior_cues`. The character is
+referenced by `PlanningRef` (a `proposal_ref` to a `create_character` in the same
+artifact, or an `existing_record_id`). Acceptance writes the `character_design`
+row (V0059) and registers `hidden_self` and `unconscious_desire` as **secret
+canonical facts** with the character as the sole initial holder; the row stores
+their fact ids, so the facts remain the single source of truth for those texts.
+
+At Cast & World acceptance the validator evaluates the characters the artifact
+introduces and records blocking findings on the proposal: a character with no
+design (`character_design_missing`), fewer than two or more than five
+contradictions (`character_design_too_few_contradictions` /
+`character_design_too_many_contradictions`), and two designs for one character
+or a design for an already-designed character
+(`character_design_duplicate`). Those findings stage but refuse acceptance
+(they are stage-recordable, like the Story Spine and Main Plot gates). "Major
+character" is read structurally: every character created by the Cast & World
+artifact needs a design; characters added outside planning are not retro-gated.
+Non-McKee projects get no findings, and staging a design for one is rejected
+(`character_design_requires_mckee_project`).
+
+Planning reads are full reads: `planning_status.character_designs` carries the
+design plus the hidden layer and unconscious desire texts resolved from the
+secret facts. Non-planning reads are redacted: subject snapshots and scene
+context strip the two design facts instead of enveloping them (the
+`[SECRETS IN PLAY]` block is not used for Character Design), and
+`get_character_snapshot` returns only `CharacterDesignRedactedView`
+(contradictions, public/personal/private layers, conscious desire, pressure,
+behaviour cues). Secret fact ids, values and concealment notes never leave the
+planning surface. Arc milestones gain an optional `kind` (`change` / `reveal`);
+both are stored in the milestone JSON, and legacy milestone JSON without the
+field keeps deserializing and serializing unchanged.
 
 Each variant wraps the existing core input shape with typed proposal references
 in ID slots. The dispatcher is a closed allowlist, not an arbitrary tool name

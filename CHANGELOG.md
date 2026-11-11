@@ -21,6 +21,24 @@
 - Add migration V0058 for the plot-line `value_axis`, `subplot_job` and
   `main_plot` columns; the fields are additive and existing rows keep NULL / 0
   until they are completed through `update_entity`.
+- Add the typed Character Design planning operation at the Cast & World level
+  for McKee projects: 2–5 contradictions, the four layers of self, conscious
+  and unconscious desire, pressure on the protagonist and planner-written
+  behaviour cues. Missing designs, out-of-range contradiction counts and
+  duplicate designs are blocking findings that refuse acceptance.
+- Store the hidden layer and unconscious desire as secret canonical facts
+  (circle-of-trust holders) and keep only their fact ids on the design row.
+  Planning tools read those texts in full through
+  `planning_status.character_designs`; every non-planning read is redacted and
+  never exposes the hidden layer, the unconscious desire, their secret fact ids
+  or concealment notes. `get_character_snapshot` gains a redacted design slice.
+- Add the optional `change` / `reveal` kind to character-arc milestones;
+  legacy milestone JSON without the kind still deserializes and serializes
+  unchanged.
+- Add migration V0059 for `character_design`; it is additive and existing
+  projects keep no rows.
+- Add the `character-design` reference to the `story-structure` skill and the
+  `mckee` profile.
 
 ## 0.3.0 — 2026-11-09
 
