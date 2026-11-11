@@ -13,10 +13,11 @@ use std::fmt;
 /// The one structural job a Subplot performs toward the Controlling Idea:
 /// contradict it, resonate with it, set up the Main Plot, or complicate it.
 ///
-/// Variants deliberately carry no individual doc comments: schemars would then
-/// describe the closed set as a `oneOf` of const objects, which the MCP schema
-/// sanitiser degrades to a plain object for Gemini compatibility. A plain enum
-/// keeps the closed set visible to every client.
+/// Variants deliberately carry no individual doc comments. Per-variant doc
+/// comments make schemars emit the closed set as a `oneOf` of const objects,
+/// and several clients render that shape poorly. Keeping the variants bare
+/// lets the generated schema stay a plain enum, so every host and transport
+/// sees the closed set as one legible list of allowed values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SubplotJob {

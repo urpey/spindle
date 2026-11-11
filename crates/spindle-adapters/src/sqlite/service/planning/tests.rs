@@ -2148,35 +2148,23 @@ agent = "outliner-agent"
     assert_eq!(bound_session.usage.input_tokens, 720);
     assert_eq!(bound_session.usage.output_tokens, 480);
 
-    // Accept in dependency order. The seed and series arc go first: the McKee
-    // Book gate requires the accepted Main Plot to already exist.
-    let (upstream, downstream): (Vec<_>, Vec<_>) = staged[1..].iter().partition(|p| {
-        matches!(
-            p.artifact.level,
-            PlanningLevel::CastWorld | PlanningLevel::SeriesArc
-        )
-    });
-    for (batch, note) in [
-        (upstream, "Accept seed and series arc manifests"),
-        (downstream, "Accept book, chapter, and scene manifests"),
-    ] {
-        let hashes: BTreeMap<String, String> = batch
-            .iter()
-            .map(|p| (p.id.clone(), p.payload_hash.clone()))
-            .collect();
-        let report = svc
-            .apply_planning(DecidePlanningInput {
-                session_id: session.id.clone(),
-                scope: Some(scope.clone()),
-                expected_hashes: hashes,
-                decision: PlanningDecision::Accept,
-                actor: "author".into(),
-                note: note.into(),
-            })
-            .await
-            .unwrap();
-        assert!(report.complete, "{:?}", report.error);
-    }
+    // Now accept all remaining 5 levels in dependency order.
+    let remaining_hashes: BTreeMap<String, String> = staged[1..]
+        .iter()
+        .map(|p| (p.id.clone(), p.payload_hash.clone()))
+        .collect();
+    let rest_apply = svc
+        .apply_planning(DecidePlanningInput {
+            session_id: session.id.clone(),
+            scope: Some(scope.clone()),
+            expected_hashes: remaining_hashes,
+            decision: PlanningDecision::Accept,
+            actor: "author".into(),
+            note: "Accept seed, series arc, book, chapter, and scene manifests".into(),
+        })
+        .await
+        .unwrap();
+    assert!(rest_apply.complete, "{:?}", rest_apply.error);
     assert_eq!(
         svc.list_projects().await.unwrap().projects.len(),
         1,
@@ -7489,7 +7477,7 @@ async fn reject_planning(
     svc: &SqliteSpindleService,
     session: &PlanningSession,
     proposal: &PlanningProposal,
-) {
+) -> String {
     let mut d = decision(session, proposal);
     d.decision = PlanningDecision::Accept;
     let error = svc.decide_planning(d).await.unwrap_err();
@@ -7497,6 +7485,7 @@ async fn reject_planning(
         error.to_string().contains("blocking"),
         "acceptance must be refused by the blocking finding: {error}"
     );
+    error.to_string()
 }
 
 #[tokio::test]
@@ -7817,7 +7806,15 @@ async fn mckee_book_acceptance_rechecks_the_main_plot_set() {
     .await;
     assert_blocking_plot_line_finding(&blocked_book, "plot_line_missing_main_plot");
     assert_blocking_plot_line_finding(&blocked_book, "plot_line_subplot_missing_job");
-    reject_planning(&svc, &session, &blocked_book).await;
+    let error = reject_planning(&svc, &session, &blocked_book).await;
+    assert!(
+        error.contains("/existing_plot_lines/"),
+        "the acceptance error must locate the offending existing row: {error}"
+    );
+    assert!(
+        error.contains("; related: "),
+        "the acceptance error must carry the finding's related refs: {error}"
+    );
 
     // Repair the set and re-stage the Book level.
     svc.update_entity(spindle_core::models::UpdateEntityInput {
@@ -7982,6 +7979,22 @@ async fn mckee_plot_line_structure_fields_are_created_updated_and_read_back() {
         "non-boolean Main Plot flag must be rejected: {error}"
     );
 
+    // Exactly one public spelling exists: the raw column name is rejected and
+    // the error names the supported field.
+    let error = svc
+        .update_entity(spindle_core::models::UpdateEntityInput {
+            entity_type: "plot_line".into(),
+            entity_id: created.plot_line_id.clone(),
+            changes: json!({"main_plot": false}),
+            allow_rename: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("is_main_plot"),
+        "the raw main_plot spelling must name the supported is_main_plot field: {error}"
+    );
+
     // Create rejects the same conflicting pair.
     let error = svc
         .create_plot_line(spindle_core::models::CreatePlotLineInput {
@@ -8004,5 +8017,119 @@ async fn mckee_plot_line_structure_fields_are_created_updated_and_read_back() {
             .to_string()
             .contains("both the Main Plot and a Subplot"),
         "create must reject a Main Plot with a Subplot job: {error}"
+    );
+}
+
+#[tokio::test]
+async fn mckee_plot_line_gate_sees_parent_branch_rows_and_catches_a_child_duplicate() {
+    use serde_json::json;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let spine = accepted_series_spine(&svc, &session, &root).await;
+    let project_id = session.scope.as_ref().unwrap().project_id.clone();
+    let parent_branch_id = session.scope.as_ref().unwrap().branch_id.clone();
+
+    let series_arc = bundle(
+        &svc,
+        &session,
+        PlanningLevel::SeriesArc,
+        &[&root, &spine],
+        vec![planned(
+            "plot:main",
+            "create_plot_line",
+            json!({"name":"Find the heir","plot_type":"main","summary":"s","value_axis":"trust","is_main_plot":true}),
+        )],
+    )
+    .await;
+    assert!(
+        plot_line_findings(&series_arc).is_empty(),
+        "the parent branch needs one clean Main Plot first: {:?}",
+        series_arc.findings
+    );
+    accept(&svc, &session, &series_arc).await;
+
+    let child = svc
+        .create_branch(CreateBranchInput {
+            project_id: project_id.clone(),
+            name: "Alternative".into(),
+            branch_type: "experiment".into(),
+            description: None,
+            parent_branch_id: Some(parent_branch_id),
+        })
+        .await
+        .unwrap();
+    svc.switch_branch(SwitchBranchInput {
+        project_id: project_id.clone(),
+        branch_id: child.branch_id.clone(),
+    })
+    .await
+    .unwrap();
+    let child_session = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "An alternate branch of the same McKee project".into(),
+            scope: Some(PlanningScope {
+                project_id: project_id.clone(),
+                branch_id: child.branch_id.clone(),
+            }),
+        })
+        .await
+        .unwrap();
+
+    // The gate resolves the session branch's lineage, so the parent branch's
+    // accepted Main Plot is visible: a Series Arc that adds no plot line of
+    // its own must not be reported as having no Main Plot.
+    let inherited = bundle(
+        &svc,
+        &child_session,
+        PlanningLevel::SeriesArc,
+        &[],
+        vec![planned(
+            "theme:child",
+            "create_theme",
+            json!({"theme_statement":"Trust requires risk","thesis_antithesis":"Safety versus connection"}),
+        )],
+    )
+    .await;
+    assert!(
+        plot_line_findings(&inherited).is_empty(),
+        "a child branch inherits the parent's Main Plot: {:?}",
+        inherited.findings
+    );
+
+    // A second Main Plot on the child branch is caught even though the
+    // inherited row lives on the parent branch.
+    svc.create_plot_line(spindle_core::models::CreatePlotLineInput {
+        project_id: project_id.clone(),
+        name: "A rival main".into(),
+        plot_type: "main".into(),
+        summary: "Competes with the inherited Main Plot".into(),
+        status: None,
+        convergence_points: Vec::new(),
+        connected_conflict_ids: Vec::new(),
+        connected_theme_ids: Vec::new(),
+        value_axis: Some("trust".into()),
+        subplot_job: None,
+        is_main_plot: true,
+    })
+    .await
+    .unwrap();
+    let duplicate = bundle(
+        &svc,
+        &child_session,
+        PlanningLevel::SeriesArc,
+        &[],
+        vec![planned(
+            "theme:child-again",
+            "create_theme",
+            json!({"theme_statement":"Truth costs safety","thesis_antithesis":"Silence versus exposure"}),
+        )],
+    )
+    .await;
+    assert_blocking_plot_line_finding(&duplicate, "plot_line_multiple_main_plots");
+    let error = reject_planning(&svc, &child_session, &duplicate).await;
+    assert!(
+        error.contains("/existing_plot_lines") && error.contains("related: plot_line:"),
+        "the duplicate finding must locate both Main Plot rows: {error}"
     );
 }

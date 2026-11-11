@@ -30,9 +30,11 @@ Series 只有一個 spine；每本書可以有自己的一個 sub-spine，回答
 Series-Arc 層同時決定每條 plot line 的結構角色。McKee 專案在 Series-Arc 與 Book 接受時會檢查：
 
 - 全專案恰有一條 **Main Plot**（`is_main_plot`），它的 Value Axis 必須等於已接受系列脊柱的 Spine Axis（只忽略前後空白）。
-- 其他每條都是 **Subplot**，各自有一條 Value Axis，並且恰有一個結構工作：`contradict`、`resonate`、`set_up` 或 `complicate`。
-- Main Plot 不是 Subplot，不帶 subplot job；Subplot 也不得被標成 Main Plot。
+- 其他每條都是 **Subplot**：阻擋條件是剛好一個結構工作——`contradict`、`resonate`、`set_up` 或 `complicate`。Value Axis 仍是必要的敘事指引，但缺 Value Axis 不會單獨擋下接受。
+- Main Plot 不是 Subplot，不帶 subplot job。建立或更新 plot line 時，`is_main_plot=true` 再加上 subplot job 會被直接拒絕；規劃器則記下 `plot_line_subplot_job_on_main`。
 - 尚未接受系列脊柱時，先不比對 Spine Axis；缺脊柱不是這一步的 finding。
+
+V0058 之前的既有 plot line 不會自動豁免：接受前要補上 `value_axis`、`subplot_job`、`is_main_plot`，否則上面的檢查會擋下接受。
 
 這些欄位是規劃意圖，不是已發生的事件；不要把它們寫成 canon fact。既有非 McKee 專案不需要、也不會得到這些 finding。
 

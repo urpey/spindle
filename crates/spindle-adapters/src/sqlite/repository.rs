@@ -762,6 +762,7 @@ mod imports;
 mod narrative;
 mod planning;
 pub(crate) use planning::apply::resolve_operation as resolve_planning_operation;
+pub(crate) use planning::describe_blocking_finding;
 pub(crate) use planning::output_refs as planning_output_refs;
 pub(crate) use planning::{
     PlanningAttemptClaim, PlanningSessionMetadataUpdate, PlanningStagedCommitCandidate,
@@ -1300,8 +1301,10 @@ fn column_is_updatable(table: &str, column: &str) -> bool {
             | ("plot_line", "connected_theme_ids")
             | ("plot_line", "convergence_points")
             // McKee Main Plot / Subplot structure (V0058). `main_plot` is the
-            // stored 0/1 flag; `update_entity` also accepts the public
-            // `is_main_plot` spelling and normalises it to this column.
+            // stored 0/1 column and the value `update_entity` writes after
+            // mapping the public `is_main_plot` field onto it; the public
+            // contract exposes no other spelling, and the service rejects a
+            // literal `main_plot` change key before this allowlist runs.
             | ("plot_line", "value_axis")
             | ("plot_line", "subplot_job")
             | ("plot_line", "main_plot")

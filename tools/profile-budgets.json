@@ -3,8 +3,8 @@
   "compatibility": {
     "default": {
       "tools": 181,
-      "input_bytes": 171641,
-      "full_bytes": 761634
+      "input_bytes": 172211,
+      "full_bytes": 762666
     },
     "new-book": {
       "tools": 14,
@@ -14,27 +14,27 @@
     "minimal": {
       "tools": 22,
       "input_bytes": 30863,
-      "full_bytes": 219055
+      "full_bytes": 219363
     },
     "write": {
       "tools": 122,
-      "input_bytes": 115758,
-      "full_bytes": 484111
+      "input_bytes": 116328,
+      "full_bytes": 485066
     },
     "import": {
       "tools": 40,
       "input_bytes": 21665,
-      "full_bytes": 232843
+      "full_bytes": 232920
     },
     "authoring": {
       "tools": 78,
-      "input_bytes": 88527,
-      "full_bytes": 351631
+      "input_bytes": 89097,
+      "full_bytes": 352586
     },
     "planning": {
       "tools": 38,
-      "input_bytes": 32792,
-      "full_bytes": 64186
+      "input_bytes": 33362,
+      "full_bytes": 64756
     },
     "release": {
       "tools": 62,
@@ -48,8 +48,8 @@
     },
     "revision": {
       "tools": 34,
-      "input_bytes": 22509,
-      "full_bytes": 57942
+      "input_bytes": 23079,
+      "full_bytes": 58512
     },
     "setup": {
       "tools": 9,
@@ -63,8 +63,8 @@
     },
     "workflow-authoring": {
       "tools": 74,
-      "input_bytes": 85883,
-      "full_bytes": 181212
+      "input_bytes": 86453,
+      "full_bytes": 181782
     },
     "workflow-import": {
       "tools": 20,
@@ -73,18 +73,18 @@
     },
     "workflow-write": {
       "tools": 44,
-      "input_bytes": 57282,
-      "full_bytes": 112396
+      "input_bytes": 57852,
+      "full_bytes": 112966
     },
     "worldbuilding": {
       "tools": 50,
-      "input_bytes": 48353,
-      "full_bytes": 84038
+      "input_bytes": 48923,
+      "full_bytes": 84608
     },
     "legacy-all": {
       "tools": 181,
-      "input_bytes": 171641,
-      "full_bytes": 761634
+      "input_bytes": 172211,
+      "full_bytes": 762666
     },
     "mckee": {
       "tools": 11,

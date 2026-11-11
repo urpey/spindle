@@ -65,10 +65,17 @@ impl SqliteSpindleService {
             serde_json::Value::Null => std::collections::BTreeMap::new(),
             _ => anyhow::bail!("update_entity changes must be a JSON object"),
         };
-        // Plot-line Main Plot / Subplot structure: accept the public
-        // `is_main_plot` spelling and validate it (plus the closed job enum)
-        // against the row's effective state before the column allowlist runs.
+        // Plot-line Main Plot / Subplot structure: accept exactly one public
+        // spelling, `is_main_plot` (mapped internally to the `main_plot`
+        // column), and validate it (plus the closed job enum) against the
+        // row's effective state before the column allowlist runs. The raw
+        // column name is not part of the public contract.
         if entity_type == "plot_line" {
+            anyhow::ensure!(
+                !changes.contains_key("main_plot"),
+                "plot_line.main_plot is not a supported field; use the public \
+                 is_main_plot field"
+            );
             if let Some(value) = changes.remove("is_main_plot") {
                 changes.insert("main_plot".to_string(), value);
             }

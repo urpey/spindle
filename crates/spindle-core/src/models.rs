@@ -4470,6 +4470,11 @@ pub struct BatchCreateTermsOutput {
     pub warnings: Vec<String>,
 }
 
+/// Update a supported entity by record id. `changes` is a field map validated
+/// per entity type. For `entity_type: "plot_line"` the McKee plot-line fields
+/// are `value_axis` (string or null), `subplot_job` (`contradict`, `resonate`,
+/// `set_up`, `complicate`, or null) and `is_main_plot` (boolean); the raw
+/// column spelling `main_plot` is rejected.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct UpdateEntityInput {
     pub entity_type: String,

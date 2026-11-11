@@ -13,6 +13,14 @@
   `mckee` profile.
 - Add migration V0057 for the McKee marker and the project-level `story_spine`
   table.
+- Add McKee Main Plot / Subplot structure to plot lines: an optional Value
+  Axis, one structural job per Subplot and the Main Plot flag, decided during
+  Series-Arc planning and gated at Series-Arc and Book acceptance on McKee
+  projects. A Main Plot is not a Subplot, so `create_plot_line` and
+  `update_entity` reject a Main Plot that also carries a Subplot job.
+- Add migration V0058 for the plot-line `value_axis`, `subplot_job` and
+  `main_plot` columns; the fields are additive and existing rows keep NULL / 0
+  until they are completed through `update_entity`.
 
 ## 0.3.0 — 2026-11-09
 

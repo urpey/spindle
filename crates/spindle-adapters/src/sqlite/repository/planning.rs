@@ -731,6 +731,22 @@ const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "plot_line_subplot_job_on_main",
 ];
 
+/// One blocking finding rendered for a caller-facing error string. The path
+/// locates the field (an artifact operation path, a set path, or
+/// `/existing_plot_lines/<record_id>`), and `related_refs` carries the record
+/// ids or output refs an author needs to find the row.
+pub(crate) fn describe_blocking_finding(finding: &PlanningFinding) -> String {
+    let related = if finding.related_refs.is_empty() {
+        String::new()
+    } else {
+        format!("; related: {}", finding.related_refs.join(", "))
+    };
+    format!(
+        "{}: {} (at {}{})",
+        finding.code, finding.actual, finding.path, related
+    )
+}
+
 fn stage_in_transaction(
     conn: &mut rusqlite::Connection,
     input: StagePlanningInput,
@@ -817,7 +833,7 @@ fn stage_in_transaction(
         .iter()
         .filter(|f| f.severity == PlanningFindingSeverity::Blocking)
         .filter(|f| !STAGE_RECORDABLE_BLOCKING_CODES.contains(&f.code.as_str()))
-        .map(|f| format!("{}: {} (at {})", f.code, f.actual, f.path))
+        .map(describe_blocking_finding)
         .collect();
     anyhow::ensure!(
         blocking.is_empty(),
@@ -1662,8 +1678,8 @@ struct PlotLineStructureCandidate {
     value_axis: Option<String>,
     subplot_job: Option<spindle_core::plot_line::SubplotJob>,
     /// `/operations/<idx>/operation/input` for a plot line created by the
-    /// current artifact; `None` for an existing row, whose finding is
-    /// artifact-level with the record id in `related_refs`.
+    /// current artifact (or by a staged ancestor proposal); `None` for an
+    /// existing row, whose finding is located by its record id.
     artifact_path: Option<String>,
     related_ref: String,
 }
@@ -1672,20 +1688,90 @@ impl PlotLineStructureCandidate {
     fn path(&self, field: &str) -> String {
         match &self.artifact_path {
             Some(base) => format!("{base}/{field}"),
-            None => "/operations".to_string(),
+            None => format!("/existing_plot_lines/{}", self.related_ref),
         }
     }
 }
 
+/// Where a set-level finding points: a field of the artifact when any
+/// candidate comes from an operation, otherwise the existing rows it names in
+/// `related_refs`.
+fn candidate_set_path(candidates: &[PlotLineStructureCandidate]) -> String {
+    if !candidates.is_empty() && candidates.iter().all(|item| item.artifact_path.is_none()) {
+        "/existing_plot_lines".to_string()
+    } else {
+        "/operations".to_string()
+    }
+}
+
+/// Add the plot-line operations of the artifact's staged ancestor proposals.
+///
+/// Acceptance revalidates every staged artifact against the database before
+/// any write, so a Main Plot supplied by a parent proposal in the same
+/// approved closure is not a row yet. Walking `input.parents` recursively
+/// (deduplicated by proposal id) makes stage-time and batched-acceptance
+/// validation see the same plot-line set the batch would leave behind.
+///
+/// Only `staged` ancestors contribute. An `applied` ancestor's plot lines are
+/// already rows in the database set, so counting its operations again would
+/// report a phantom duplicate Main Plot. Acceptance still enforces that every
+/// staged parent is selected in the same batch or already applied, so this
+/// cannot hide a permanently unaccepted parent.
+fn collect_staged_ancestor_plot_lines(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    candidates: &mut Vec<PlotLineStructureCandidate>,
+) -> Result<()> {
+    let mut visited = std::collections::HashSet::new();
+    let mut pending: Vec<String> = input.parents.keys().cloned().collect();
+    while let Some(parent_id) = pending.pop() {
+        if !visited.insert(parent_id.clone()) {
+            continue;
+        }
+        let data: Option<String> = conn
+            .query_row(
+                "SELECT data FROM planning_proposal WHERE id=?1 AND status='staged'",
+                [&parent_id],
+                |row| row.get(0),
+            )
+            .optional_inner()?;
+        let Some(data) = data else {
+            continue;
+        };
+        let parent: PlanningProposal = serde_json::from_str(&data)?;
+        for (index, item) in parent.artifact.operations.iter().enumerate() {
+            if let PlanningOperation::CreatePlotLine(plot) = &item.operation {
+                candidates.push(PlotLineStructureCandidate {
+                    is_main_plot: plot.is_main_plot,
+                    value_axis: plot.value_axis.clone(),
+                    subplot_job: plot.subplot_job,
+                    artifact_path: Some(format!("/operations/{index}/operation/input")),
+                    related_ref: item.output_ref.clone(),
+                });
+            }
+        }
+        pending.extend(parent.artifact.parents.keys().cloned());
+    }
+    Ok(())
+}
+
 /// The McKee Main Plot / Subplot gate for Series-Arc and Book acceptance.
 ///
-/// The set evaluated is the non-archived plot lines on the session's
-/// project/branch plus the plot-line operations in the artifact being reviewed
-/// — exactly what acceptance would leave behind. Zero or more than one Main
-/// Plot, a Main Plot whose Value Axis differs from the accepted series Spine
-/// Axis, and a Subplot without a structural job are blocking. When the project
-/// has no accepted series spine yet, the axis comparison is skipped (a missing
-/// spine is #22's concern, not this gate's).
+/// The set evaluated is what acceptance would leave behind:
+///
+/// - the non-archived plot lines visible from the session's branch — the
+///   branch plus its ancestor lineage, resolved the same way repository reads
+///   resolve visibility, with a child branch's row overriding a same-named
+///   parent row;
+/// - the plot-line operations in the artifact being reviewed;
+/// - the plot-line operations of the artifact's staged ancestor proposals, so
+///   a Main Plot supplied by a sibling level in the same approved closure is
+///   visible before it is applied.
+///
+/// Zero or more than one Main Plot, a Main Plot whose Value Axis differs from
+/// the accepted series Spine Axis, and a Subplot without a structural job are
+/// blocking. When the project has no accepted series spine yet, the axis
+/// comparison is skipped (a missing spine is #22's concern, not this gate's).
 fn validate_mckee_plot_lines(
     conn: &rusqlite::Connection,
     input: &StagePlanningInput,
@@ -1710,32 +1796,42 @@ fn validate_mckee_plot_lines(
 
     let mut candidates = Vec::new();
     {
+        // Vision is lineage-aware like `list_branch_scoped`: the session
+        // branch first, then its ancestors, with a child row hiding a
+        // same-named parent row. Archived rows never enter the set.
+        let lineage =
+            resolve_branch_lineage_in_conn(conn, Some(&scope.project_id), &scope.branch_id)?;
         let mut stmt = conn.prepare(
-            "SELECT id, value_axis, subplot_job, main_plot FROM plot_line \
+            "SELECT id, normalized_name, value_axis, subplot_job, main_plot FROM plot_line \
              WHERE project_id=?1 AND branch_id=?2 AND archived_at IS NULL",
         )?;
-        let rows = stmt.query_map(
-            rusqlite::params![&scope.project_id, &scope.branch_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
-            },
-        )?;
-        for row in rows {
-            let (id, value_axis, subplot_job, main_plot) = row?;
-            candidates.push(PlotLineStructureCandidate {
-                is_main_plot: main_plot != 0,
-                value_axis,
-                subplot_job: subplot_job
-                    .as_deref()
-                    .and_then(spindle_core::plot_line::SubplotJob::parse),
-                artifact_path: None,
-                related_ref: id,
-            });
+        let mut overridden = std::collections::HashSet::new();
+        for branch_id in &lineage {
+            let rows = stmt
+                .query_map(rusqlite::params![&scope.project_id, branch_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (id, normalized_name, value_axis, subplot_job, main_plot) in rows {
+                if !overridden.insert(normalized_name) {
+                    continue;
+                }
+                candidates.push(PlotLineStructureCandidate {
+                    is_main_plot: main_plot != 0,
+                    value_axis,
+                    subplot_job: subplot_job
+                        .as_deref()
+                        .and_then(spindle_core::plot_line::SubplotJob::parse),
+                    artifact_path: None,
+                    related_ref: id,
+                });
+            }
         }
     }
     for (index, item) in input.operations.iter().enumerate() {
@@ -1749,6 +1845,7 @@ fn validate_mckee_plot_lines(
             });
         }
     }
+    collect_staged_ancestor_plot_lines(conn, input, &mut candidates)?;
 
     let main_plots: Vec<&PlotLineStructureCandidate> =
         candidates.iter().filter(|item| item.is_main_plot).collect();
@@ -1756,30 +1853,36 @@ fn validate_mckee_plot_lines(
         findings.push(PlanningFinding {
             code: "plot_line_missing_main_plot".to_string(),
             severity: PlanningFindingSeverity::Blocking,
-            path: "/operations".to_string(),
+            path: candidate_set_path(&candidates),
             related_refs: candidates
                 .iter()
                 .map(|item| item.related_ref.clone())
                 .collect(),
             expected: "exactly one plot line with is_main_plot=true".to_string(),
             actual: "no Main Plot".to_string(),
-            repair_hint: "Mark exactly one plot line as the Main Plot (is_main_plot=true) and \
-                          give it the accepted series Spine Axis as its value_axis."
+            repair_hint: "Mark exactly one plot line with is_main_plot=true and give it the \
+                          accepted series Spine Axis as value_axis: set it on the \
+                          create_plot_line operation, or call update_entity with \
+                          entity_type=\"plot_line\" and changes \
+                          {\"is_main_plot\": true, \"value_axis\": \"<Spine Axis>\"} on an \
+                          existing row."
                 .to_string(),
         });
     } else if main_plots.len() > 1 {
         findings.push(PlanningFinding {
             code: "plot_line_multiple_main_plots".to_string(),
             severity: PlanningFindingSeverity::Blocking,
-            path: "/operations".to_string(),
+            path: candidate_set_path(&candidates),
             related_refs: main_plots
                 .iter()
                 .map(|item| item.related_ref.clone())
                 .collect(),
             expected: "exactly one plot line with is_main_plot=true".to_string(),
             actual: format!("{} Main Plots", main_plots.len()),
-            repair_hint: "Keep one Main Plot and mark every other plot line is_main_plot=false; \
-                          a Subplot carries exactly one subplot_job instead."
+            repair_hint: "Keep one Main Plot and mark every other plot line is_main_plot=false \
+                          (create_plot_line operation, or update_entity with \
+                          entity_type=\"plot_line\" and changes {\"is_main_plot\": false} on an \
+                          existing row); a Subplot carries exactly one subplot_job instead."
                 .to_string(),
         });
     }
@@ -1799,8 +1902,10 @@ fn validate_mckee_plot_lines(
                         .map(|job| job.as_str())
                         .unwrap_or_default()
                 ),
-                repair_hint: "A Main Plot is not a Subplot: clear subplot_job and keep only \
-                              the Spine Axis as its value_axis."
+                repair_hint: "A Main Plot is not a Subplot: clear subplot_job on the \
+                              create_plot_line operation, or call update_entity with \
+                              entity_type=\"plot_line\" and changes {\"subplot_job\": null} on \
+                              the existing row, keeping only the Spine Axis as value_axis."
                     .to_string(),
             });
         }
@@ -1815,7 +1920,11 @@ fn validate_mckee_plot_lines(
                 expected: "one of contradict, resonate, set_up, complicate".to_string(),
                 actual: "no subplot_job".to_string(),
                 repair_hint: "Give every Subplot exactly one structural job toward the \
-                              Controlling Idea, or mark the line is_main_plot=true."
+                              Controlling Idea: set subplot_job on the create_plot_line \
+                              operation, or call update_entity with entity_type=\"plot_line\" \
+                              and changes {\"subplot_job\": \"contradict\"} (or resonate, \
+                              set_up, complicate) on the existing row; or mark the line \
+                              is_main_plot=true."
                     .to_string(),
             });
         }
@@ -1854,7 +1963,10 @@ fn validate_mckee_plot_lines(
                     .map(|axis| format!("'{axis}'"))
                     .unwrap_or_else(|| "no value_axis".to_string()),
                 repair_hint: "Set the Main Plot's value_axis to the accepted series Story \
-                              Spine's Spine Axis (surrounding whitespace is ignored)."
+                              Spine's Spine Axis: set it on the create_plot_line operation, or \
+                              call update_entity with entity_type=\"plot_line\" and changes \
+                              {\"value_axis\": \"<Spine Axis>\"} on the existing row \
+                              (surrounding whitespace is ignored)."
                     .to_string(),
             });
         }

@@ -797,7 +797,7 @@ resume unchanged). The continuity and editorial-loop migrations:
 | V0052 | planning route-generation attempt ledger (`planning_generation_attempt`) with prompt/schema hashes, usage receipts, JSON-pointer findings and host-fallback envelopes |
 | V0056 | provider/dimension-aware embedding index generations: variable-length `search_embedding`, generation registry, per-project active/previous state, legacy 64-dimension preservation |
 | V0057 | McKee project marker (`project.mckee_structured`, set only by planning `CreateProject`) and project-level `story_spine` (one series spine, optional per-book sub-spines) |
-| V0058 | McKee Main Plot / Subplot structure on `plot_line`: nullable `value_axis`, closed-set `subplot_job` (contradict / resonate / set_up / complicate) and the `main_plot` flag (existing rows keep NULL / 0) |
+| V0058 | McKee Main Plot / Subplot structure on `plot_line`: nullable `value_axis`, closed-set `subplot_job` (contradict / resonate / set_up / complicate) and the `main_plot` flag (additive: unmarked rows keep NULL / 0, but a McKee project's pre-existing plot lines must be completed through `update_entity` before the next Series-Arc/Book acceptance) |
 
 ## Where to make changes
 
@@ -948,16 +948,32 @@ a Value Axis, a closed Subplot structural job, and the Main Plot flag
 (`plot_line.value_axis`, `subplot_job`, `main_plot`; V0058). The create tool
 (`create_plot_line`), the planning `CreatePlotLine` operation and the existing
 `update_entity` allowlist all accept them; `get_entity(table="plot_line")`
-reads them back through `PlotLineDetails`. `update_entity` also accepts the
-public `is_main_plot` spelling and normalises it to the `main_plot` column. For
-McKee projects, Series-Arc and Book acceptance validate the resulting plot-line
-set (accepted non-archived rows plus the artifact's plot-line operations):
-exactly one Main Plot, its Value Axis equal to the accepted series Spine Axis
-(trim then exact match), and a structural job on every Subplot. Those blocking
-findings are recorded on the staged proposal (so the author sees them) and
-refuse acceptance; a McKee project with no accepted series spine yet skips the
-axis comparison. Existing projects and plot-line rows keep their previous read
-and export shape because the fields are omitted when unset (NULL / 0).
+reads them back through `PlotLineDetails`. The supported `update_entity` fields
+for `entity_type: "plot_line"` are exactly `value_axis` (string or null),
+`subplot_job` (`contradict` / `resonate` / `set_up` / `complicate`, or null)
+and `is_main_plot` (boolean). `is_main_plot` is the only public spelling; it is
+mapped internally to the `main_plot` column, and a caller passing the raw
+column name is rejected with an error naming `is_main_plot`.
+
+The closed job set and the boolean flag are validated on every write regardless
+of the McKee marker — that is marker-independent data integrity. The Main Plot /
+Subplot blocking gates below are McKee-only. For McKee projects, Series-Arc and
+Book acceptance validate the resulting plot-line set: the non-archived rows
+visible from the session branch (the branch plus its ancestor lineage, with a
+child branch's row overriding a same-named parent row), plus the artifact's
+plot-line operations and those of its staged ancestor proposals (an applied
+parent is already in the row set and is not counted twice). Exactly one Main
+Plot, its Value Axis equal to the accepted series Spine Axis (trim then exact
+match), and exactly one structural job on every Subplot are required. Those
+blocking findings are recorded on the staged proposal (so the author sees them)
+and refuse acceptance; the acceptance error names the operation field or the
+existing row (`/existing_plot_lines/<id>` plus related refs) to repair. A McKee
+project with no accepted series spine yet skips the axis comparison. V0058 is
+additive, so existing projects and unmarked rows keep their previous read and
+export shape and keep NULL / 0. That is not an exemption: a McKee project's
+pre-existing plot lines must be completed through `update_entity` (`value_axis`,
+`subplot_job`, `is_main_plot`) before the next Series-Arc/Book acceptance, or
+the gate blocks.
 
 All gates remain human. Delegation activation, route generation, manifest/run
 validation and agent entry arrive in subsequent phases. See
