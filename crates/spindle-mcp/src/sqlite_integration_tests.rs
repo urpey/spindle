@@ -9286,6 +9286,8 @@ fn planning_entry_series_artifact() -> serde_json::Value {
                 "name": "Find the bell ringer",
                 "plot_type": "main",
                 "summary": "Trace the signal cable",
+                "value_axis": "truth",
+                "is_main_plot": true,
                 "connected_theme_ids": [{"kind": "proposal_ref", "value": "theme:truth"}],
                 "connected_conflict_ids": [{"kind": "proposal_ref", "value": "conflict:harbor"}]
             }}},
@@ -10064,6 +10066,8 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
                     "name": "Find who broke the promise",
                     "plot_type": "main",
                     "summary": "Trace the bell rope and the missing promise",
+                    "value_axis": "truth",
+                    "is_main_plot": true,
                     "connected_theme_ids": [{"kind": "proposal_ref", "value": "theme:truth"}],
                     "connected_conflict_ids": [{"kind": "proposal_ref", "value": "conflict:bell"}]
                 }}},
@@ -10698,4 +10702,205 @@ async fn mckee_story_spine_is_additive_and_readable_through_entity_reads() {
             .contains("spine:series"),
         "planning_status must read back the accepted Story Spine operation"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plot_line_structure_fields_are_advertised_and_read_back_through_the_tool_router() {
+    use crate::tools::{ToolRouter, ToolSerializationState};
+    use std::sync::Arc;
+
+    let (_tmp, svc) = fresh_service().await;
+    let router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        None,
+        Arc::new(ToolSerializationState::default()),
+    );
+
+    // Public schema: create_plot_line advertises the three McKee fields, and
+    // the Subplot job is a closed set.
+    let tool = router
+        .list_tools()
+        .into_iter()
+        .find(|tool| tool.name == "create_plot_line")
+        .expect("create_plot_line tool");
+    let schema = serde_json::to_value(tool).unwrap();
+    let properties = &schema["inputSchema"]["properties"];
+    assert!(
+        properties.get("value_axis").is_some(),
+        "create_plot_line must advertise value_axis: {properties}"
+    );
+    let job = properties
+        .get("subplot_job")
+        .expect("create_plot_line must advertise subplot_job");
+    let job_json = job.to_string();
+    for expected in ["contradict", "resonate", "set_up", "complicate"] {
+        assert!(
+            job_json.contains(expected),
+            "subplot_job schema must include {expected}: {job_json}"
+        );
+    }
+    assert!(
+        properties.get("is_main_plot").is_some(),
+        "create_plot_line must advertise is_main_plot: {properties}"
+    );
+
+    // A non-McKee project still reads an unmarked plot line with the old shape.
+    let direct = router
+        .call_tool(
+            "create_project",
+            Some(
+                serde_json::json!({
+                    "name": "Existing",
+                    "project_type": "novel",
+                    "genre": "mystery",
+                    "reader_contract": {
+                        "promise": "Unchanged",
+                        "style_notes": [],
+                        "boundaries": []
+                    }
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    let direct_json = direct.structured_content.expect("create_project output");
+    let direct_project = direct_json["project_id"].as_str().unwrap().to_string();
+    let legacy = router
+        .call_tool(
+            "create_plot_line",
+            Some(
+                serde_json::json!({
+                    "project_id": direct_project,
+                    "name": "The old hunt",
+                    "plot_type": "main",
+                    "summary": "Tracks the heir."
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    let legacy_json = legacy.structured_content.expect("create_plot_line output");
+    let legacy_plot = legacy_json["plot_line_id"].as_str().unwrap().to_string();
+    let legacy_read = router
+        .call_tool(
+            "get_entity",
+            Some(
+                serde_json::json!({
+                    "project_id": direct_project,
+                    "table": "plot_line",
+                    "entity_id": legacy_plot
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(legacy_read.is_error, Some(false));
+    let legacy_read = legacy_read.structured_content.expect("get_entity output");
+    let legacy_details = &legacy_read["kind_specific"]["details"];
+    assert!(legacy_details.get("value_axis").is_none());
+    assert!(legacy_details.get("subplot_job").is_none());
+    assert!(legacy_details.get("is_main_plot").is_none());
+
+    // A McKee project created through planning accepts a marked Main Plot and
+    // reads the same fields back through get_entity.
+    let begun = planning_call(
+        &router,
+        "planning_begin",
+        serde_json::json!({"premise": "A harbor archivist hears a bell only she can hear."}),
+    )
+    .await;
+    let session_id = begun["session"]["session_id"].as_str().unwrap().to_string();
+    let contract = planning_advance_and_accept(
+        &router,
+        &session_id,
+        "contract",
+        serde_json::json!({
+            "schema_version": 1,
+            "level": "contract",
+            "rationale": "Review the reader promise before creating the project.",
+            "operations": [{
+                "output_ref": "project:root",
+                "operation": {"operation": "create_project", "input": {
+                    "name": "The Clapperless Bell",
+                    "project_type": "novel",
+                    "genre": "mystery",
+                    "reader_contract": {"promise": "A fair-play mystery.", "style_notes": [], "boundaries": []}
+                }}
+            }]
+        }),
+        "plot-schema-contract",
+        None,
+    )
+    .await;
+    let project_id = contract["session"]["project_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let branch_id = contract["session"]["branch_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    planning_advance_and_accept(
+        &router,
+        &session_id,
+        "series_arc",
+        serde_json::json!({
+            "schema_version": 1,
+            "level": "series_arc",
+            "rationale": "One Main Plot carrying the spine value.",
+            "operations": [
+                {"output_ref": "theme:truth", "operation": {"operation": "create_theme", "input": {
+                    "theme_statement": "Truth requires risk",
+                    "thesis_antithesis": "Safety versus honesty"
+                }}},
+                {"output_ref": "plot:main", "operation": {"operation": "create_plot_line", "input": {
+                    "name": "Find the bell ringer",
+                    "plot_type": "main",
+                    "summary": "Trace the signal cable",
+                    "value_axis": "truth",
+                    "is_main_plot": true
+                }}}
+            ]
+        }),
+        "plot-schema-series",
+        None,
+    )
+    .await;
+
+    let stored = svc
+        .repository()
+        .list_plot_lines_by_project_and_branch(&project_id, &branch_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|plot| plot.name == "Find the bell ringer")
+        .expect("applied Main Plot");
+    let read = router
+        .call_tool(
+            "get_entity",
+            Some(
+                serde_json::json!({
+                    "project_id": project_id,
+                    "table": "plot_line",
+                    "entity_id": stored.id
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read.is_error, Some(false), "{read:?}");
+    let read = read.structured_content.expect("get_entity output");
+    let details = &read["kind_specific"]["details"];
+    assert_eq!(details["is_main_plot"], serde_json::json!(true));
+    assert_eq!(details["value_axis"], serde_json::json!("truth"));
+    assert!(details.get("subplot_job").is_none());
 }

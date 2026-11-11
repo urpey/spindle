@@ -3,8 +3,8 @@
   "compatibility": {
     "default": {
       "tools": 181,
-      "input_bytes": 171201,
-      "full_bytes": 755548
+      "input_bytes": 171641,
+      "full_bytes": 761634
     },
     "new-book": {
       "tools": 14,
@@ -14,32 +14,32 @@
     "minimal": {
       "tools": 22,
       "input_bytes": 30863,
-      "full_bytes": 215291
+      "full_bytes": 219055
     },
     "write": {
       "tools": 122,
-      "input_bytes": 115318,
-      "full_bytes": 478966
+      "input_bytes": 115758,
+      "full_bytes": 484111
     },
     "import": {
       "tools": 40,
       "input_bytes": 21665,
-      "full_bytes": 231902
+      "full_bytes": 232843
     },
     "authoring": {
       "tools": 78,
-      "input_bytes": 88087,
-      "full_bytes": 346486
+      "input_bytes": 88527,
+      "full_bytes": 351631
     },
     "planning": {
       "tools": 38,
-      "input_bytes": 32352,
-      "full_bytes": 63746
+      "input_bytes": 32792,
+      "full_bytes": 64186
     },
     "release": {
       "tools": 62,
-      "input_bytes": 45503,
-      "full_bytes": 90953
+      "input_bytes": 45943,
+      "full_bytes": 91393
     },
     "research": {
       "tools": 15,
@@ -83,8 +83,8 @@
     },
     "legacy-all": {
       "tools": 181,
-      "input_bytes": 171201,
-      "full_bytes": 755548
+      "input_bytes": 171641,
+      "full_bytes": 761634
     },
     "mckee": {
       "tools": 11,
