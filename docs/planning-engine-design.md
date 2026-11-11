@@ -221,6 +221,27 @@ before the inciting incident are rejected. Accepted spines read back through
 Spine references Themes by id and never replaces them. See
 [ADR 0007](adr/0007-mckee-structure-swain-prose.md).
 
+`CreatePlotLine` (Series-Arc level) carries the Main Plot / Subplot structure
+for McKee projects: an optional Value Axis (`value_axis`), a closed structural
+job for a Subplot (`subplot_job`: `contradict` / `resonate` / `set_up` /
+`complicate`) and the Main Plot flag (`is_main_plot`). The same fields are on
+the direct `create_plot_line` tool and the `update_entity` plot-line allowlist,
+and read back through `get_entity(table="plot_line")`; non-McKee projects may
+omit them and existing rows keep NULL / 0. At Series-Arc and Book acceptance the
+validator evaluates the resulting set — accepted non-archived plot lines on the
+session's project/branch plus the artifact's plot-line operations — and records
+blocking findings on the staged proposal: zero or more than one Main Plot
+(`plot_line_missing_main_plot` / `plot_line_multiple_main_plots`), a Main Plot
+whose Value Axis differs from the accepted series Story Spine's Spine Axis
+(`plot_line_main_axis_mismatch`; trimmed, then exact), any Subplot without a
+structural job (`plot_line_subplot_missing_job`), and a Main Plot that also
+carries a job (`plot_line_subplot_job_on_main`; a Main Plot is not a Subplot).
+Those findings record on the proposal but refuse acceptance, like the Story
+Spine completeness findings. If no series spine has been accepted yet the axis
+comparison is skipped rather than relitigating the missing spine here. Because
+the Book gate re-checks the accepted set, a project must accept its Series Arc
+(and therefore its one Main Plot) before Book acceptance.
+
 Each variant wraps the existing core input shape with typed proposal references
 in ID slots. The dispatcher is a closed allowlist, not an arbitrary tool name
 or free-form `update_entity` payload. `schedule` is new planning metadata:

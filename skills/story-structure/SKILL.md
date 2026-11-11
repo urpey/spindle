@@ -25,6 +25,17 @@ description: 麥基（McKee）故事結構的核心工作流：先定故事脊�
 
 Series 只有一個 spine；每本書可以有自己的一個 sub-spine，回答系列問題的一部分，而不是假裝回答全部。Theme 是次要想法，仍保持獨立：脊柱可以引用 Theme，但不能取代 Theme 清單。
 
+## 主線與副線（Main Plot / Subplot）
+
+Series-Arc 層同時決定每條 plot line 的結構角色。McKee 專案在 Series-Arc 與 Book 接受時會檢查：
+
+- 全專案恰有一條 **Main Plot**（`is_main_plot`），它的 Value Axis 必須等於已接受系列脊柱的 Spine Axis（只忽略前後空白）。
+- 其他每條都是 **Subplot**，各自有一條 Value Axis，並且恰有一個結構工作：`contradict`、`resonate`、`set_up` 或 `complicate`。
+- Main Plot 不是 Subplot，不帶 subplot job；Subplot 也不得被標成 Main Plot。
+- 尚未接受系列脊柱時，先不比對 Spine Axis；缺脊柱不是這一步的 finding。
+
+這些欄位是規劃意圖，不是已發生的事件；不要把它們寫成 canon fact。既有非 McKee 專案不需要、也不會得到這些 finding。
+
 ## 在契約層建立脊柱
 
 McKee 專案建立後，脊柱透過規劃操作進入人類審查，不會由模型直接寫入。

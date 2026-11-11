@@ -797,6 +797,7 @@ resume unchanged). The continuity and editorial-loop migrations:
 | V0052 | planning route-generation attempt ledger (`planning_generation_attempt`) with prompt/schema hashes, usage receipts, JSON-pointer findings and host-fallback envelopes |
 | V0056 | provider/dimension-aware embedding index generations: variable-length `search_embedding`, generation registry, per-project active/previous state, legacy 64-dimension preservation |
 | V0057 | McKee project marker (`project.mckee_structured`, set only by planning `CreateProject`) and project-level `story_spine` (one series spine, optional per-book sub-spines) |
+| V0058 | McKee Main Plot / Subplot structure on `plot_line`: nullable `value_axis`, closed-set `subplot_job` (contradict / resonate / set_up / complicate) and the `main_plot` flag (existing rows keep NULL / 0) |
 
 ## Where to make changes
 
@@ -805,6 +806,8 @@ Use this map when you need to patch behavior quickly.
 - Add or modify tool DTOs: `crates/spindle-core/src/models.rs`.
 - Add or modify Story Spine contracts: `crates/spindle-core/src/story_spine.rs`
   (records) and `crates/spindle-core/src/charge.rs` (typed Charge).
+- Add or modify Main Plot / Subplot vocabulary: `crates/spindle-core/src/plot_line.rs`
+  (closed `SubplotJob` and Value Axis comparison).
 - Add or modify continuity and validator-facing DTOs:
   `crates/spindle-core/src/models.rs`.
 - Add or modify MCP session/defaulting/schema behavior:
@@ -939,6 +942,22 @@ defines the closed **Charge** type (sign plus four-step depth) used by later
 McKee structure work. See [GLOSSARY](../GLOSSARY.md),
 [ADR 0006](adr/0006-acts-and-sequences-are-outline-intent.md) and
 [ADR 0007](adr/0007-mckee-structure-swain-prose.md).
+
+Plot lines carry the same one-way vocabulary through `spindle_core::plot_line`:
+a Value Axis, a closed Subplot structural job, and the Main Plot flag
+(`plot_line.value_axis`, `subplot_job`, `main_plot`; V0058). The create tool
+(`create_plot_line`), the planning `CreatePlotLine` operation and the existing
+`update_entity` allowlist all accept them; `get_entity(table="plot_line")`
+reads them back through `PlotLineDetails`. `update_entity` also accepts the
+public `is_main_plot` spelling and normalises it to the `main_plot` column. For
+McKee projects, Series-Arc and Book acceptance validate the resulting plot-line
+set (accepted non-archived rows plus the artifact's plot-line operations):
+exactly one Main Plot, its Value Axis equal to the accepted series Spine Axis
+(trim then exact match), and a structural job on every Subplot. Those blocking
+findings are recorded on the staged proposal (so the author sees them) and
+refuse acceptance; a McKee project with no accepted series spine yet skips the
+axis comparison. Existing projects and plot-line rows keep their previous read
+and export shape because the fields are omitted when unset (NULL / 0).
 
 All gates remain human. Delegation activation, route generation, manifest/run
 validation and agent entry arrive in subsequent phases. See
