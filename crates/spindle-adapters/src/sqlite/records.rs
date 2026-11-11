@@ -807,7 +807,7 @@ impl<'a> TryFrom<&Row<'a>> for Term {
 
 pub const PLOT_LINE_COLUMNS: &str = "id, project_id, branch_id, name, normalized_name, plot_type, summary, status, \
      convergence_points, notes, archived_at, created_at, updated_at, \
-     connected_conflict_ids, connected_theme_ids";
+     connected_conflict_ids, connected_theme_ids, value_axis, subplot_job, main_plot";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlotLine {
@@ -833,6 +833,18 @@ pub struct PlotLine {
     /// convergence chapter. JSON id array (V0022).
     #[serde(default)]
     pub connected_theme_ids: Vec<String>,
+    /// The Value Axis this plot line turns (V0058). A Main Plot carries the
+    /// Spine Axis; absent on rows written before the McKee fields existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_axis: Option<String>,
+    /// The closed structural job a Subplot performs toward the Controlling
+    /// Idea (V0058); absent on the Main Plot and on pre-McKee rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subplot_job: Option<String>,
+    /// Whether this is the project's one Main Plot (V0058). False for every
+    /// Subplot and for pre-McKee rows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub main_plot: bool,
 }
 
 impl<'a> TryFrom<&Row<'a>> for PlotLine {
@@ -855,6 +867,9 @@ impl<'a> TryFrom<&Row<'a>> for PlotLine {
             updated_at: row::time(r, 12)?,
             connected_conflict_ids: row::json(r, 13)?,
             connected_theme_ids: row::json(r, 14)?,
+            value_axis: row::opt_text(r, 15)?,
+            subplot_job: row::opt_text(r, 16)?,
+            main_plot: row::boolean(r, 17)?,
         })
     }
 }

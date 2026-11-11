@@ -65,6 +65,20 @@ impl SqliteSpindleService {
             serde_json::Value::Null => std::collections::BTreeMap::new(),
             _ => anyhow::bail!("update_entity changes must be a JSON object"),
         };
+        // Plot-line Main Plot / Subplot structure: accept the public
+        // `is_main_plot` spelling and validate it (plus the closed job enum)
+        // against the row's effective state before the column allowlist runs.
+        if entity_type == "plot_line" {
+            if let Some(value) = changes.remove("is_main_plot") {
+                changes.insert("main_plot".to_string(), value);
+            }
+            let current = self.repository.get_plot_line(&entity_id).await?;
+            let current_subplot_job = current
+                .subplot_job
+                .as_deref()
+                .and_then(spindle_core::plot_line::SubplotJob::parse);
+            validate_plot_line_changes(&changes, current_subplot_job, current.main_plot)?;
+        }
         // Cache invalidation is computed over the FULL change set (the
         // character-name arm keys off changes containing "name"), before the
         // rename peels the name off.

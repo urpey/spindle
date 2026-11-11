@@ -2456,6 +2456,9 @@ async fn scene_context_hydrates_plan_targeted_active_threads() {
             convergence_points: Vec::new(),
             connected_conflict_ids: Vec::new(),
             connected_theme_ids: Vec::new(),
+            value_axis: None,
+            subplot_job: None,
+            is_main_plot: false,
         })
         .await
         .unwrap();
@@ -2658,6 +2661,9 @@ async fn scene_context_skips_stale_active_thread_ids() {
             convergence_points: Vec::new(),
             connected_conflict_ids: Vec::new(),
             connected_theme_ids: Vec::new(),
+            value_axis: None,
+            subplot_job: None,
+            is_main_plot: false,
         })
         .await
         .unwrap();

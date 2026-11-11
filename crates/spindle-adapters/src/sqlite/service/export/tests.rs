@@ -1636,6 +1636,9 @@ async fn export_bible_round_trips_typed_records_with_rfc3339_timestamps() {
         convergence_points: Vec::new(),
         connected_conflict_ids: Vec::new(),
         connected_theme_ids: Vec::new(),
+        value_axis: None,
+        subplot_job: None,
+        is_main_plot: false,
     })
     .await
     .unwrap();

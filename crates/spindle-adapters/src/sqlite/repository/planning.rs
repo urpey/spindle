@@ -712,15 +712,23 @@ fn output_type(op: &PlanningOperation) -> &'static str {
     }
 }
 
-/// Story-Spine completeness findings are blocking for acceptance, but they
-/// are recorded on the staged proposal so the author can see exactly which
-/// contract field is missing. Every other blocking finding still rejects
-/// staging, as before.
+/// Blocking findings that are still recorded on the staged proposal so the
+/// author can see exactly which field is missing or invalid. Every other
+/// blocking finding still rejects staging, as before.
+///
+/// Story-Spine completeness (V0057) and the McKee Main Plot / Subplot checks
+/// (V0058) are recorded: the proposal stages, but acceptance is gated until the
+/// findings are repaired.
 const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "story_spine_missing_central_question",
     "story_spine_missing_controlling_idea_value",
     "story_spine_missing_controlling_idea_cause",
     "story_spine_missing_spine_axis",
+    "plot_line_missing_main_plot",
+    "plot_line_multiple_main_plots",
+    "plot_line_main_axis_mismatch",
+    "plot_line_subplot_missing_job",
+    "plot_line_subplot_job_on_main",
 ];
 
 fn stage_in_transaction(
@@ -1646,6 +1654,212 @@ fn compute_pov_and_pacing_metrics(
         }
     }
     metrics
+}
+
+/// One plot line in the set a Series-Arc / Book acceptance would leave behind.
+struct PlotLineStructureCandidate {
+    is_main_plot: bool,
+    value_axis: Option<String>,
+    subplot_job: Option<spindle_core::plot_line::SubplotJob>,
+    /// `/operations/<idx>/operation/input` for a plot line created by the
+    /// current artifact; `None` for an existing row, whose finding is
+    /// artifact-level with the record id in `related_refs`.
+    artifact_path: Option<String>,
+    related_ref: String,
+}
+
+impl PlotLineStructureCandidate {
+    fn path(&self, field: &str) -> String {
+        match &self.artifact_path {
+            Some(base) => format!("{base}/{field}"),
+            None => "/operations".to_string(),
+        }
+    }
+}
+
+/// The McKee Main Plot / Subplot gate for Series-Arc and Book acceptance.
+///
+/// The set evaluated is the non-archived plot lines on the session's
+/// project/branch plus the plot-line operations in the artifact being reviewed
+/// — exactly what acceptance would leave behind. Zero or more than one Main
+/// Plot, a Main Plot whose Value Axis differs from the accepted series Spine
+/// Axis, and a Subplot without a structural job are blocking. When the project
+/// has no accepted series spine yet, the axis comparison is skipped (a missing
+/// spine is #22's concern, not this gate's).
+fn validate_mckee_plot_lines(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &Option<PlanningScope>,
+    findings: &mut Vec<PlanningFinding>,
+) -> Result<()> {
+    if !matches!(input.level, PlanningLevel::SeriesArc | PlanningLevel::Book) {
+        return Ok(());
+    }
+    let Some(scope) = scope else {
+        // A pre-project root chain has no project/branch to evaluate yet.
+        return Ok(());
+    };
+    let mckee_structured: i64 = conn.query_row(
+        "SELECT mckee_structured FROM project WHERE id=?1",
+        [&scope.project_id],
+        |row| row.get(0),
+    )?;
+    if mckee_structured != 1 {
+        return Ok(());
+    }
+
+    let mut candidates = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, value_axis, subplot_job, main_plot FROM plot_line \
+             WHERE project_id=?1 AND branch_id=?2 AND archived_at IS NULL",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![&scope.project_id, &scope.branch_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )?;
+        for row in rows {
+            let (id, value_axis, subplot_job, main_plot) = row?;
+            candidates.push(PlotLineStructureCandidate {
+                is_main_plot: main_plot != 0,
+                value_axis,
+                subplot_job: subplot_job
+                    .as_deref()
+                    .and_then(spindle_core::plot_line::SubplotJob::parse),
+                artifact_path: None,
+                related_ref: id,
+            });
+        }
+    }
+    for (index, item) in input.operations.iter().enumerate() {
+        if let PlanningOperation::CreatePlotLine(plot) = &item.operation {
+            candidates.push(PlotLineStructureCandidate {
+                is_main_plot: plot.is_main_plot,
+                value_axis: plot.value_axis.clone(),
+                subplot_job: plot.subplot_job,
+                artifact_path: Some(format!("/operations/{index}/operation/input")),
+                related_ref: item.output_ref.clone(),
+            });
+        }
+    }
+
+    let main_plots: Vec<&PlotLineStructureCandidate> =
+        candidates.iter().filter(|item| item.is_main_plot).collect();
+    if main_plots.is_empty() {
+        findings.push(PlanningFinding {
+            code: "plot_line_missing_main_plot".to_string(),
+            severity: PlanningFindingSeverity::Blocking,
+            path: "/operations".to_string(),
+            related_refs: candidates
+                .iter()
+                .map(|item| item.related_ref.clone())
+                .collect(),
+            expected: "exactly one plot line with is_main_plot=true".to_string(),
+            actual: "no Main Plot".to_string(),
+            repair_hint: "Mark exactly one plot line as the Main Plot (is_main_plot=true) and \
+                          give it the accepted series Spine Axis as its value_axis."
+                .to_string(),
+        });
+    } else if main_plots.len() > 1 {
+        findings.push(PlanningFinding {
+            code: "plot_line_multiple_main_plots".to_string(),
+            severity: PlanningFindingSeverity::Blocking,
+            path: "/operations".to_string(),
+            related_refs: main_plots
+                .iter()
+                .map(|item| item.related_ref.clone())
+                .collect(),
+            expected: "exactly one plot line with is_main_plot=true".to_string(),
+            actual: format!("{} Main Plots", main_plots.len()),
+            repair_hint: "Keep one Main Plot and mark every other plot line is_main_plot=false; \
+                          a Subplot carries exactly one subplot_job instead."
+                .to_string(),
+        });
+    }
+
+    for candidate in &main_plots {
+        if candidate.subplot_job.is_some() {
+            findings.push(PlanningFinding {
+                code: "plot_line_subplot_job_on_main".to_string(),
+                severity: PlanningFindingSeverity::Blocking,
+                path: candidate.path("subplot_job"),
+                related_refs: vec![candidate.related_ref.clone()],
+                expected: "a Main Plot with no subplot_job".to_string(),
+                actual: format!(
+                    "subplot_job={}",
+                    candidate
+                        .subplot_job
+                        .map(|job| job.as_str())
+                        .unwrap_or_default()
+                ),
+                repair_hint: "A Main Plot is not a Subplot: clear subplot_job and keep only \
+                              the Spine Axis as its value_axis."
+                    .to_string(),
+            });
+        }
+    }
+    for candidate in candidates.iter().filter(|item| !item.is_main_plot) {
+        if candidate.subplot_job.is_none() {
+            findings.push(PlanningFinding {
+                code: "plot_line_subplot_missing_job".to_string(),
+                severity: PlanningFindingSeverity::Blocking,
+                path: candidate.path("subplot_job"),
+                related_refs: vec![candidate.related_ref.clone()],
+                expected: "one of contradict, resonate, set_up, complicate".to_string(),
+                actual: "no subplot_job".to_string(),
+                repair_hint: "Give every Subplot exactly one structural job toward the \
+                              Controlling Idea, or mark the line is_main_plot=true."
+                    .to_string(),
+            });
+        }
+    }
+
+    let series_axis: Option<String> = conn
+        .query_row(
+            "SELECT spine_axis FROM story_spine \
+             WHERE project_id=?1 AND series_spine_id IS NULL",
+            [&scope.project_id],
+            |row| row.get(0),
+        )
+        .optional_inner()?;
+    let Some(spine_axis) = series_axis else {
+        // No accepted series spine yet: a missing spine is not this gate's
+        // finding, so the axis comparison has nothing to compare against.
+        return Ok(());
+    };
+    for candidate in &main_plots {
+        if !spindle_core::plot_line::value_axis_matches(
+            candidate.value_axis.as_deref(),
+            &spine_axis,
+        ) {
+            findings.push(PlanningFinding {
+                code: "plot_line_main_axis_mismatch".to_string(),
+                severity: PlanningFindingSeverity::Blocking,
+                path: candidate.path("value_axis"),
+                related_refs: vec![candidate.related_ref.clone()],
+                expected: format!(
+                    "the Main Plot Value Axis equals the Spine Axis '{}'",
+                    spine_axis.trim()
+                ),
+                actual: candidate
+                    .value_axis
+                    .as_deref()
+                    .map(|axis| format!("'{axis}'"))
+                    .unwrap_or_else(|| "no value_axis".to_string()),
+                repair_hint: "Set the Main Plot's value_axis to the accepted series Story \
+                              Spine's Spine Axis (surrounding whitespace is ignored)."
+                    .to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn validate_stage_input_in_conn(
@@ -3595,6 +3809,8 @@ fn validate_stage_input_in_conn_excluding(
         &mut findings,
         emit_rotation_or_pacing,
     );
+
+    validate_mckee_plot_lines(conn, input, &s.scope, &mut findings)?;
 
     Ok(findings)
 }

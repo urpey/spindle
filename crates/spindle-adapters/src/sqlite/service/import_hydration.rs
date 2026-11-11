@@ -1113,6 +1113,9 @@ impl SqliteSpindleService {
                         convergence_points: Vec::new(),
                         connected_conflict_ids: Vec::new(),
                         connected_theme_ids: Vec::new(),
+                        value_axis: None,
+                        subplot_job: None,
+                        is_main_plot: false,
                     })
                     .await?;
                 created_plot_lines += 1;
