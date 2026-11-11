@@ -1,5 +1,6 @@
 //! Initial-planning contracts. These never authorize in-run amendments.
 use crate::character_design::CharacterDesignView;
+use crate::charge::Charge;
 use crate::models::*;
 use crate::plot_line::SubplotJob;
 use crate::story_spine::{ControllingIdea, StorySpine, StorySpineEnding};
@@ -169,6 +170,33 @@ pub struct PlannedIntensity {
     pub note: Option<String>,
 }
 
+/// One Act in the ordered Act list carried by a writing-level schedule.
+///
+/// An Act is planning intent (ADR 0006), never a story record. It names the
+/// reserved place where a later scene batch must land its climax, the Charge the
+/// Spine Axis holds after that climax, and the part of the Central Question the
+/// Act answers. The entries are additive schedule metadata; existing artifacts
+/// without `acts` deserialize and serialize exactly as before.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PlannedAct {
+    /// 1-based position in the Act list. The final Act is the highest order.
+    #[serde(default)]
+    pub order: i32,
+    /// The climax scene placeholder this Act reserves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub climax: Option<PlanningStoryPlacement>,
+    /// The Charge the Spine Axis holds after this Act's climax.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charge: Option<Charge>,
+    /// The part of the Central Question this Act answers.
+    #[serde(default)]
+    pub central_question_part: String,
+    /// True only on the final Act, whose climax answers the Central Question.
+    #[serde(default)]
+    pub answers_central_question: bool,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PlanningSchedule {
@@ -178,6 +206,10 @@ pub struct PlanningSchedule {
     pub pov_plan: Vec<PlannedPov>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub intensity_targets: Vec<PlannedIntensity>,
+    /// Ordered Act list for the series arc or book, when the level plans one.
+    /// Empty for levels that do not shape Acts and for existing artifacts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acts: Vec<PlannedAct>,
 }
 
 impl PlanningSchedule {
@@ -185,6 +217,7 @@ impl PlanningSchedule {
         self.promise_events.is_empty()
             && self.pov_plan.is_empty()
             && self.intensity_targets.is_empty()
+            && self.acts.is_empty()
     }
 }
 
@@ -1994,6 +2027,13 @@ mod tests {
         rejects_extra::<PlannedIntensity>(
             json!({"book_number":1,"chapter_number":1,"target_intensity":0.5}),
         );
+        rejects_extra::<PlannedAct>(json!({
+            "order":1,
+            "climax":{"book_number":1,"chapter_number":1,"scene_order":2},
+            "charge":{"sign":"negative","depth":"contrary"},
+            "central_question_part":"The lie surfaces",
+            "answers_central_question":false
+        }));
         rejects_extra::<PlanningSchedule>(json!({}));
         rejects_extra::<PlanningAuthorQuestion>(json!({"id":"q1","question":"Which tone?"}));
         rejects_extra::<PlanningArtifactV1>(json!({

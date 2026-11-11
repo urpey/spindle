@@ -529,11 +529,66 @@ impl SqliteSpindleService {
         })
     }
 
+    /// Create or replace a book's pacing curve.
+    ///
+    /// On a McKee-structured project `act_breakpoints` are derived from the
+    /// accepted Act list instead of being authored: a non-empty map is refused
+    /// with a repair hint, and an empty map is filled from the Act list before
+    /// the row is written. Non-McKee projects keep the authored map byte for
+    /// byte.
     pub async fn create_pacing_curve(
         &self,
         input: CreatePacingCurveInput,
     ) -> Result<CreatePacingCurveOutput> {
-        self.repository.get_project(&input.project_id).await?;
+        self.create_pacing_curve_inner(input, None).await
+    }
+
+    /// Apply path helper: the planning batch knows the Act list this artifact
+    /// would leave behind, including its own schedule, before the proposal is
+    /// marked applied. The direct tool path passes `None` and reads the
+    /// accepted Act list from the repository instead.
+    pub(crate) async fn create_pacing_curve_with_acts(
+        &self,
+        input: CreatePacingCurveInput,
+        acts: &[spindle_core::planning::PlannedAct],
+    ) -> Result<CreatePacingCurveOutput> {
+        self.create_pacing_curve_inner(input, Some(acts.to_vec()))
+            .await
+    }
+
+    async fn create_pacing_curve_inner(
+        &self,
+        mut input: CreatePacingCurveInput,
+        acts: Option<Vec<spindle_core::planning::PlannedAct>>,
+    ) -> Result<CreatePacingCurveOutput> {
+        let project = self.repository.get_project(&input.project_id).await?;
+        if project.mckee_structured {
+            anyhow::ensure!(
+                input.act_breakpoints.is_empty(),
+                "act_breakpoints is derived from the Act list for McKee projects; omit it \
+                 (received keys: {})",
+                input
+                    .act_breakpoints
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let acts = match acts {
+                Some(acts) => acts,
+                None => {
+                    let branch_id = self
+                        .repository
+                        .active_branch_id_public(&input.project_id)
+                        .await?;
+                    self.repository
+                        .accepted_planning_acts(&input.project_id, &branch_id)
+                        .await?
+                }
+            };
+            input.act_breakpoints =
+                spindle_core::acts::derive_act_breakpoints(&acts, input.book_number);
+        }
         let curve = self.repository.create_pacing_curve(&input).await?;
         Ok(CreatePacingCurveOutput {
             pacing_curve_id: curve.id,

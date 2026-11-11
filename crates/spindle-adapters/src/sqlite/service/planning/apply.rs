@@ -499,7 +499,7 @@ impl SqliteSpindleService {
             .planning_followup_states(p.id.clone())
             .await?;
         let (output, ids, root) = self
-            .dispatch_planning_operation(item, &s.scope, descriptor.1)
+            .dispatch_planning_operation(item, &s.scope, descriptor.1, &p.artifact.schedule)
             .await?;
         let receipt = PlanningOperationReceipt {
             proposal_id: p.id.clone(),
@@ -525,6 +525,7 @@ impl SqliteSpindleService {
         item: &PlanningOperationItem,
         scope: &Option<PlanningScope>,
         input: Value,
+        schedule: &PlanningSchedule,
     ) -> Result<(
         PlanningAppliedOutput,
         BTreeMap<String, String>,
@@ -629,12 +630,25 @@ impl SqliteSpindleService {
                 CreatePacingConfig,
                 pacing_config_id
             ),
-            CreatePacingCurve(_) => invoke!(
-                create_pacing_curve,
-                CreatePacingCurveInput,
-                CreatePacingCurve,
-                pacing_curve_id
-            ),
+            CreatePacingCurve(_) => {
+                let input: CreatePacingCurveInput = serde_json::from_value(input)?;
+                // The proposal is not `applied` yet, so the accepted-Act read
+                // would miss this artifact's own Act list. Pass the list this
+                // batch would leave behind, including the artifact schedule.
+                let acts = match scope {
+                    Some(scope) => {
+                        let accepted = self
+                            .repository
+                            .accepted_planning_acts(&scope.project_id, &scope.branch_id)
+                            .await?;
+                        spindle_core::acts::merge_planned_acts(&accepted, &schedule.acts)
+                    }
+                    None => schedule.acts.clone(),
+                };
+                let out = self.create_pacing_curve_with_acts(input, &acts).await?;
+                ids.insert(item.output_ref.clone(), out.pacing_curve_id.clone());
+                PlanningAppliedOutput::CreatePacingCurve(Box::new(out))
+            }
             SetArcPacingConstraints(_) => invoke!(
                 set_arc_pacing_constraints,
                 SetArcPacingConstraintsInput,
