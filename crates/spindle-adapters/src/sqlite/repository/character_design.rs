@@ -173,6 +173,36 @@ impl Repository {
             MIN_CHARACTER_DESIGN_CONTRADICTIONS,
             MAX_CHARACTER_DESIGN_CONTRADICTIONS
         );
+        // Readable preflight before the savepoint: an absent character or one
+        // outside the session branch should surface its own message instead of
+        // the pool's generic SQL wrapper. The write closure re-checks inside the
+        // transaction so a concurrent branch move cannot slip through.
+        if let Some(expected_branch) = input.branch_id.as_deref() {
+            let character = self
+                .get_character(&input.character_id)
+                .await
+                .with_context(|| {
+                    format!(
+                        "character design character {} not found",
+                        input.character_id
+                    )
+                })?;
+            anyhow::ensure!(
+                character.project_id == input.project_id,
+                "character {} does not belong to project {}",
+                input.character_id,
+                input.project_id
+            );
+            let lineage = self
+                .resolve_branch_lineage(&input.project_id, expected_branch)
+                .await?;
+            anyhow::ensure!(
+                lineage.iter().any(|id| id == &character.branch_id),
+                "character {} is not visible on branch {expected_branch}; a Character Design \
+                 is written on the planning session's branch",
+                input.character_id
+            );
+        }
         let project_id = input.project_id.clone();
         let branch_id = input.branch_id.clone();
         let character_id = input.character_id.clone();

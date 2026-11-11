@@ -8999,8 +8999,8 @@ async fn character_design_pins_the_session_branch_and_rejects_foreign_characters
             behavior_cues: Vec::new(),
         })
         .await
-        .unwrap_err();
-    let error = format!("{error:#}");
+        .unwrap_err()
+        .to_string();
     assert!(
         error.contains("not visible on branch"),
         "the write must reject a character outside the session branch: {error}"
