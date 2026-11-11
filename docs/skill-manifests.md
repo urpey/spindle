@@ -10,7 +10,8 @@ not automatically enable that specialist or union its tools into the entry skill
 path under `references/`, trigger, direct tools, and supported profiles. Loading a
 reference requires both its tools and its owning core's dependency closure.
 The nested units are `spindle/setup`, `editor/style`,
-`story-structure/story-spine`, and the five `scene-writer` references
+`story-structure/story-spine`, `story-structure/character-design`, and the five
+`scene-writer` references
 (`scene-writer/authoring-runs`, `scene-writer/craft-and-voice`,
 `scene-writer/drafting-packets`, `scene-writer/offloaded-generation`, and
 `scene-writer/research-and-sources`); load them with
@@ -120,7 +121,7 @@ The edit loop:
 4. `curl -s localhost:4321/health` shows the content mode and any fallback.
 
 ```bash
-spindle-mcp skills check                       # skills check: 27 files OK
+spindle-mcp skills check                       # skills check: 28 files OK
 spindle-mcp skills check --json                # machine-readable problems
 spindle-mcp skills check --skills-dir /tmp/skills --references-dir references
 ```

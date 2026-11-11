@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn mine_scene_canon_tool_stages_deltas_end_to_end() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let create_project_args = serde_json::to_value(CreateProjectInput {
         name: "Mine MCP".to_string(),
@@ -75,7 +75,7 @@ async fn mine_scene_canon_tool_stages_deltas_end_to_end() {
 async fn canon_delta_ratify_round_trip_via_mcp() {
     // End-to-end over the MCP surface: stage via mine (sentinel), list the
     // queue, apply the one delta, and confirm the fact is real canon.
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let create_project_args = serde_json::to_value(CreateProjectInput {
         name: "Ratify MCP".to_string(),

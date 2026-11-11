@@ -268,6 +268,10 @@ pub struct StoredCharacterArcMilestone {
     /// the field) still deserialize. See `arc_milestone_audit`.
     #[serde(default)]
     pub reached_at: Option<StoredStoryPlacement>,
+    /// Planned change-or-reveal kind (V0059). serde-defaulted and skipped when
+    /// absent so legacy milestone JSON round-trips byte-compatibly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<core::ArcMilestoneKind>,
 }
 
 impl StoredCharacterArcMilestone {
@@ -278,6 +282,7 @@ impl StoredCharacterArcMilestone {
             description: self.description,
             unlocks: self.unlocks,
             reached_at: self.reached_at.map(StoredStoryPlacement::into_core),
+            kind: self.kind,
         }
     }
 }
@@ -290,6 +295,7 @@ impl From<core::CharacterArcMilestone> for StoredCharacterArcMilestone {
             description: value.description,
             unlocks: value.unlocks,
             reached_at: value.reached_at.map(StoredStoryPlacement::from),
+            kind: value.kind,
         }
     }
 }
@@ -512,6 +518,7 @@ mod v0022_backcompat_tests {
                 scene_order: Some(2),
                 note: None,
             }),
+            kind: None,
         };
         let core = stored.clone().into_core();
         let back = StoredCharacterArcMilestone::from(core);

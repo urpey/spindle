@@ -22,7 +22,7 @@ async fn invoke_json(router: &ToolRouter, name: &str, args: Value) -> Value {
 /// exactly two calls. Setup happens before selection.
 #[tokio::test(flavor = "current_thread")]
 async fn scene_loop_contract_uses_prepare_and_commit_only() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let project = invoke_json(
         &router,
         "create_project",
@@ -291,7 +291,7 @@ async fn install_run(router: &ToolRouter, project_id: &str, phase: &str) -> Stri
 
 #[tokio::test(flavor = "current_thread")]
 async fn commit_scene_advances_the_authoring_run_phase_only_on_success() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let project = invoke_json(
         &router,
         "create_project",
@@ -596,7 +596,7 @@ async fn commit_scene_advances_the_authoring_run_phase_only_on_success() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn commit_scene_replay_reconciles_a_pending_run_scene() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let project = invoke_json(
         &router,
         "create_project",

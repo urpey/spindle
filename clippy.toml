@@ -1,0 +1,6 @@
+# Test temp dirs must clean themselves up. /tmp on the dev host is RAM-backed
+# (tmpfs), and leaked per-test dirs once filled ~6GB of memory.
+disallowed-methods = [
+    { path = "tempfile::TempDir::keep", reason = "leaks the dir; return the TempDir to the caller and keep it alive instead" },
+    { path = "tempfile::TempDir::into_path", reason = "leaks the dir; return the TempDir to the caller and keep it alive instead" },
+]

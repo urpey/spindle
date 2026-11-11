@@ -1552,6 +1552,7 @@ async fn update_arc_milestone_patches_only_the_supplied_fields() {
                     description: "Mara questions the oath.".into(),
                     unlocks: vec!["inner monologue".into()],
                     reached_at: None,
+                    kind: None,
                 },
                 CharacterArcMilestone {
                     label: "open defiance".into(),
@@ -1564,6 +1565,7 @@ async fn update_arc_milestone_patches_only_the_supplied_fields() {
                     description: "Mara refuses the order.".into(),
                     unlocks: Vec::new(),
                     reached_at: None,
+                    kind: None,
                 },
             ],
             thematic_purpose: "Claim agency.".into(),
@@ -1736,4 +1738,215 @@ async fn arc_milestone_reached_at_settable_via_update_entity() {
         "after setting reached_at the milestone must be silent: {:?}",
         after.issues
     );
+}
+
+/// Arc milestone `kind` (V0059) is additive: it is stored and read back through
+/// create, targeted milestone updates and whole-array updates, while legacy
+/// milestone JSON without the field still deserializes.
+#[tokio::test]
+async fn arc_milestone_kind_round_trips_and_legacy_json_still_deserializes() {
+    use spindle_core::models::{
+        ArcMilestoneKind, CharacterArcMilestone, CharacterEmotionalProfileData,
+        CharacterVoiceProfileData, CreateCharacterArcInput, CreateCharacterInput, GetEntityInput,
+        StoryPlacement, UpdateArcMilestoneInput, UpdateCharacterArcInput,
+    };
+    use spindle_core::subject::SubjectTable;
+
+    let (_tmp, svc) = fresh_service().await;
+    let project = svc
+        .create_project(CreateProjectInput {
+            name: "Milestone kinds".into(),
+            project_type: "novel".into(),
+            genre: "fantasy".into(),
+            reader_contract: ReaderContract {
+                promise: "Growth and revelation stay distinct".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    let character = svc
+        .create_character(CreateCharacterInput {
+            aliases: Vec::new(),
+            project_id: project.project_id.clone(),
+            name: "Mara Oathkeeper".into(),
+            summary: "Warden of the Ash Gate.".into(),
+            role: "protagonist".into(),
+            realm: None,
+            voice_profile: CharacterVoiceProfileData::default(),
+            emotional_profile: CharacterEmotionalProfileData::default(),
+            initial_state: None,
+        })
+        .await
+        .unwrap();
+    let arc = svc
+        .create_character_arc(CreateCharacterArcInput {
+            project_id: project.project_id.clone(),
+            character_id: character.character_id.clone(),
+            arc_type: "belief_shift".into(),
+            starting_state: "obeys".into(),
+            ending_state: "defies".into(),
+            milestones: vec![
+                CharacterArcMilestone {
+                    label: "first doubt".into(),
+                    placement: Some(StoryPlacement {
+                        book_number: 1,
+                        chapter_number: 10,
+                        scene_order: None,
+                        note: None,
+                    }),
+                    description: "Mara questions the oath.".into(),
+                    unlocks: Vec::new(),
+                    reached_at: None,
+                    kind: Some(ArcMilestoneKind::Change),
+                },
+                CharacterArcMilestone {
+                    label: "the true name".into(),
+                    placement: Some(StoryPlacement {
+                        book_number: 1,
+                        chapter_number: 14,
+                        scene_order: None,
+                        note: None,
+                    }),
+                    description: "The gate answers to her real name.".into(),
+                    unlocks: Vec::new(),
+                    reached_at: None,
+                    kind: Some(ArcMilestoneKind::Reveal),
+                },
+                CharacterArcMilestone {
+                    label: "legacy milestone".into(),
+                    placement: None,
+                    description: "Written before kinds existed.".into(),
+                    unlocks: Vec::new(),
+                    reached_at: None,
+                    kind: None,
+                },
+            ],
+            thematic_purpose: "Claim agency.".into(),
+            connected_theme_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let read_arc = |svc: &SqliteSpindleService| {
+        let repository = svc.repository.clone();
+        let arc_id = arc.character_arc_id.clone();
+        async move { repository.get_character_arc(&arc_id).await.unwrap() }
+    };
+    let stored = read_arc(&svc).await;
+    assert_eq!(stored.milestones[0].kind, Some(ArcMilestoneKind::Change));
+    assert_eq!(stored.milestones[1].kind, Some(ArcMilestoneKind::Reveal));
+    assert_eq!(stored.milestones[2].kind, None);
+
+    // A targeted milestone patch preserves the stored kind.
+    let patched = svc
+        .update_arc_milestone(UpdateArcMilestoneInput {
+            arc_id: arc.character_arc_id.clone(),
+            label: "first doubt".into(),
+            placement: Some(StoryPlacement {
+                book_number: 1,
+                chapter_number: 12,
+                scene_order: None,
+                note: None,
+            }),
+            reached_at: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(patched.milestone.kind, Some(ArcMilestoneKind::Change));
+    assert_eq!(
+        patched
+            .milestone
+            .placement
+            .as_ref()
+            .map(|p| p.chapter_number),
+        Some(12)
+    );
+    assert_eq!(
+        read_arc(&svc).await.milestones[0].kind,
+        Some(ArcMilestoneKind::Change)
+    );
+
+    // The whole-array update path keeps kinds too.
+    svc.update_character_arc(UpdateCharacterArcInput {
+        character_arc_id: arc.character_arc_id.clone(),
+        arc_type: None,
+        starting_state: None,
+        ending_state: None,
+        thematic_purpose: None,
+        connected_theme_ids: None,
+        status: None,
+        milestones: Some(vec![CharacterArcMilestone {
+            label: "first doubt".into(),
+            placement: Some(StoryPlacement {
+                book_number: 1,
+                chapter_number: 12,
+                scene_order: None,
+                note: None,
+            }),
+            description: "Mara questions the oath.".into(),
+            unlocks: Vec::new(),
+            reached_at: None,
+            kind: Some(ArcMilestoneKind::Reveal),
+        }]),
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        read_arc(&svc).await.milestones[0].kind,
+        Some(ArcMilestoneKind::Reveal)
+    );
+
+    // The open update_entity path stores the same milestone JSON.
+    svc.update_entity(UpdateEntityInput {
+        entity_type: "character_arc".into(),
+        entity_id: arc.character_arc_id.clone(),
+        changes: serde_json::json!({
+            "milestones": [{
+                "label": "first doubt",
+                "description": "Mara questions the oath.",
+                "unlocks": [],
+                "kind": "change"
+            }]
+        }),
+        allow_rename: None,
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        read_arc(&svc).await.milestones[0].kind,
+        Some(ArcMilestoneKind::Change)
+    );
+
+    // get_entity serializes the kind additively; absent kinds are omitted.
+    let entity = svc
+        .get_entity(GetEntityInput {
+            project_id: project.project_id.clone(),
+            table: SubjectTable::CharacterArc,
+            entity_id: arc.character_arc_id.clone(),
+            branch_id: None,
+        })
+        .await
+        .unwrap();
+    let details = serde_json::to_value(&entity).unwrap();
+    assert_eq!(details["kind_specific"]["kind"], "character_arc");
+    let milestones = details["kind_specific"]["details"]["milestones"]
+        .as_array()
+        .expect("arc milestones read back through get_entity");
+    assert_eq!(milestones[0]["kind"], "change");
+    assert!(
+        milestones[0].as_object().unwrap().get("kind").is_some(),
+        "an explicit kind must serialize"
+    );
+
+    // A legacy milestone JSON blob (no kind) deserializes unchanged.
+    let legacy: CharacterArcMilestone = serde_json::from_value(serde_json::json!({
+        "label": "old",
+        "description": "pre-V0059",
+        "unlocks": []
+    }))
+    .unwrap();
+    assert_eq!(legacy.kind, None);
+    assert!(serde_json::to_value(&legacy).unwrap().get("kind").is_none());
 }

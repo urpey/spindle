@@ -12,13 +12,13 @@ fn structured_json(result: CallToolResult) -> Value {
     result.structured_content.expect("structured content")
 }
 
-async fn router() -> ToolRouter {
+async fn router() -> (ToolRouter, tempfile::TempDir) {
     let temp = tempdir().expect("temp dir");
     let db = SqlitePool::open(&temp.path().join("router.db"))
         .await
         .expect("db init");
-    let data_dir = temp.keep();
-    ToolRouter::with_tool_profile_and_serialization(
+    let data_dir = temp.path().to_path_buf();
+    let router = ToolRouter::with_tool_profile_and_serialization(
         SpindleService::new(SpindleRepository::with_model_router(
             db,
             data_dir,
@@ -26,7 +26,8 @@ async fn router() -> ToolRouter {
         )),
         None,
         Arc::new(ToolSerializationState::default()),
-    )
+    );
+    (router, temp)
 }
 
 /// A fresh repository + a persisted `active` authoring run, for driving the

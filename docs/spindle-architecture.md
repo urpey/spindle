@@ -182,6 +182,17 @@ facts on the target branch. Voice profiles are keyed to their owning character,
 so inherited characters' profiles are read-only until branch-local profile storage
 is available.
 
+`export_bible` and save-point snapshots are **full operator backups**, not
+reader-facing artifacts: they include the project's tables (project- and
+branch-scoped rows), so secret canonical-fact text (including the Character
+Design hidden layer and unconscious desire) is present in the exported
+`canonical_fact` rows. That is pre-existing backup behaviour and is why those
+files are written under the data directory, never into reader exports; the
+model-facing read tools still withhold the same facts. The payload now also
+carries `character_design` (branch-scoped, restored with the branch) and
+`story_spine` (project-level, export-only: a branch rewind never deletes the
+accepted spine).
+
 ## Drafting packet foundation
 
 `spindle-core/src/drafting.rs` owns `DraftingPacketV1`, the scene card, source
@@ -798,6 +809,7 @@ resume unchanged). The continuity and editorial-loop migrations:
 | V0056 | provider/dimension-aware embedding index generations: variable-length `search_embedding`, generation registry, per-project active/previous state, legacy 64-dimension preservation |
 | V0057 | McKee project marker (`project.mckee_structured`, set only by planning `CreateProject`) and project-level `story_spine` (one series spine, optional per-book sub-spines) |
 | V0058 | McKee Main Plot / Subplot structure on `plot_line`: nullable `value_axis`, closed-set `subplot_job` (contradict / resonate / set_up / complicate) and the `main_plot` flag (additive: unmarked rows keep NULL / 0, but a McKee project's pre-existing plot lines must be completed through `update_entity` before the next Series-Arc/Book acceptance) |
+| V0059 | McKee Character Design: one `character_design` row per character (2–5 contradictions, public / personal / private layers, conscious desire, pressure on the protagonist, behaviour cues) with `hidden_self_fact_id` / `unconscious_desire_fact_id` pointing at secret canonical facts rather than duplicating those texts. Additive: existing projects keep no rows |
 
 ## Where to make changes
 
@@ -806,6 +818,9 @@ Use this map when you need to patch behavior quickly.
 - Add or modify tool DTOs: `crates/spindle-core/src/models.rs`.
 - Add or modify Story Spine contracts: `crates/spindle-core/src/story_spine.rs`
   (records) and `crates/spindle-core/src/charge.rs` (typed Charge).
+- Add or modify Character Design contracts: `crates/spindle-core/src/character_design.rs`
+  (persisted record, full planning view, redacted non-planning view and the
+  secret predicate namespace).
 - Add or modify Main Plot / Subplot vocabulary: `crates/spindle-core/src/plot_line.rs`
   (closed `SubplotJob` and Value Axis comparison).
 - Add or modify continuity and validator-facing DTOs:
@@ -974,6 +989,40 @@ export shape and keep NULL / 0. That is not an exemption: a McKee project's
 pre-existing plot lines must be completed through `update_entity` (`value_axis`,
 `subplot_job`, `is_main_plot`) before the next Series-Arc/Book acceptance, or
 the gate blocks.
+
+A Cast & World proposal on a McKee project may also carry a typed
+`CreateCharacterDesign` operation (`spindle_core::character_design`): 2–5
+contradictions, the four layers of self, conscious and unconscious desire, the
+pressure the character puts on the protagonist, and planner-written behaviour
+cues. Acceptance writes one `character_design` row per character (unique by
+`character_id`, V0059). "Major character" is interpreted structurally: every
+character the artifact introduces through `create_character` must have exactly
+one design in that same artifact. Missing, fewer than 2 or more than 5
+contradictions, and duplicate designs are blocking findings recorded on the
+proposal (`character_design_*`) that refuse acceptance; characters added
+outside planning are not retro-gated. Non-McKee projects are exempt, and
+staging a design for one is rejected.
+
+The hidden layer and the unconscious desire are not plain columns: they are
+registered as secret canonical facts (`secret = 1`, one `knowledge_fact` row
+placing the character in the circle of trust, `subject_table = "character"`)
+and the design row keeps only `hidden_self_fact_id` /
+`unconscious_desire_fact_id`. The facts use the reserved
+`character_design.hidden_self` / `character_design.unconscious_desire`
+predicates. Planning reads are full reads: `planning_status.character_designs`
+resolves those fact texts. Every non-planning read is redacted: subject
+snapshots and scene context strip the design facts (they never get a
+`[SECRETS IN PLAY]` envelope because the writer-facing rendering is the
+behaviour cues), and `get_character_snapshot` exposes only the
+`CharacterDesignRedactedView` (contradictions, public self, conscious desire,
+pressure, behaviour cues; the personal and private selves are not part of the
+writer-facing slice). Secret fact ids, values and concealment notes never appear
+outside planning: `check_consistency`'s deterministic and deep secret-leak tiers
+drop the author-only design facts through the same
+`format::is_planning_only_secret_fact` helper as context assembly and subject
+snapshots, so no finding echoes their text, predicate or fact id. Arc milestones
+gain an optional `kind` (`change` / `reveal`); absent kinds and legacy milestone
+JSON serialize exactly as before.
 
 All gates remain human. Delegation activation, route generation, manifest/run
 validation and agent entry arrive in subsequent phases. See

@@ -706,6 +706,7 @@ impl Repository {
                         | "scene_beat_annotation"
                         | "canonical_fact"
                         | "scene_version"
+                        | "character_design"
                         | "character_state"
                         | "future_knowledge"
                         | "timeline_event"

@@ -28,6 +28,13 @@ fn allowed_operations_for_level(
             &["update_reader_contract", "create_story_spine"]
         }
         (PlanningLevel::Contract, true) => &["update_reader_contract"],
+        (PlanningLevel::CastWorld, _) if mckee_structured => &[
+            "create_character",
+            "create_character_design",
+            "create_location",
+            "create_world_rule",
+            "create_relationship",
+        ],
         (PlanningLevel::CastWorld, _) => &[
             "create_character",
             "create_location",

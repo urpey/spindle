@@ -450,6 +450,7 @@ mod canon_events;
 mod canon_mining;
 mod canon_policy;
 mod canon_ratification;
+mod character_design;
 mod consistency;
 mod context;
 mod drafting;

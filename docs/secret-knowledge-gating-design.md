@@ -126,6 +126,12 @@ strings, and `previous_scene_tail` excerpts are exempt (they are prose the reade
 The filter lives in ONE place (a `SecretVisibility` resolver the assemblers call), not scattered
 per-section.
 
+Character Design's hidden layer and unconscious desire are a second, stricter class: reserved
+`character_design.*` predicates that are author-only planning knowledge. They never envelope;
+every non-planning carrier strips them through one predicate helper
+(`format::is_planning_only_secret_fact`), including both `check_consistency` secret-leak tiers, so
+a consistency finding never echoes their text, predicate or fact id.
+
 ### 2.3 Reveals (circle expansion)
 
 A reveal is not a new mechanism — it is `record_knowledge` with `secret_of_fact_id` set and

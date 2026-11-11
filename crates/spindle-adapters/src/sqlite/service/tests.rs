@@ -1603,6 +1603,7 @@ async fn seed_arc_with_milestone(
                 description: "faces the truth".into(),
                 unlocks: Vec::new(),
                 reached_at,
+                kind: None,
             }],
             thematic_purpose: "growth".into(),
             connected_theme_ids: Vec::new(),

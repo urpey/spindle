@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test(flavor = "current_thread")]
 async fn tool_schemas_contain_no_gemini_incompatible_keywords() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let tools = router.list_tools();
     let forbidden = ["$ref", "$defs", "definitions", "$schema", "$id"];
     for tool in &tools {
@@ -24,7 +24,7 @@ async fn tool_schemas_contain_no_gemini_incompatible_keywords() {
 /// enum entry, input or output, anywhere in the tree.
 #[tokio::test]
 async fn served_tool_schemas_carry_no_null_enum_values() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let tools = router.list_tools();
     assert!(!tools.is_empty(), "expected registered tools");
 
@@ -86,7 +86,7 @@ fn strip_null_enum_values_drops_nulls_and_empty_enums() {
 /// reintroduces schemars' non-standard formats at the serving seam.
 #[tokio::test(flavor = "current_thread")]
 async fn served_tool_schemas_carry_no_nonstandard_numeric_formats() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let tools = router.list_tools();
     assert!(!tools.is_empty(), "expected registered tools");
 
@@ -126,7 +126,7 @@ async fn served_tool_schemas_carry_no_nonstandard_numeric_formats() {
 /// while the surrounding structure (the $def, its properties) survives intact.
 #[tokio::test(flavor = "current_thread")]
 async fn import_hydrate_bible_output_schema_is_format_clean() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let tools = router.list_tools();
     let tool = tools
         .iter()
@@ -391,7 +391,7 @@ fn parse_arguments_keeps_mixed_type_update_entity_changes_object() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn tool_schemas_relax_session_default_project_and_branch_fields() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let tools = router.list_tools();
     let required_fields = |tool: &Tool| {
         tool.input_schema

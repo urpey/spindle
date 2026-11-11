@@ -3,8 +3,8 @@
   "compatibility": {
     "default": {
       "tools": 181,
-      "input_bytes": 172211,
-      "full_bytes": 762666
+      "input_bytes": 172719,
+      "full_bytes": 774744
     },
     "new-book": {
       "tools": 14,
@@ -14,32 +14,32 @@
     "minimal": {
       "tools": 22,
       "input_bytes": 30863,
-      "full_bytes": 219363
+      "full_bytes": 225545
     },
     "write": {
       "tools": 122,
-      "input_bytes": 116328,
-      "full_bytes": 485066
+      "input_bytes": 116582,
+      "full_bytes": 492344
     },
     "import": {
       "tools": 40,
       "input_bytes": 21665,
-      "full_bytes": 232920
+      "full_bytes": 235446
     },
     "authoring": {
       "tools": 78,
-      "input_bytes": 89097,
-      "full_bytes": 352586
+      "input_bytes": 89351,
+      "full_bytes": 359864
     },
     "planning": {
       "tools": 38,
-      "input_bytes": 33362,
-      "full_bytes": 64756
+      "input_bytes": 33616,
+      "full_bytes": 65010
     },
     "release": {
       "tools": 62,
-      "input_bytes": 45943,
-      "full_bytes": 91393
+      "input_bytes": 46197,
+      "full_bytes": 91647
     },
     "research": {
       "tools": 15,
@@ -78,13 +78,13 @@
     },
     "worldbuilding": {
       "tools": 50,
-      "input_bytes": 48923,
-      "full_bytes": 84608
+      "input_bytes": 49431,
+      "full_bytes": 85116
     },
     "legacy-all": {
       "tools": 181,
-      "input_bytes": 172211,
-      "full_bytes": 762666
+      "input_bytes": 172719,
+      "full_bytes": 774744
     },
     "mckee": {
       "tools": 11,

@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn compile_manuscript_tool_reads_chapters_and_flags_undrafted_scenes() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let create_project_args = serde_json::to_value(CreateProjectInput {
         name: "Compile MCP".to_string(),
@@ -101,7 +101,7 @@ async fn compile_manuscript_tool_reads_chapters_and_flags_undrafted_scenes() {
 
 #[tokio::test]
 async fn export_recap_tool_folds_summary_end_to_end() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let create_project_args = serde_json::to_value(CreateProjectInput {
         name: "Recap MCP".to_string(),
@@ -176,7 +176,7 @@ async fn export_series_bible_tool_lists_character_end_to_end() {
         CharacterEmotionalProfileData, CharacterStatePatch, CharacterVoiceProfileData,
         CreateCharacterInput,
     };
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let create_project_args = serde_json::to_value(CreateProjectInput {
         name: "Bible MCP".to_string(),

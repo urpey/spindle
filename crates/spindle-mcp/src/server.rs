@@ -334,23 +334,23 @@ mod tests {
         );
     }
 
-    async fn server() -> SpindleMcpServer {
+    async fn server() -> (SpindleMcpServer, tempfile::TempDir) {
         let temp = tempdir().expect("temp dir");
         let db = SqlitePool::open(&temp.path().join("server.db"))
             .await
             .expect("db init");
-        let data_dir = temp.keep();
+        let data_dir = temp.path().to_path_buf();
         let service = SpindleService::new(SpindleRepository::with_model_router(
             db,
             data_dir,
             ModelRouter::local_only(),
         ));
-        SpindleMcpServer::with_tool_profile(service, None)
+        (SpindleMcpServer::with_tool_profile(service, None), temp)
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn initialize_info_matches_current_public_surface() {
-        let server = server().await;
+        let (server, _tmp_guard) = server().await;
         let info = server.get_info();
 
         assert_eq!(info.server_info.name, "spindle");

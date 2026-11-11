@@ -25,6 +25,10 @@ description: 麥基（McKee）故事結構的核心工作流：先定故事脊�
 
 Series 只有一個 spine；每本書可以有自己的一個 sub-spine，回答系列問題的一部分，而不是假裝回答全部。Theme 是次要想法，仍保持獨立：脊柱可以引用 Theme，但不能取代 Theme 清單。
 
+## 角色設計（Character Design）
+
+Cast & World 層為每個角色建立一份 Character Design：2–5 個會互相拉扯的矛盾、四層自我（public / personal / private / hidden）、自覺與不自覺慾望、對主角的壓力，以及可演出的行為線索。隱藏層與不自覺慾望是作者層祕密，只有規劃讀取看得到全文；writer 只拿到行為線索。要設計、審查或修復 `character_design_missing` 之前，載入 `story-structure/character-design`。
+
 ## 主線與副線（Main Plot / Subplot）
 
 Series-Arc 層同時決定每條 plot line 的結構角色。McKee 專案在 Series-Arc 與 Book 接受時會檢查：

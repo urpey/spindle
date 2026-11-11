@@ -146,7 +146,7 @@ async fn skill_profile_alignment() {
         });
     }
     let mut owned = BTreeSet::new();
-    let mut router = router().await;
+    let (mut router, _tmp_guard) = router().await;
     for skill in skills {
         let tools = closure(skill, skills, &mut BTreeSet::new());
         for (name, markdown, required, profiles) in std::iter::once((

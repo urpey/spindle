@@ -2103,6 +2103,7 @@ async fn get_entity_character_arc_projects_milestones() {
                 description: "Mara questions the oath.".into(),
                 unlocks: vec!["inner monologue".into()],
                 reached_at: None,
+                kind: None,
             }],
             thematic_purpose: "Claim agency.".into(),
             connected_theme_ids: Vec::new(),
@@ -4423,6 +4424,118 @@ mod secret_leak_audit {
 
         let hits = run_secret_leak(&svc, &project_id).await;
         assert!(hits.is_empty(), "no secret facts → silent: {hits:?}");
+    }
+
+    /// Character Design secrets are author-only planning knowledge. A leaked
+    /// literal in dialogue must not make `check_consistency` echo the hidden or
+    /// unconscious text, the reserved predicate, the fact id or the
+    /// concealment note.
+    #[tokio::test]
+    async fn character_design_secrets_never_reach_consistency_findings() {
+        use spindle_core::character_design::CreateCharacterDesignInput;
+
+        let (_tmp, svc) = fresh_service().await;
+        let proj = svc
+            .create_mckee_project(CreateProjectInput {
+                name: "DesignGate".into(),
+                project_type: "novel".into(),
+                genre: "fantasy".into(),
+                reader_contract: ReaderContract {
+                    promise: "Author-only depth.".into(),
+                    style_notes: Vec::new(),
+                    boundaries: Vec::new(),
+                },
+            })
+            .await
+            .unwrap();
+        let project_id = proj.project_id;
+        let ada = make_character(&svc, &project_id, "Ada").await;
+        let bran = make_character(&svc, &project_id, "Bran").await;
+        let design = svc
+            .create_character_design(CreateCharacterDesignInput {
+                project_id: project_id.clone(),
+                branch_id: Some(proj.branch_id.clone()),
+                character_id: ada.clone(),
+                contradictions: vec![
+                    "generous with strangers".into(),
+                    "ruthless with family".into(),
+                ],
+                public_self: "Harbor archivist".into(),
+                personal_self: "Raises her nephew".into(),
+                private_self: "Fears the tide".into(),
+                hidden_self: "She forged the harbor manifest".into(),
+                conscious_desire: "Clear her family name".into(),
+                unconscious_desire: "To be forgiven for the forgery".into(),
+                pressure_on_protagonist: "Withholds the chart".into(),
+                behavior_cues: vec!["straightens the chart corners".into()],
+            })
+            .await
+            .unwrap();
+        let stored = svc
+            .repository
+            .get_character_design_for_character(&project_id, &ada)
+            .await
+            .unwrap()
+            .expect("persisted design");
+        assert_eq!(stored.character_design_id, design.character_design_id);
+
+        // Bran is out of the design secret's circle and speaks both secret
+        // texts verbatim, the strongest deterministic leak trigger.
+        save_dialogue_scene(
+            &svc,
+            &project_id,
+            1,
+            1,
+            "\"You forged the harbor manifest,\" Bran said. \"You want to be forgiven for the forgery.\"",
+        )
+        .await;
+
+        let report = svc
+            .check_consistency(CheckConsistencyInput {
+                deep_scan_offset: None,
+                project_id: project_id.clone(),
+                scope: ConsistencyScopeInput::full(),
+                checks: Vec::new(),
+                severity_filter: Vec::new(),
+                deep_check: Some(false),
+                subjects: Vec::new(),
+                format: None,
+                budget_tokens: None,
+            })
+            .await
+            .unwrap();
+        let rendered = serde_json::to_string(&report).unwrap();
+        for forbidden in [
+            "She forged the harbor manifest",
+            "To be forgiven for the forgery",
+            "character_design.hidden_self",
+            "character_design.unconscious_desire",
+            stored.hidden_self_fact_id.as_str(),
+            stored.unconscious_desire_fact_id.as_str(),
+            "Author-only Character Design layer",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "check_consistency echoed author-only design content {forbidden:?}: {rendered}"
+            );
+        }
+        assert!(
+            report
+                .issues
+                .iter()
+                .all(|issue| issue.check_type != "secret_leak"),
+            "the author-only design facts are not draftable secrets: {:?}",
+            report.issues
+        );
+        // The behaviour cues are the writer-facing rendering; the secret
+        // canonical facts still exist for planning reads.
+        assert!(
+            report
+                .issues
+                .iter()
+                .all(|issue| !issue.message.contains(&bran)),
+            "no finding may blame a character for an author-only design secret"
+        );
     }
 }
 

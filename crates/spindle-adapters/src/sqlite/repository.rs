@@ -135,6 +135,7 @@ pub(crate) const BRANCH_RESTORE_TABLES: &[&str] = &[
     "scene_source_link",
     "character_voice_profile",
     "character_emotional_profile",
+    "character_design",
     "character_state",
     "future_knowledge",
     "timeline_event",
@@ -753,6 +754,7 @@ mod canon_events;
 mod canon_policy;
 mod memory;
 pub(crate) use canon_policy::{legacy_claim, legacy_snapshot_claim};
+mod character_design;
 mod characters;
 mod embedding_generations;
 mod entities;
@@ -3304,6 +3306,11 @@ fn batch_canonical_fact_summaries(
     Ok(batch
         .canonical_facts
         .iter()
+        // Character Design secrets are author-only: planning reads resolve the
+        // full text from their facts, and every non-planning read (including
+        // the scene context snapshot carrier) strips them instead of rendering
+        // a `[SECRETS IN PLAY]` envelope.
+        .filter(|fact| !crate::format::is_planning_only_secret_fact(fact))
         .filter(|fact| fact_matches_subject(fact, &needle))
         .filter(|fact| fact_at_or_before(fact, placement))
         .map(|fact| CanonicalFactSummary {
@@ -3341,6 +3348,16 @@ fn batch_knowledge_summaries(
         .id()
         .context("character subject id missing")?
         .to_string();
+    // Character Design secrets also grant their holder a knowledge row (the
+    // circle of trust). Those rows repeat the hidden text, so they must be
+    // dropped here too: the redacted design slice is the only non-planning
+    // rendering of a design.
+    let design_fact_ids: std::collections::BTreeSet<&str> = batch
+        .canonical_facts
+        .iter()
+        .filter(|fact| crate::format::is_planning_only_secret_fact(fact))
+        .map(|fact| fact.id.as_str())
+        .collect();
     Ok(batch
         .knowledge_facts
         .iter()
@@ -3350,6 +3367,11 @@ fn batch_knowledge_summaries(
                 .as_ref()
                 .map(|at| placement_at_or_after(placement, &at.clone().into_core()))
                 .unwrap_or(true)
+        })
+        .filter(|fact| {
+            fact.secret_of_fact_id
+                .as_deref()
+                .is_none_or(|fact_id| !design_fact_ids.contains(fact_id))
         })
         .map(|fact| KnowledgeFactSummary {
             fact: fact.fact.clone(),

@@ -229,6 +229,7 @@ async fn location_conflict_and_arc_updates_round_trip() {
                 description: "Tarek trusts an outsider.".to_string(),
                 unlocks: Vec::new(),
                 reached_at: None,
+                kind: None,
             }],
             thematic_purpose: "Trust is earned.".to_string(),
             connected_theme_ids: Vec::new(),
@@ -249,6 +250,7 @@ async fn location_conflict_and_arc_updates_round_trip() {
             description: "Tarek trusts an outsider.".to_string(),
             unlocks: vec!["Ferry plan".to_string()],
             reached_at: None,
+            kind: None,
         }]),
     })
     .await

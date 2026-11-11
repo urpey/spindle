@@ -148,7 +148,7 @@ async fn profile_token_budgets() {
         crate::tools::profile_names().len() + 1
     );
     assert_eq!(budgets.canonical.len(), 10);
-    let mut router = router().await;
+    let (mut router, _tmp_guard) = router().await;
     for (profile, budget) in &budgets.compatibility {
         router.tool_profile = (profile != "default").then(|| profile.clone());
         let tools: Vec<Value> = router
@@ -178,7 +178,7 @@ async fn tool_schema_lint() {
     let closed: BTreeMap<String, Vec<String>> =
         serde_json::from_str(include_str!("closed-fields.json")).unwrap();
     let mut report: BTreeMap<String, Vec<Issue>> = BTreeMap::new();
-    let mut router = router().await;
+    let (mut router, _tmp_guard) = router().await;
     let all: BTreeMap<_, _> = router
         .list_tools()
         .into_iter()
@@ -380,7 +380,7 @@ async fn closed_set_enum_values_round_trip_through_parsers() {
         }
     }
 
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     for (field, invalid) in [
         ("mode", "unsupported_mode"),
         ("mining_policy", "auto_accept"),
@@ -426,7 +426,7 @@ async fn http_profile_discovery_matches_registry_budgets() {
             self.0.abort();
         }
     }
-    let mut registry = router().await;
+    let (mut registry, _tmp_guard) = router().await;
     for (profile, budget) in budgets().compatibility {
         let selected = (profile != "default").then(|| profile.clone());
         registry.tool_profile = selected.clone();

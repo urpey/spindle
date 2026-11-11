@@ -631,6 +631,7 @@ impl SqliteSpindleService {
                 proposals: Vec::new(),
                 findings: Vec::new(),
                 story_spines: Vec::new(),
+                character_designs: Vec::new(),
                 readiness: None,
                 next_action: "No planning session exists yet. Call planning_begin with the author's premise to start one.".to_string(),
                 reconnect_hint: "Planning sessions are durable; call planning_status again after planning_begin.".to_string(),
@@ -650,6 +651,13 @@ impl SqliteSpindleService {
         let gate = Some(gate_for(&session, gate_level(&proposals)));
         let story_spines = match session.scope.as_ref() {
             Some(scope) => self.list_story_spines(&scope.project_id).await?,
+            None => Vec::new(),
+        };
+        // Planning reads are full reads: the hidden layer and unconscious
+        // desire texts are resolved from their secret canonical facts here and
+        // only here. Non-planning reads get `CharacterDesignRedactedView`.
+        let character_designs = match session.scope.as_ref() {
+            Some(scope) => self.list_character_design_views(&scope.project_id).await?,
             None => Vec::new(),
         };
 
@@ -710,6 +718,7 @@ impl SqliteSpindleService {
             proposals: proposal_summaries,
             findings,
             story_spines,
+            character_designs,
             readiness,
             next_action,
             reconnect_hint: reconnect_hint(&session),

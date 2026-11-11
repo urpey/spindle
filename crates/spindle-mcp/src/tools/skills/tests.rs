@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test(flavor = "current_thread")]
 async fn list_skills_returns_embedded_skills_and_references() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let result = router
         .call_tool("list_skills", None)
@@ -45,7 +45,7 @@ async fn list_skills_returns_embedded_skills_and_references() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn get_skill_returns_markdown_and_unknown_skill_errors() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let mut args = serde_json::Map::new();
     args.insert("name".to_string(), "scene-writer".into());
 
@@ -81,7 +81,7 @@ async fn get_skill_returns_markdown_and_unknown_skill_errors() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn get_reference_returns_markdown_and_unknown_reference_errors() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let mut args = serde_json::Map::new();
     args.insert("name".to_string(), "anti-slop".into());
 
@@ -112,7 +112,7 @@ async fn get_reference_returns_markdown_and_unknown_reference_errors() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn nested_skill_references_load_through_tools_and_resources() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     for name in ["spindle/setup", "editor/style"] {
         let args = serde_json::json!({"name": name});
         let result = structured_json(
@@ -153,7 +153,7 @@ async fn nested_skill_references_load_through_tools_and_resources() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn get_skill_and_get_reference_enforce_profile_coverage_without_mutating_profile() {
-    let mut router = router().await;
+    let (mut router, _tmp_guard) = router().await;
     router.tool_profile = Some("workflow-write".to_owned());
 
     // Covered skill in workflow-write returns full workflow instructions.

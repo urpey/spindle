@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test(flavor = "current_thread")]
 async fn generated_profiles_filter_listing_and_calling() {
-    let mut router = router().await;
+    let (mut router, _tmp_guard) = router().await;
     for profile in spindle_adapters::guidance::list_profiles() {
         router.tool_profile = Some(profile.name.to_owned());
         let listed: std::collections::BTreeSet<_> = router
@@ -36,7 +36,7 @@ async fn generated_profiles_filter_listing_and_calling() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn unknown_profiles_fail_closed_and_legacy_all_preserves_catalog() {
-    let mut router = router().await;
+    let (mut router, _tmp_guard) = router().await;
     router.tool_profile = Some("typo".to_owned());
     assert!(router.list_tools().is_empty());
     assert!(!router.has_tool("create_project"));
@@ -63,7 +63,7 @@ async fn unknown_profiles_fail_closed_and_legacy_all_preserves_catalog() {
 #[tokio::test(flavor = "current_thread")]
 async fn secondary_proxy_keeps_its_profile_and_denies_mutations_by_name() {
     use rmcp::ServiceExt as _;
-    let registry = router().await;
+    let (registry, _tmp_guard) = router().await;
     let service = registry.service().clone();
     let primary = crate::server::SpindleMcpServer::with_tool_profile(service.clone(), None);
     let (server_io, client_io) = tokio::io::duplex(64 * 1024);

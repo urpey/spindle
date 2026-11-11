@@ -34,7 +34,7 @@ fn serialization_scope_uses_global_only_for_process_wide_tools() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn project_scoped_serialization_allows_different_projects_to_lock_independently() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let first = router
         .lock_tool_scope(ToolSerializationScope::Project("project:first".to_string()))
@@ -57,7 +57,7 @@ async fn project_scoped_serialization_allows_different_projects_to_lock_independ
 
 #[tokio::test(flavor = "current_thread")]
 async fn project_scoped_serialization_queues_same_project_mutations() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let first = router
         .lock_tool_scope(ToolSerializationScope::Project("project:same".to_string()))
@@ -83,7 +83,7 @@ async fn project_scoped_serialization_queues_same_project_mutations() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn global_serialization_blocks_project_mutations() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let global = router.lock_tool_scope(ToolSerializationScope::Global).await;
     let project = timeout(
@@ -107,7 +107,7 @@ async fn global_serialization_blocks_project_mutations() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn concurrent_save_scene_draft_calls_complete_without_hanging() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let project = router
         .service
         .create_project(CreateProjectInput {
@@ -352,7 +352,7 @@ async fn internal_call_token_allows_reentrant_dispatch_while_blocking_external_c
 
 #[tokio::test(flavor = "current_thread")]
 async fn history_tools_dispatch_and_reject_checkpoint_undo() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let project = structured_json(
         router
             .call_tool(
@@ -433,7 +433,7 @@ async fn history_tools_dispatch_and_reject_checkpoint_undo() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn canonical_batch_creates_dispatch_and_alias_still_works() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let project_id = prepare_run_project(&router, "Batch Router").await;
 
     let created = structured_json(
@@ -499,7 +499,7 @@ async fn canonical_batch_creates_dispatch_and_alias_still_works() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn typed_updates_resolve_target_project_and_lock_without_project_id() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let p1 = prepare_run_project(&router, "Typed Target One").await;
     let _p2 = prepare_run_project(&router, "Typed Target Two").await;
 
@@ -637,7 +637,7 @@ async fn typed_updates_resolve_target_project_and_lock_without_project_id() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn update_entity_locks_resolved_project_id_when_project_id_omitted() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let p1 = prepare_run_project(&router, "Project One").await;
 
     let character = structured_json(

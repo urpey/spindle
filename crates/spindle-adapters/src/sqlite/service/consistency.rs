@@ -2119,7 +2119,11 @@ impl SqliteSpindleService {
                 .list_active_canonical_facts_by_project_and_branch(&project_id, &active_branch.id)
                 .await?
                 .into_iter()
-                .filter(|fact| fact.secret)
+                // Character Design secrets are author-only planning knowledge.
+                // Their text, predicate-derived rendering and fact id must
+                // never reach a consistency finding, so both secret-leak tiers
+                // drop them before any disclosure.
+                .filter(|fact| fact.secret && !crate::format::is_planning_only_secret_fact(fact))
                 .collect::<Vec<_>>();
 
             if !secret_facts.is_empty() {
@@ -2287,7 +2291,9 @@ impl SqliteSpindleService {
                 .list_active_canonical_facts_by_project_and_branch(&project_id, &active_branch.id)
                 .await?
                 .into_iter()
-                .filter(|fact| fact.secret)
+                // See the deterministic tier above: author-only design
+                // secrets never enter a consistency finding.
+                .filter(|fact| fact.secret && !crate::format::is_planning_only_secret_fact(fact))
                 .collect::<Vec<_>>();
 
             if !secret_facts.is_empty() {

@@ -9445,6 +9445,18 @@ async fn new_book_agent_entry_reaches_scene_one_one_ready_through_mcp_tools() {
                 {"output_ref": "cast:mara", "operation": {"operation": "create_character", "input": {
                     "name": "Mara", "summary": "Harbor archivist", "role": "protagonist"
                 }}},
+                {"output_ref": "design:mara", "operation": {"operation": "create_character_design", "input": {
+                    "character_id": {"kind": "proposal_ref", "value": "cast:mara"},
+                    "contradictions": ["keeps every chart", "cannot read her own heart"],
+                    "public_self": "Harbor archivist",
+                    "personal_self": "Raises her nephew alone",
+                    "private_self": "Fears deep water",
+                    "hidden_self": "She signed the forged manifest",
+                    "conscious_desire": "Clear the harbor's name",
+                    "unconscious_desire": "To be forgiven",
+                    "pressure_on_protagonist": "Withholds the chart that would convict her",
+                    "behavior_cues": ["straightens the chart corners before answering"]
+                }}},
                 {"output_ref": "loc:watchtower", "operation": {"operation": "create_location", "input": {
                     "name": "Watchtower", "kind": "building", "summary": "Tidal signal tower"
                 }}},
@@ -10030,6 +10042,18 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
             "operations": [
                 {"output_ref": "cast:mara", "operation": {"operation": "create_character", "input": {
                     "name": "Mara", "summary": "Night archivist", "role": "protagonist"
+                }}},
+                {"output_ref": "design:mara", "operation": {"operation": "create_character_design", "input": {
+                    "character_id": {"kind": "proposal_ref", "value": "cast:mara"},
+                    "contradictions": ["loyal to the archive", "willing to burn it"],
+                    "public_self": "Night archivist",
+                    "personal_self": "Keeps her mother's notes",
+                    "private_self": "Hears the bell in her sleep",
+                    "hidden_self": "She rang the bell the night it broke",
+                    "conscious_desire": "Find who broke the promise bell",
+                    "unconscious_desire": "To confess before she is found out",
+                    "pressure_on_protagonist": "Asks the protagonist to lie for her",
+                    "behavior_cues": ["touches the bell rope when she lies"]
                 }}},
                 {"output_ref": "loc:watchtower", "operation": {"operation": "create_location", "input": {
                     "name": "Watchtower", "kind": "building", "summary": "Tidal signal tower"
@@ -10903,4 +10927,430 @@ async fn plot_line_structure_fields_are_advertised_and_read_back_through_the_too
     assert_eq!(details["is_main_plot"], serde_json::json!(true));
     assert_eq!(details["value_axis"], serde_json::json!("truth"));
     assert!(details.get("subplot_job").is_none());
+}
+
+/// McKee Character Design read visibility (V0059): planning tools read the
+/// full design, while every non-planning read exposes only the redacted slice
+/// and never the hidden layer, the unconscious desire or their secret fact ids.
+#[tokio::test]
+async fn mckee_character_design_is_full_in_planning_status_and_redacted_in_other_reads() {
+    use crate::tools::{ToolRouter, ToolSerializationState};
+    use spindle_core::planning::{
+        BeginPlanningInput, DecidePlanningInput, PlanningCreateCharacterDesignInput,
+        PlanningCreateCharacterInput, PlanningCreateLocationInput, PlanningCreateProjectInput,
+        PlanningDecision, PlanningLevel, PlanningOperation, PlanningOperationItem,
+        PlanningReaderContract, PlanningRef, PlanningScope, StagePlanningInput,
+    };
+    use std::sync::Arc;
+
+    let (_tmp, svc) = fresh_service().await;
+    let session = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "A harbor archivist hides the manifest she forged.".into(),
+            scope: None,
+        })
+        .await
+        .unwrap();
+    let root = svc
+        .stage_planning(StagePlanningInput {
+            session_id: session.id.clone(),
+            scope: None,
+            intent_hash: session.intent_hash.clone(),
+            schema_version: 1,
+            level: PlanningLevel::Contract,
+            parents: Default::default(),
+            operations: vec![PlanningOperationItem {
+                output_ref: "project:root".into(),
+                operation: PlanningOperation::CreateProject(PlanningCreateProjectInput {
+                    name: "Salt Harbor".into(),
+                    project_type: "novel".into(),
+                    genre: "mystery".into(),
+                    reader_contract: PlanningReaderContract {
+                        promise: "Trust is tested".into(),
+                        style_notes: Vec::new(),
+                        boundaries: Vec::new(),
+                    },
+                }),
+            }],
+            rationale: "Accept the contract root".into(),
+            target_range: None,
+            schedule: Default::default(),
+            assumptions: Vec::new(),
+            author_questions: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let root_report = svc
+        .apply_planning(DecidePlanningInput {
+            session_id: session.id.clone(),
+            scope: None,
+            expected_hashes: std::collections::BTreeMap::from([(
+                root.id.clone(),
+                root.payload_hash.clone(),
+            )]),
+            decision: PlanningDecision::Accept,
+            actor: "author".into(),
+            note: "Approve contract".into(),
+        })
+        .await
+        .unwrap();
+    assert!(root_report.error.is_none(), "{:?}", root_report.error);
+    let attached = svc.get_planning_session(&session.id).await.unwrap();
+    let scope: PlanningScope = attached.scope.clone().unwrap();
+
+    let cast = svc
+        .stage_planning(StagePlanningInput {
+            session_id: session.id.clone(),
+            scope: Some(scope.clone()),
+            intent_hash: attached.intent_hash.clone(),
+            schema_version: 1,
+            level: PlanningLevel::CastWorld,
+            parents: std::collections::BTreeMap::from([(
+                root.id.clone(),
+                root.payload_hash.clone(),
+            )]),
+            operations: vec![
+                PlanningOperationItem {
+                    output_ref: "cast:ada".into(),
+                    operation: PlanningOperation::CreateCharacter(Box::new(
+                        PlanningCreateCharacterInput {
+                            name: "Ada".into(),
+                            summary: "Harbor archivist".into(),
+                            role: "protagonist".into(),
+                            realm: None,
+                            aliases: Vec::new(),
+                            voice_profile: Default::default(),
+                            emotional_profile: Default::default(),
+                            initial_state: None,
+                        },
+                    )),
+                },
+                PlanningOperationItem {
+                    output_ref: "design:ada".into(),
+                    operation: PlanningOperation::CreateCharacterDesign(Box::new(
+                        PlanningCreateCharacterDesignInput {
+                            character_id: PlanningRef::ProposalRef("cast:ada".into()),
+                            contradictions: vec![
+                                "keeps every chart".into(),
+                                "cannot read her own heart".into(),
+                            ],
+                            public_self: "Harbor archivist".into(),
+                            personal_self: "Raises her nephew alone".into(),
+                            private_self: "Fears deep water".into(),
+                            hidden_self: "She signed the forged manifest".into(),
+                            conscious_desire: "Clear the harbor's name".into(),
+                            unconscious_desire: "To be forgiven".into(),
+                            pressure_on_protagonist: "Withholds the chart that would convict her"
+                                .into(),
+                            behavior_cues: vec![
+                                "straightens the chart corners before answering".into(),
+                            ],
+                        },
+                    )),
+                },
+                PlanningOperationItem {
+                    output_ref: "loc:watchtower".into(),
+                    operation: PlanningOperation::CreateLocation(PlanningCreateLocationInput {
+                        name: "Watchtower".into(),
+                        kind: "building".into(),
+                        realm: None,
+                        summary: "Tidal signal tower".into(),
+                        initial_state: Default::default(),
+                    }),
+                },
+            ],
+            rationale: "Stage the cast with a Character Design".into(),
+            target_range: None,
+            schedule: Default::default(),
+            assumptions: Vec::new(),
+            author_questions: Vec::new(),
+        })
+        .await
+        .unwrap();
+    assert!(cast.findings.is_empty(), "{:?}", cast.findings);
+    let cast_report = svc
+        .apply_planning(DecidePlanningInput {
+            session_id: session.id.clone(),
+            scope: Some(scope.clone()),
+            expected_hashes: std::collections::BTreeMap::from([(
+                cast.id.clone(),
+                cast.payload_hash.clone(),
+            )]),
+            decision: PlanningDecision::Accept,
+            actor: "author".into(),
+            note: "Approve cast".into(),
+        })
+        .await
+        .unwrap();
+    assert!(cast_report.error.is_none(), "{:?}", cast_report.error);
+    let ada_id = cast_report
+        .operations
+        .iter()
+        .find_map(|operation| operation.returned_ids.get("cast:ada"))
+        .expect("character id")
+        .clone();
+    let location_id = cast_report
+        .operations
+        .iter()
+        .find_map(|operation| operation.returned_ids.get("loc:watchtower"))
+        .expect("location id")
+        .clone();
+
+    let write_router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        Some("write".to_string()),
+        Arc::new(ToolSerializationState::default()),
+    );
+    let planning_router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        Some("new-book".to_string()),
+        Arc::new(ToolSerializationState::default()),
+    );
+
+    // Public schemas grow additively. Response contracts replace large output
+    // schemas for profiled discovery, so read the unprojected catalog here.
+    let schema_router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        None,
+        Arc::new(ToolSerializationState::default()),
+    );
+    let tools = schema_router.list_tools();
+    let snapshot_schema = serde_json::to_value(
+        tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == "get_character_snapshot")
+            .expect("get_character_snapshot schema"),
+    )
+    .unwrap();
+    assert!(
+        snapshot_schema.to_string().contains("character_design"),
+        "get_character_snapshot must advertise the redacted design slice"
+    );
+    let planning_tools = schema_router.list_tools();
+    let status_schema = serde_json::to_value(
+        planning_tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == "planning_status")
+            .expect("planning_status schema"),
+    )
+    .unwrap();
+    assert!(
+        status_schema.to_string().contains("character_designs"),
+        "planning_status must advertise persisted Character Designs: {status_schema}"
+    );
+
+    // Planning reads see the full design.
+    let status = planning_call(
+        &planning_router,
+        "planning_status",
+        serde_json::json!({"session_id": attached.id, "include_readiness": false}),
+    )
+    .await;
+    let status_json = serde_json::to_string(&status).unwrap();
+    assert!(status_json.contains("character_designs"), "{status}");
+    assert!(
+        status_json.contains("She signed the forged manifest"),
+        "planning tools must read the hidden layer in full: {status}"
+    );
+    assert!(
+        status_json.contains("To be forgiven"),
+        "planning tools must read the unconscious desire in full: {status}"
+    );
+
+    // Every non-planning read is redacted.
+    let hidden = ["She signed the forged manifest", "To be forgiven"];
+    let fact_id_marker = ["hidden_self_fact_id", "unconscious_desire_fact_id"];
+    let mut reads = Vec::new();
+    reads.push((
+        "get_character_snapshot",
+        planning_call(
+            &write_router,
+            "get_character_snapshot",
+            serde_json::json!({"project_id": scope.project_id, "character_id": ada_id}),
+        )
+        .await,
+    ));
+    reads.push((
+        "get_entity",
+        planning_call(
+            &write_router,
+            "get_entity",
+            serde_json::json!({
+                "project_id": scope.project_id,
+                "table": "character",
+                "entity_id": ada_id
+            }),
+        )
+        .await,
+    ));
+    reads.push((
+        "get_writer_state",
+        planning_call(
+            &write_router,
+            "get_writer_state",
+            serde_json::json!({"project_id": scope.project_id}),
+        )
+        .await,
+    ));
+    reads.push((
+        "get_scene_context",
+        planning_call(
+            &write_router,
+            "get_scene_context",
+            serde_json::json!({
+                "project_id": scope.project_id,
+                "book_number": 1,
+                "chapter_number": 1,
+                "scene_order": 1,
+                "character_ids": [ada_id],
+                "location_id": location_id
+            }),
+        )
+        .await,
+    ));
+    reads.push((
+        "get_chapter_briefing",
+        planning_call(
+            &write_router,
+            "get_chapter_briefing",
+            serde_json::json!({
+                "project_id": scope.project_id,
+                "book_number": 1,
+                "chapter_number": 1,
+                "scene_order": 1,
+                "character_ids": [ada_id],
+                "location_id": location_id
+            }),
+        )
+        .await,
+    ));
+    reads.push((
+        "prepare_scene",
+        planning_call(
+            &write_router,
+            "prepare_scene",
+            serde_json::json!({
+                "project_id": scope.project_id,
+                "book_number": 1,
+                "chapter_number": 1,
+                "scene_order": 1,
+                "character_ids": [ada_id],
+                "location_id": location_id
+            }),
+        )
+        .await,
+    ));
+    for (tool, output) in &reads {
+        let json = serde_json::to_string(output).unwrap();
+        for needle in hidden {
+            assert!(
+                !json.contains(needle),
+                "{tool} leaked the hidden text {needle:?}: {json}"
+            );
+        }
+        for needle in fact_id_marker {
+            assert!(
+                !json.contains(needle),
+                "{tool} leaked a secret fact id field {needle:?}: {json}"
+            );
+        }
+        assert!(
+            !json.contains("character_design.hidden_self")
+                && !json.contains("character_design.unconscious_desire"),
+            "{tool} leaked a character-design secret predicate: {json}"
+        );
+    }
+    // The redacted slice itself is present on the profile-like read.
+    let snapshot_json = serde_json::to_string(
+        &reads
+            .iter()
+            .find(|(tool, _)| *tool == "get_character_snapshot")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    assert!(
+        snapshot_json.contains("Harbor archivist"),
+        "{snapshot_json}"
+    );
+    assert!(
+        snapshot_json.contains("straightens the chart corners"),
+        "behaviour cues are the writer-facing rendering: {snapshot_json}"
+    );
+    // The writer-facing slice is deliberately narrower than the planning read:
+    // the personal and private selves are not exposed to non-planning tools.
+    for withheld in ["personal_self", "private_self", "Raises her nephew alone"] {
+        assert!(
+            !snapshot_json.contains(withheld),
+            "the redacted slice must not expose {withheld:?}: {snapshot_json}"
+        );
+    }
+    assert!(
+        status_json.contains("Raises her nephew alone"),
+        "planning_status keeps the full design: {status_json}"
+    );
+
+    // A non-McKee project gains no Character Design surface anywhere.
+    let direct = svc
+        .create_project(CreateProjectInput {
+            name: "Legacy Project".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Unchanged".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    let direct_session = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "Revisit the contract of the existing project.".into(),
+            scope: Some(PlanningScope {
+                project_id: direct.project_id.clone(),
+                branch_id: direct.branch_id.clone(),
+            }),
+        })
+        .await
+        .unwrap();
+    let direct_status = planning_call(
+        &planning_router,
+        "planning_status",
+        serde_json::json!({"session_id": direct_session.id, "include_readiness": false}),
+    )
+    .await;
+    let direct_status_json = serde_json::to_string(&direct_status).unwrap();
+    assert!(
+        !direct_status_json.contains("character_designs"),
+        "an existing project's planning status must not grow a Character Design surface: {direct_status_json}"
+    );
+    let direct_character = svc
+        .create_character(CreateCharacterInput {
+            aliases: Vec::new(),
+            project_id: direct.project_id.clone(),
+            name: "Mara".into(),
+            summary: "Warden.".into(),
+            role: "protagonist".into(),
+            realm: None,
+            voice_profile: Default::default(),
+            emotional_profile: Default::default(),
+            initial_state: None,
+        })
+        .await
+        .unwrap();
+    let direct_snapshot = planning_call(
+        &write_router,
+        "get_character_snapshot",
+        serde_json::json!({
+            "project_id": direct.project_id,
+            "character_id": direct_character.character_id
+        }),
+    )
+    .await;
+    let direct_snapshot_json = serde_json::to_string(&direct_snapshot).unwrap();
+    assert!(
+        !direct_snapshot_json.contains("character_design"),
+        "a character with no design must keep its existing snapshot shape: {direct_snapshot_json}"
+    );
 }

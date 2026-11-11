@@ -37,6 +37,18 @@ table: "plot_line")` reads those fields back, but drafting does not yet enforce
 them: the supervisor consumes chapter plans and continuity records exactly as
 before, and a run on an unmarked project never sees the new fields.
 
+Cast & World planning may also have produced a Character Design per character
+(see [planning engine](planning-engine-design.md)). Drafting reads only the
+redacted slice: `get_character_snapshot` returns contradictions, the public
+self, conscious desire, pressure and behaviour cues.
+`hidden_self` and `unconscious_desire` are secret canonical facts that every
+non-planning carrier strips (they are never rendered as a `[SECRETS IN PLAY]`
+envelope), so the writer renders depth through behaviour cues rather than
+reading the author-only layers. Planning tools are the only surface that reads
+those layers in full. Arc milestones expose an optional `kind` (`change` /
+`reveal`) wherever milestones are read, and a missing kind means unclassified
+— drafting behaviour is unchanged.
+
 ## MCP Tools Interface
 
 The supervisor exposes 9 MCP tools through the `spindle-mcp` server:

@@ -892,30 +892,30 @@ mod tests {
     use tempfile::tempdir;
     use tower::util::ServiceExt;
 
-    async fn app() -> Router {
+    async fn app() -> (Router, tempfile::TempDir) {
         let temp = tempdir().expect("temp dir");
         let db = SqlitePool::open(&temp.path().join("http.db"))
             .await
             .expect("db init");
-        let data_dir = temp.keep();
+        let data_dir = temp.path().to_path_buf();
         let service = SpindleService::new(Repository::with_model_router(
             db,
             data_dir,
             ModelRouter::local_only(),
         ));
-        mcp_router(service, CancellationToken::new())
+        (mcp_router(service, CancellationToken::new()), temp)
     }
 
     /// A router plus the service backing it, so tests can seed journal rows on
     /// the same database the router reads. Returns the created project so the
     /// authoring_run FK target is valid.
-    async fn app_with_service() -> (Router, SpindleService, String) {
+    async fn app_with_service() -> (Router, SpindleService, String, tempfile::TempDir) {
         use spindle_core::models::{CreateProjectInput, ReaderContract};
         let temp = tempdir().expect("temp dir");
         let db = SqlitePool::open(&temp.path().join("http.db"))
             .await
             .expect("db init");
-        let data_dir = temp.keep();
+        let data_dir = temp.path().to_path_buf();
         let service = SpindleService::new(Repository::with_model_router(
             db,
             data_dir,
@@ -935,7 +935,7 @@ mod tests {
             .await
             .expect("project");
         let router = mcp_router(service.clone(), CancellationToken::new());
-        (router, service, project.project_id)
+        (router, service, project.project_id, temp)
     }
 
     /// Persist a minimal `active` authoring run so events have a valid FK
@@ -996,22 +996,23 @@ mod tests {
         text
     }
 
-    async fn service() -> SpindleService {
+    async fn service() -> (SpindleService, tempfile::TempDir) {
         let temp = tempdir().expect("temp dir");
         let db = SqlitePool::open(&temp.path().join("service.db"))
             .await
             .expect("db init");
-        let data_dir = temp.keep();
-        SpindleService::new(Repository::with_model_router(
+        let data_dir = temp.path().to_path_buf();
+        let service = SpindleService::new(Repository::with_model_router(
             db,
             data_dir,
             ModelRouter::local_only(),
-        ))
+        ));
+        (service, temp)
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn health_route_returns_ok() {
-        let app = app().await;
+        let (app, _tmp_guard) = app().await;
 
         let response = app
             .oneshot(
@@ -1040,16 +1041,16 @@ mod tests {
         );
     }
 
-    async fn app_with_agent_config(path: &std::path::Path) -> Router {
+    async fn app_with_agent_config(path: &std::path::Path) -> (Router, tempfile::TempDir) {
         let temp = tempdir().expect("temp dir");
         let db = SqlitePool::open(&temp.path().join("http.db"))
             .await
             .expect("db init");
-        let data_dir = temp.keep();
+        let data_dir = temp.path().to_path_buf();
         let router = ModelRouter::default();
         let _ = router.configure(Some(path.to_str().expect("utf-8 path")));
         let service = SpindleService::new(Repository::with_model_router(db, data_dir, router));
-        mcp_router(service, CancellationToken::new())
+        (mcp_router(service, CancellationToken::new()), temp)
     }
 
     fn write_agent_config(path: &std::path::Path, body: &str) {
@@ -1078,7 +1079,7 @@ route = "review"
 agent = "test-agent"
 "#,
         );
-        let app = app_with_agent_config(&config).await;
+        let (app, _tmp_guard) = app_with_agent_config(&config).await;
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -1122,7 +1123,7 @@ agent = "test-agent"
         let temp = tempdir().expect("temp dir");
         let config = temp.path().join("broken.toml");
         write_agent_config(&config, "this is not toml = = =");
-        let app = app_with_agent_config(&config).await;
+        let (app, _tmp_guard) = app_with_agent_config(&config).await;
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -1209,7 +1210,7 @@ agent = "test-agent"
         let temp = tempdir().expect("temp dir");
         let config = temp.path().join("spindle.toml");
         write_agent_config(&config, SETTINGS_CONFIG);
-        let app = app_with_agent_config(&config).await;
+        let (app, _tmp_guard) = app_with_agent_config(&config).await;
 
         let before = get_settings(&app).await;
         let revision = before["revision"].as_str().expect("revision").to_string();
@@ -1248,7 +1249,7 @@ agent = "test-agent"
         let temp = tempdir().expect("temp dir");
         let config = temp.path().join("spindle.toml");
         write_agent_config(&config, SETTINGS_CONFIG);
-        let app = app_with_agent_config(&config).await;
+        let (app, _tmp_guard) = app_with_agent_config(&config).await;
 
         let before = get_settings(&app).await;
         let revision = before["revision"].as_str().expect("revision").to_string();
@@ -1278,7 +1279,7 @@ agent = "test-agent"
         let temp = tempdir().expect("temp dir");
         let config = temp.path().join("spindle.toml");
         write_agent_config(&config, SETTINGS_CONFIG);
-        let app = app_with_agent_config(&config).await;
+        let (app, _tmp_guard) = app_with_agent_config(&config).await;
 
         let before = get_settings(&app).await;
         let revision = before["revision"].as_str().expect("revision").to_string();
@@ -1314,7 +1315,7 @@ agent = "test-agent"
         let temp = tempdir().expect("temp dir");
         let config = temp.path().join("spindle.toml");
         write_agent_config(&config, SETTINGS_CONFIG);
-        let app = app_with_agent_config(&config).await;
+        let (app, _tmp_guard) = app_with_agent_config(&config).await;
         let before = get_settings(&app).await;
         let mut document = before["document"].clone();
         document["agents"][0]["model"] = serde_json::json!("stale-model");
@@ -1381,7 +1382,7 @@ route = "review"
 agent = "keyed-agent"
 "#,
         );
-        let app = app_with_agent_config(&config).await;
+        let (app, _tmp_guard) = app_with_agent_config(&config).await;
         let body = post_settings_test(&app, serde_json::json!({"agent_id": "keyed-agent"})).await;
         assert_eq!(body["ok"], false, "{body}");
         assert!(
@@ -1413,7 +1414,7 @@ route = "review"
 agent = "offline-agent"
 "#,
         );
-        let app = app_with_agent_config(&config).await;
+        let (app, _tmp_guard) = app_with_agent_config(&config).await;
         let body = post_settings_test(&app, serde_json::json!({"agent_id": "offline-agent"})).await;
         assert_eq!(body["ok"], false, "{body}");
         assert!(
@@ -1480,7 +1481,7 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "current_thread")]
     async fn health_reports_where_skill_markdown_is_read_from() {
-        let app = app().await;
+        let (app, _tmp_guard) = app().await;
 
         let response = app
             .oneshot(
@@ -1513,7 +1514,7 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "current_thread")]
     async fn model_routes_route_returns_current_route_snapshot() {
-        let app = app().await;
+        let (app, _tmp_guard) = app().await;
 
         let response = app
             .oneshot(
@@ -1543,7 +1544,7 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "current_thread")]
     async fn events_route_exposes_sse_content_type() {
-        let app = app().await;
+        let (app, _tmp_guard) = app().await;
 
         let response = app
             .oneshot(
@@ -1566,7 +1567,7 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn events_run_topic_replays_journal_rows_with_id_and_event_fields() {
-        let (app, service, project_id) = app_with_service().await;
+        let (app, service, project_id, _tmp_guard) = app_with_service().await;
         let run_id = seed_run(&service, &project_id).await;
         for kind in ["run_started", "scene_drafted", "scene_committed"] {
             service
@@ -1600,7 +1601,7 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn events_run_topic_resumes_after_last_event_id() {
-        let (app, service, project_id) = app_with_service().await;
+        let (app, service, project_id, _tmp_guard) = app_with_service().await;
         let run_id = seed_run(&service, &project_id).await;
         for i in 1..=4 {
             service
@@ -1639,8 +1640,8 @@ agent = "offline-agent"
     #[tokio::test(flavor = "current_thread")]
     async fn events_malformed_topic_returns_400() {
         // Unknown topic scheme.
-        let response = app()
-            .await
+        let (test_app, _tmp_guard) = app().await;
+        let response = test_app
             .oneshot(
                 axum::http::Request::builder()
                     .uri("/events?topic=garbage")
@@ -1652,8 +1653,8 @@ agent = "offline-agent"
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
 
         // Right scheme, wrong run-id shape.
-        let response = app()
-            .await
+        let (test_app, _tmp_guard) = app().await;
+        let response = test_app
             .oneshot(
                 axum::http::Request::builder()
                     .uri("/events?topic=run:not-a-run")
@@ -1669,8 +1670,8 @@ agent = "offline-agent"
     async fn events_no_topic_stream_is_unchanged_model_route_snapshot() {
         // No topic param → the existing snapshot stream (I1): SSE content-type
         // and a `snapshot` event carrying model_routes.
-        let response = app()
-            .await
+        let (test_app, _tmp_guard) = app().await;
+        let response = test_app
             .oneshot(
                 axum::http::Request::builder()
                     .uri("/events")
@@ -1698,8 +1699,8 @@ agent = "offline-agent"
     async fn events_unknown_run_topic_is_valid_empty_stream() {
         // A well-formed run id with no rows is a valid empty stream (ADR D4: no
         // existence check), not a 400.
-        let response = app()
-            .await
+        let (test_app, _tmp_guard) = app().await;
+        let response = test_app
             .oneshot(
                 axum::http::Request::builder()
                     .uri("/events?topic=run:authoring_run:doesnotexist")
@@ -1713,7 +1714,7 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "current_thread")]
     async fn http_surface_is_get_only() {
-        let app = app().await;
+        let (app, _tmp_guard) = app().await;
 
         let response = app
             .oneshot(
@@ -1734,7 +1735,7 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "current_thread")]
     async fn sse_snapshot_payload_stays_read_only_and_model_route_focused() {
-        let service = service().await;
+        let (service, _tmp_guard) = service().await;
         let payload = snapshot_payload(&service);
         let payload = payload.as_object().expect("snapshot payload object");
 
@@ -1751,8 +1752,8 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "current_thread")]
     async fn console_route_serves_embedded_page() {
-        let response = app()
-            .await
+        let (test_app, _tmp_guard) = app().await;
+        let response = test_app
             .oneshot(
                 axum::http::Request::builder()
                     .uri("/console")
@@ -2302,7 +2303,7 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "current_thread")]
     async fn console_mcp_lists_exactly_the_console_tools() {
-        let app = app().await;
+        let (app, _tmp_guard) = app().await;
         let init = console_mcp_post(
             &app,
             None,
@@ -2368,8 +2369,8 @@ agent = "offline-agent"
     #[tokio::test(flavor = "current_thread")]
     async fn console_health_route_reports_console_endpoint() {
         // /health advertises the console so an operator can discover it.
-        let response = app()
-            .await
+        let (test_app, _tmp_guard) = app().await;
+        let response = test_app
             .oneshot(
                 axum::http::Request::builder()
                     .uri("/health")
@@ -2387,7 +2388,7 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "current_thread")]
     async fn console_api_projects_matches_service_serialization() {
-        let (app, service, project_id) = app_with_service().await;
+        let (app, service, project_id, _tmp_guard) = app_with_service().await;
 
         let response = app
             .oneshot(
@@ -2420,7 +2421,7 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "current_thread")]
     async fn console_api_canon_deltas_is_read_only_and_shape_stable() {
-        let (app, service, project_id) = app_with_service().await;
+        let (app, service, project_id, _tmp_guard) = app_with_service().await;
 
         let response = app
             .oneshot(
@@ -2458,7 +2459,7 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "current_thread")]
     async fn console_api_plan_amendments_is_read_only_and_shape_stable() {
-        let (app, service, project_id) = app_with_service().await;
+        let (app, service, project_id, _tmp_guard) = app_with_service().await;
 
         let response = app
             .oneshot(
@@ -2495,7 +2496,7 @@ agent = "offline-agent"
 
     #[tokio::test(flavor = "current_thread")]
     async fn console_api_manuscript_matches_service_serialization() {
-        let (app, service, project_id) = app_with_service().await;
+        let (app, service, project_id, _tmp_guard) = app_with_service().await;
 
         let response = app
             .oneshot(
@@ -2537,7 +2538,7 @@ agent = "offline-agent"
     async fn console_api_status_without_run_reports_no_run_honestly() {
         // Empty project, no runs: the status endpoint reports an honest empty
         // state (200 with a `no_run` marker), never a 500 or blank body.
-        let (app, _service, project_id) = app_with_service().await;
+        let (app, _service, project_id, _tmp_guard) = app_with_service().await;
 
         let response = app
             .oneshot(
@@ -2562,7 +2563,7 @@ agent = "offline-agent"
         // With a seeded run, the status endpoint returns the reconciled status
         // for the latest run (run-id discovery: run_id omitted → latest run) —
         // and is read-only: two calls do not change stored run state.
-        let (app, service, project_id) = app_with_service().await;
+        let (app, service, project_id, _tmp_guard) = app_with_service().await;
         let run_id = seed_run(&service, &project_id).await;
 
         let call = |uri: String| {
@@ -2630,8 +2631,8 @@ agent = "offline-agent"
     async fn console_api_missing_project_id_is_bad_request() {
         // A defensive read endpoint returns 400 (not 500) when its required
         // query parameter is absent.
-        let response = app()
-            .await
+        let (test_app, _tmp_guard) = app().await;
+        let response = test_app
             .oneshot(
                 axum::http::Request::builder()
                     .uri("/console/api/status")
