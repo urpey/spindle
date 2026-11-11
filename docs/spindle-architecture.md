@@ -796,12 +796,15 @@ resume unchanged). The continuity and editorial-loop migrations:
 | V0051 | append-only canon event store (`canon_claim`, `canon_decision`, `canon_event`, `canon_source_map`, rebuildable `canon_projection_state`, `canon_projection_checkpoint`) |
 | V0052 | planning route-generation attempt ledger (`planning_generation_attempt`) with prompt/schema hashes, usage receipts, JSON-pointer findings and host-fallback envelopes |
 | V0056 | provider/dimension-aware embedding index generations: variable-length `search_embedding`, generation registry, per-project active/previous state, legacy 64-dimension preservation |
+| V0057 | McKee project marker (`project.mckee_structured`, set only by planning `CreateProject`) and project-level `story_spine` (one series spine, optional per-book sub-spines) |
 
 ## Where to make changes
 
 Use this map when you need to patch behavior quickly.
 
 - Add or modify tool DTOs: `crates/spindle-core/src/models.rs`.
+- Add or modify Story Spine contracts: `crates/spindle-core/src/story_spine.rs`
+  (records) and `crates/spindle-core/src/charge.rs` (typed Charge).
 - Add or modify continuity and validator-facing DTOs:
   `crates/spindle-core/src/models.rs`.
 - Add or modify MCP session/defaulting/schema behavior:
@@ -895,8 +898,9 @@ Missing routes, stubs, rejected outputs and exhausted budgets return honest
 outcomes (`needs_route`, `model_output_rejected`, `budget_exhausted`) with a
 `PlanningHostRequest` fallback; host and labeled `fixture` submissions run
 through the same staging validator and all output lands only as staged proposals.
-No MCP planning entry tools are exposed yet, and application success is never
-drafting readiness.
+The four MCP planning entry tools (`planning_begin`, `planning_advance`,
+`planning_status`, `planning_decide`) expose this pipeline. Application success
+is never drafting readiness.
 
 Human acceptance preflights the complete selected dependency closure in a
 rollback-only application transaction, then commits one domain operation and
@@ -918,6 +922,22 @@ unit of work. Planning-used repository transactions nest through savepoints.
 Other writes wait on the application gate; cancellation rolls back before that
 gate is released. Semantic embedding work runs after commit, from a durable
 queue, and pending refresh counts remain visible if indexing fails.
+
+### McKee projects and the Story Spine
+
+Projects created through the planning (`new-book`) root carry
+`project.mckee_structured = 1`; every other project keeps 0, omits the field
+from its payloads and cannot be switched. McKee behaviour is gated on this
+marker. The contract level stages a typed `CreateStorySpine` operation
+(`spindle_core::story_spine`); accepted spines live in the project-level
+`story_spine` table (shared by all branches, because the spine is series
+intent, not branch canon) and read back through `planning_status` and the
+`story_spine` subject table in `get_entity`. MCP serves `story_spine` entity
+reads only to profiles that expose planning tools. `spindle_core::charge`
+defines the closed **Charge** type (sign plus four-step depth) used by later
+McKee structure work. See [GLOSSARY](../GLOSSARY.md),
+[ADR 0006](adr/0006-acts-and-sequences-are-outline-intent.md) and
+[ADR 0007](adr/0007-mckee-structure-swain-prose.md).
 
 All gates remain human. Delegation activation, route generation, manifest/run
 validation and agent entry arrive in subsequent phases. See
