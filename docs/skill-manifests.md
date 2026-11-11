@@ -1,7 +1,7 @@
 # Skill manifest alignment
 
 `skills/<name>/manifest.toml` is the versioned dependency inventory for each of
-the 14 embedded skill cores. A manifest declares its direct tool requirements,
+the 15 embedded skill cores. A manifest declares its direct tool requirements,
 required skill cores, and currently supported profiles. Dependencies contribute
 their transitive tool requirements. Routing to a specialist skill in prose does
 not automatically enable that specialist or union its tools into the entry skill.
@@ -9,8 +9,9 @@ not automatically enable that specialist or union its tools into the entry skill
 `[[references]]` declares an independently loadable unit with a name, Markdown
 path under `references/`, trigger, direct tools, and supported profiles. Loading a
 reference requires both its tools and its owning core's dependency closure.
-The nested units are `spindle/setup`, `editor/style`, and the five `scene-writer`
-references (`scene-writer/authoring-runs`, `scene-writer/craft-and-voice`,
+The nested units are `spindle/setup`, `editor/style`,
+`story-structure/story-spine`, and the five `scene-writer` references
+(`scene-writer/authoring-runs`, `scene-writer/craft-and-voice`,
 `scene-writer/drafting-packets`, `scene-writer/offloaded-generation`, and
 `scene-writer/research-and-sources`); load them with
 `get_reference(name="spindle/setup")` or the equivalent
@@ -119,7 +120,7 @@ The edit loop:
 4. `curl -s localhost:4321/health` shows the content mode and any fallback.
 
 ```bash
-spindle-mcp skills check                       # skills check: 25 files OK
+spindle-mcp skills check                       # skills check: 27 files OK
 spindle-mcp skills check --json                # machine-readable problems
 spindle-mcp skills check --skills-dir /tmp/skills --references-dir references
 ```

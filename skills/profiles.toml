@@ -36,6 +36,11 @@ description = "Host-neutral new-book entry from premise through human-approved p
 units = ["new-book"]
 
 [[profiles]]
+name = "mckee"
+description = "McKee story-structure core and the Story Spine reference."
+units = ["story-structure", "story-structure/story-spine"]
+
+[[profiles]]
 name = "research"
 description = "Research sources, claims and scene research packages."
 units = ["researcher"]

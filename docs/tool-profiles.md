@@ -22,17 +22,18 @@ generated profiles are opt-in:
 
 | Profile | Enabled work | Tools | Input bytes | Full bytes |
 | --- | --- | ---: | ---: | ---: |
-| workflow-write | Scene-writer core + craft/packet/research refs + setup | 44 | 57,268 | 112,186 |
-| workflow-authoring | Scene-writer (all refs) + authoring-supervisor + setup | 74 | 85,869 | 181,002 |
-| workflow-import | Manuscript importer and source sync | 20 | 12,306 | 30,747 |
-| revision | Branch/revision/history workflow | 34 | 22,509 | 57,746 |
-| worldbuilding | Worldbuilder + character creator | 50 | 48,325 | 82,626 |
-| planning | Plot architect | 38 | 32,352 | 62,362 |
-| new-book | New-book entry: planning sessions, human gates and handoff | 14 | 20,204 | 26,534 |
-| research | Researcher | 15 | 7,584 | 20,051 |
-| style | Editor core + style reference | 43 | 34,159 | 94,206 |
-| release | Editor + bible librarian + canon steward | 62 | 45,475 | 90,729 |
-| setup | New-book setup reference | 9 | 4,180 | 9,074 |
+| workflow-write | Scene-writer core + craft/packet/research refs + setup | 44 | 59,354 | 115,504 |
+| workflow-authoring | Scene-writer (all refs) + authoring-supervisor + setup | 74 | 88,991 | 185,874 |
+| workflow-import | Manuscript importer and source sync | 20 | 13,083 | 31,979 |
+| revision | Branch/revision/history workflow | 34 | 23,027 | 59,237 |
+| worldbuilding | Worldbuilder + character creator | 50 | 51,202 | 87,146 |
+| planning | Plot architect | 38 | 36,237 | 67,890 |
+| new-book | New-book entry: planning sessions, human gates and handoff | 15 | 21,208 | 27,875 |
+| mckee | Story-structure core + Story Spine reference | 11 | 18,462 | 22,860 |
+| research | Researcher | 15 | 7,584 | 20,247 |
+| style | Editor core + style reference | 43 | 34,677 | 95,438 |
+| release | Editor + bible librarian + canon steward | 62 | 49,647 | 95,874 |
+| setup | New-book setup reference | 9 | 4,180 | 9,270 |
 
 Every generated profile includes the shared entry core (`spindle`, 6 entry tools).
 Large context/analysis output schemas load optionally through versioned
