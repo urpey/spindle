@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Mark projects created through the `new-book` planning root as
+  McKee-structured. Every other project and every existing project stays
+  unmarked and its payloads are unchanged.
+- Add the typed Story Spine planning operation at the contract level, read back
+  through `planning_status.story_spines` and `get_entity(table: "story_spine")`.
+  One series spine per project, plus an optional sub-spine per book.
+- Add the typed Charge (sign plus four-step depth) used by McKee structure work.
+- Add the `story-structure` skill core, the `story-spine` reference and the
+  `mckee` profile.
+- Add migration V0057 for the McKee marker and the project-level `story_spine`
+  table.
+
 ## 0.3.0 — 2026-11-09
 
 Spindle 0.3.0 is the compatibility release for the consolidated tool surface.
