@@ -1,5 +1,6 @@
 //! Initial-planning contracts. These never authorize in-run amendments.
 use crate::models::*;
+use crate::plot_line::SubplotJob;
 use crate::story_spine::{ControllingIdea, StorySpine, StorySpineEnding};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -831,6 +832,15 @@ pub struct PlanningCreatePlotLineInput {
     pub connected_conflict_ids: Vec<PlanningRef>,
     #[serde(default)]
     pub connected_theme_ids: Vec<PlanningRef>,
+    /// The Value Axis this plot line turns; a Main Plot carries the Spine Axis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_axis: Option<String>,
+    /// The one structural job a Subplot performs toward the Controlling Idea.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subplot_job: Option<SubplotJob>,
+    /// Whether this is the project's one Main Plot. False for every Subplot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_main_plot: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

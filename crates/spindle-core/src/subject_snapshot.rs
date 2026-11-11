@@ -1,4 +1,5 @@
 use crate::models::{EstablishedIn, StoryPlacement};
+use crate::plot_line::SubplotJob;
 use crate::provenance::{Provenance, RecordId};
 use crate::story_spine::{ControllingIdea, StorySpineEnding};
 use crate::subject::{Subject, SubjectTable};
@@ -875,6 +876,16 @@ pub struct PlotLineDetails {
     pub plot_type: String,
     pub summary: String,
     pub status: Option<String>,
+    /// The Value Axis this plot line turns; absent on rows written before the
+    /// McKee plot-line fields existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_axis: Option<String>,
+    /// The one structural job a Subplot performs toward the Controlling Idea.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subplot_job: Option<SubplotJob>,
+    /// Whether this is the project's one Main Plot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_main_plot: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1272,6 +1283,9 @@ mod tests {
                 plot_type: "mystery".to_string(),
                 summary: "Tracks the stolen map.".to_string(),
                 status: Some("active".to_string()),
+                value_axis: None,
+                subplot_job: None,
+                is_main_plot: false,
             }),
             SubjectKindSpecific::Conflict(ConflictDetails {
                 conflict_type: "interpersonal".to_string(),

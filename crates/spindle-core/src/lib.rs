@@ -8,6 +8,7 @@ pub mod memory;
 pub mod model_output;
 pub mod models;
 pub mod planning;
+pub mod plot_line;
 pub mod provenance;
 pub mod serial;
 pub mod story_spine;
