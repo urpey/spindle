@@ -28,6 +28,7 @@ pub enum SubjectTable {
     Scene,
     Chapter,
     Book,
+    StorySpine,
 }
 
 impl SubjectTable {
@@ -53,6 +54,7 @@ impl SubjectTable {
             SubjectTable::Scene => "scene",
             SubjectTable::Chapter => "chapter",
             SubjectTable::Book => "book",
+            SubjectTable::StorySpine => "story_spine",
         }
     }
 
@@ -92,6 +94,7 @@ impl FromStr for SubjectTable {
             "scene" => Ok(SubjectTable::Scene),
             "chapter" => Ok(SubjectTable::Chapter),
             "book" => Ok(SubjectTable::Book),
+            "story_spine" => Ok(SubjectTable::StorySpine),
             _ => Err(SubjectError::UnknownTable(s.to_string())),
         }
     }
@@ -305,6 +308,7 @@ mod tests {
         assert_eq!(SubjectTable::Character.as_str(), "character");
         assert_eq!(SubjectTable::PlotLine.as_str(), "plot_line");
         assert_eq!(SubjectTable::Book.as_str(), "book");
+        assert_eq!(SubjectTable::StorySpine.as_str(), "story_spine");
     }
 
     #[test]
@@ -319,6 +323,10 @@ mod tests {
             Ok(SubjectTable::PlotLine)
         );
         assert_eq!("book".parse::<SubjectTable>(), Ok(SubjectTable::Book));
+        assert_eq!(
+            "story_spine".parse::<SubjectTable>(),
+            Ok(SubjectTable::StorySpine)
+        );
         assert!("invalid".parse::<SubjectTable>().is_err());
     }
 
@@ -541,13 +549,14 @@ mod tests {
             SubjectTable::Scene,
             SubjectTable::Chapter,
             SubjectTable::Book,
+            SubjectTable::StorySpine,
         ]
     }
 
     #[test]
     fn all_subject_table_variants_display_round_trip() {
         let tables = all_tables();
-        assert_eq!(tables.len(), 20);
+        assert_eq!(tables.len(), 21);
         for table in &tables {
             let display = table.to_string();
             let parsed: SubjectTable = display.parse().unwrap();

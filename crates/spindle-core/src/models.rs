@@ -160,9 +160,13 @@ pub struct WorldStateInput {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct StoryPlacement {
+    /// 1-based book number in story order.
     pub book_number: i32,
+    /// 1-based chapter number within the book.
     pub chapter_number: i32,
+    /// 1-based scene order within the chapter, when the placement names a scene.
     pub scene_order: Option<i32>,
+    /// Optional free-text note about the placement.
     pub note: Option<String>,
 }
 
@@ -1115,6 +1119,10 @@ pub struct ProjectSummary {
     pub genre: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_style_profile_id: Option<String>,
+    /// True only for projects created through the planning (new-book) root.
+    /// Omitted from existing-project payloads so their output stays unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mckee_structured: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

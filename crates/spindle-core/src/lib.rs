@@ -1,5 +1,6 @@
 pub mod canon;
 pub mod canonical_facts;
+pub mod charge;
 pub mod context_bundle;
 pub mod drafting;
 pub mod embeddings;
@@ -9,6 +10,7 @@ pub mod models;
 pub mod planning;
 pub mod provenance;
 pub mod serial;
+pub mod story_spine;
 pub mod style;
 pub mod subject;
 pub mod subject_snapshot;
