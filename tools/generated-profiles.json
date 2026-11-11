@@ -1,5 +1,27 @@
 [
   {
+    "description": "McKee story-structure core and the Story Spine reference.",
+    "name": "mckee",
+    "tools": [
+      "get_entity",
+      "get_reference",
+      "get_skill",
+      "get_writer_state",
+      "list_projects",
+      "list_skills",
+      "planning_advance",
+      "planning_begin",
+      "planning_decide",
+      "planning_status",
+      "set_active_project"
+    ],
+    "units": [
+      "spindle",
+      "story-structure",
+      "story-structure/story-spine"
+    ]
+  },
+  {
     "description": "Host-neutral new-book entry from premise through human-approved planning gates to draft readiness.",
     "name": "new-book",
     "tools": [

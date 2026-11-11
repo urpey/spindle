@@ -3,88 +3,93 @@
   "compatibility": {
     "default": {
       "tools": 181,
-      "input_bytes": 171173,
-      "full_bytes": 738754
+      "input_bytes": 171201,
+      "full_bytes": 755548
     },
     "new-book": {
       "tools": 14,
       "input_bytes": 20204,
-      "full_bytes": 26534
+      "full_bytes": 26730
     },
     "minimal": {
       "tools": 22,
-      "input_bytes": 30835,
-      "full_bytes": 205987
+      "input_bytes": 30863,
+      "full_bytes": 215291
     },
     "write": {
       "tools": 122,
-      "input_bytes": 115290,
-      "full_bytes": 467441
+      "input_bytes": 115318,
+      "full_bytes": 478966
     },
     "import": {
       "tools": 40,
       "input_bytes": 21665,
-      "full_bytes": 229485
+      "full_bytes": 231902
     },
     "authoring": {
       "tools": 78,
-      "input_bytes": 88059,
-      "full_bytes": 334961
+      "input_bytes": 88087,
+      "full_bytes": 346486
     },
     "planning": {
       "tools": 38,
       "input_bytes": 32352,
-      "full_bytes": 63550
+      "full_bytes": 63746
     },
     "release": {
       "tools": 62,
-      "input_bytes": 45475,
-      "full_bytes": 90729
+      "input_bytes": 45503,
+      "full_bytes": 90953
     },
     "research": {
       "tools": 15,
       "input_bytes": 7584,
-      "full_bytes": 20051
+      "full_bytes": 20247
     },
     "revision": {
       "tools": 34,
       "input_bytes": 22509,
-      "full_bytes": 57746
+      "full_bytes": 57942
     },
     "setup": {
       "tools": 9,
       "input_bytes": 4180,
-      "full_bytes": 9074
+      "full_bytes": 9270
     },
     "style": {
       "tools": 43,
       "input_bytes": 34159,
-      "full_bytes": 94206
+      "full_bytes": 94402
     },
     "workflow-authoring": {
       "tools": 74,
-      "input_bytes": 85869,
-      "full_bytes": 181002
+      "input_bytes": 85883,
+      "full_bytes": 181212
     },
     "workflow-import": {
       "tools": 20,
       "input_bytes": 12306,
-      "full_bytes": 30747
+      "full_bytes": 30943
     },
     "workflow-write": {
       "tools": 44,
-      "input_bytes": 57268,
-      "full_bytes": 112186
+      "input_bytes": 57282,
+      "full_bytes": 112396
     },
     "worldbuilding": {
       "tools": 50,
-      "input_bytes": 48325,
-      "full_bytes": 83814
+      "input_bytes": 48353,
+      "full_bytes": 84038
     },
     "legacy-all": {
       "tools": 181,
-      "input_bytes": 171173,
-      "full_bytes": 738754
+      "input_bytes": 171201,
+      "full_bytes": 755548
+    },
+    "mckee": {
+      "tools": 11,
+      "input_bytes": 18462,
+      "full_bytes": 22860
     }
   },
   "canonical": {

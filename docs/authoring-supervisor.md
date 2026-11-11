@@ -21,6 +21,16 @@ The tables defined in migration `V0007__authoring_runs.sql` are:
 3. **`authoring_run_scene`**: Tracks scene-level progress, including the participating characters, location, content rating, phase (`pending`, `draft_saved`, `changes_committed`, `beats_annotated`), scene ID, and artifact paths.
 4. **`authoring_checkpoint`**: Tracks checkpoint ranges, statuses (`pending_review`, `reviewed`), and report artifact paths.
 
+### McKee-structured projects
+
+Projects created through the `new-book` planning flow are marked
+McKee-structured and may carry an accepted Story Spine (see
+[planning engine](planning-engine-design.md)). The Story Spine is planning
+intent: authoring runs do not read or enforce it yet, and runs on unmarked
+projects behave exactly as before. `planning_status` lists accepted spines, and
+`get_entity(table: "story_spine")` reads one wherever the profile exposes
+`get_entity`; the plan is read-only and no writing path depends on it.
+
 ## MCP Tools Interface
 
 The supervisor exposes 9 MCP tools through the `spindle-mcp` server:

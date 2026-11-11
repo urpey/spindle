@@ -1,5 +1,6 @@
 use crate::models::{EstablishedIn, StoryPlacement};
 use crate::provenance::{Provenance, RecordId};
+use crate::story_spine::{ControllingIdea, StorySpineEnding};
 use crate::subject::{Subject, SubjectTable};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -455,6 +456,7 @@ pub enum SubjectKindSpecific {
     SystemOverlay(SystemOverlayDetails),
     NarrativePromise(NarrativePromiseDetails),
     CharacterArc(CharacterArcDetails),
+    StorySpine(StorySpineDetails),
     Term(TermDetails),
     Relationship(RelationshipDetails),
     TimelineEvent(TimelineEventDetails),
@@ -477,6 +479,7 @@ impl SubjectKindSpecific {
             SubjectKindSpecific::SystemOverlay(_) => "system_overlay",
             SubjectKindSpecific::NarrativePromise(_) => "narrative_promise",
             SubjectKindSpecific::CharacterArc(_) => "character_arc",
+            SubjectKindSpecific::StorySpine(_) => "story_spine",
             SubjectKindSpecific::Term(_) => "term",
             SubjectKindSpecific::Relationship(_) => "relationship",
             SubjectKindSpecific::TimelineEvent(_) => "timeline_event",
@@ -499,6 +502,7 @@ impl SubjectKindSpecific {
             SubjectKindSpecific::SystemOverlay(_) => Some(SubjectTable::SystemOverlay),
             SubjectKindSpecific::NarrativePromise(_) => Some(SubjectTable::NarrativePromise),
             SubjectKindSpecific::CharacterArc(_) => Some(SubjectTable::CharacterArc),
+            SubjectKindSpecific::StorySpine(_) => Some(SubjectTable::StorySpine),
             SubjectKindSpecific::Term(_) => Some(SubjectTable::Term),
             SubjectKindSpecific::Relationship(_) => Some(SubjectTable::Relationship),
             SubjectKindSpecific::TimelineEvent(_) => Some(SubjectTable::TimelineEvent),
@@ -689,6 +693,39 @@ impl SubjectKindSpecific {
                             .collect::<Vec<_>>()
                             .join("; ")
                     ))
+                },
+            ])),
+            SubjectKindSpecific::StorySpine(details) => Some(compact_lines(vec![
+                Some(format!(
+                    "Scope: {}",
+                    details
+                        .book_number
+                        .map(|book| format!("book {book} sub-spine"))
+                        .unwrap_or_else(|| "series spine".to_string())
+                )),
+                Some(format!("Central question: {}", details.central_question)),
+                Some(format!(
+                    "Controlling idea: {} because {}",
+                    details.controlling_idea.value, details.controlling_idea.cause
+                )),
+                (!details.counter_idea.is_empty())
+                    .then(|| format!("Counter-idea: {}", details.counter_idea)),
+                Some(format!("Spine axis: {}", details.spine_axis)),
+                Some(format!("Ending: {:?}", details.ending_type)),
+                details.inciting_incident.as_ref().map(|placement| {
+                    format!("Inciting incident: {}", format_story_placement(placement))
+                }),
+                details.final_climax.as_ref().map(|placement| {
+                    format!("Final climax: {}", format_story_placement(placement))
+                }),
+                details
+                    .series_spine_id
+                    .as_ref()
+                    .map(|series| format!("Series spine: {series}")),
+                if details.theme_ids.is_empty() {
+                    None
+                } else {
+                    Some(format!("Themes: {}", details.theme_ids.join(", ")))
                 },
             ])),
             SubjectKindSpecific::Term(details) => Some(compact_lines(vec![
@@ -895,6 +932,35 @@ pub struct CharacterArcDetails {
     /// still deserialize.
     #[serde(default)]
     pub milestones: Vec<crate::models::CharacterArcMilestone>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct StorySpineDetails {
+    /// Series spine this book sub-spine references; absent on the series spine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_spine_id: Option<String>,
+    /// Book this sub-spine covers; absent on the series spine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_number: Option<i32>,
+    /// The question the inciting incident raises and the final climax answers.
+    pub central_question: String,
+    /// The claim the story proves: a value plus its cause.
+    pub controlling_idea: ControllingIdea,
+    /// The opposing idea the story argues against.
+    pub counter_idea: String,
+    /// The Value Axis the whole spine turns on.
+    pub spine_axis: String,
+    /// Whether the ending is idealist, pessimist, or ironic.
+    pub ending_type: StorySpineEnding,
+    /// Where the inciting incident is placed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inciting_incident: Option<StoryPlacement>,
+    /// Where the final climax is placed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_climax: Option<StoryPlacement>,
+    /// Themes this spine references; it never replaces them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub theme_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

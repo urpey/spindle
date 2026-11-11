@@ -1115,6 +1115,10 @@ pub struct ProjectSummary {
     pub genre: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_style_profile_id: Option<String>,
+    /// True only for projects created through the planning (new-book) root.
+    /// Omitted from existing-project payloads so their output stays unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mckee_structured: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -182,7 +182,8 @@ pub(super) fn operation_state(
                 "pacing_curve",
                 "book",
                 "chapter",
-                "faction"
+                "faction",
+                "story_spine"
             ]
             .contains(&table),
             "unsupported planning record type"
@@ -244,6 +245,21 @@ pub(super) fn operation_state(
             "SELECT * FROM pacing_config WHERE project_id=?1 AND branch_id=?2",
             &[project, branch],
         )?,
+        CreateStorySpine(_) => {
+            if input["series_spine_id"].is_null() {
+                target(
+                    "story_spine_series",
+                    "SELECT * FROM story_spine WHERE project_id=?1 AND series_spine_id IS NULL",
+                    &[project],
+                )?;
+            } else {
+                target(
+                    "story_spine_book",
+                    "SELECT * FROM story_spine WHERE project_id=?1 AND book_number=?2 AND series_spine_id IS NOT NULL",
+                    &[project, &n("book_number")],
+                )?;
+            }
+        }
         CreatePacingCurve(_) => target(
             "pacing_curve",
             "SELECT * FROM pacing_curve WHERE project_id=?1 AND branch_id=?2 AND book_number=?3",
@@ -690,12 +706,13 @@ fn scope_guard(
                                     "character_arc",
                                     "book",
                                     "chapter",
-                                    "faction"
+                                    "faction",
+                                    "story_spine"
                                 ]
                                 .contains(&table),
                                 "unsupported planning reference type"
                             );
-                            let sql = if matches!(table, "book" | "chapter") {
+                            let sql = if matches!(table, "book" | "chapter" | "story_spine") {
                                 format!(
                                     "SELECT EXISTS(SELECT 1 FROM {table} WHERE id=?1 AND project_id=?2 AND ?3 IS NOT NULL)"
                                 )

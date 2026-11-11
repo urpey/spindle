@@ -202,8 +202,24 @@ TypedPlanningOperation = CreateCharacter | CreateLocation | CreateWorldRule |
   CreateMotif | CreateNarrativePromise | CreateCharacterArc |
   CreatePacingConfig | CreatePacingCurve | SetArcPacingConstraints |
   CreateProject | UpdateReaderContract | CreateBook | CreateChapter |
-  SetBookOutline | SetChapterOutline | PlanChapter
+  SetBookOutline | SetChapterOutline | PlanChapter | CreateStorySpine
 ```
+
+`CreateStorySpine` is a Contract-level operation on an attached project. It
+stages the series **Story Spine** (no `book_number`) or one book sub-spine
+(`book_number` plus `series_spine_id` pointing at the series spine). It is valid
+only on McKee-structured projects: the planning `CreateProject` apply path is the
+only writer of the `project.mckee_structured` marker (V0057), so direct
+`create_project` calls and every pre-existing project stay unmarked and cannot
+opt in. An empty Central Question, Controlling Idea value or cause, or Spine Axis
+is recorded on the staged proposal as a blocking finding
+(`story_spine_missing_*`) and blocks acceptance; every other blocking finding
+still rejects staging. A second series spine, a second sub-spine for the same
+book, a sub-spine that references another sub-spine, or a final climax placed
+before the inciting incident are rejected. Accepted spines read back through
+`planning_status.story_spines` and `get_entity(table="story_spine")`; a Story
+Spine references Themes by id and never replaces them. See
+[ADR 0007](adr/0007-mckee-structure-swain-prose.md).
 
 Each variant wraps the existing core input shape with typed proposal references
 in ID slots. The dispatcher is a closed allowlist, not an arbitrary tool name

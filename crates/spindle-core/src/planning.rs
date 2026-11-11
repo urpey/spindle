@@ -1,5 +1,6 @@
 //! Initial-planning contracts. These never authorize in-run amendments.
 use crate::models::*;
+use crate::story_spine::{ControllingIdea, StorySpine, StorySpineEnding};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -714,6 +715,7 @@ pub enum PlanningOperation {
     SetChapterOutline(PlanningSetChapterOutlineInput),
     PlanChapter(PlanningPlanChapterInput),
     UpdateReaderContract(PlanningReaderContract),
+    CreateStorySpine(PlanningCreateStorySpineInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -723,6 +725,44 @@ pub struct PlanningCreateProjectInput {
     pub project_type: String,
     pub genre: String,
     pub reader_contract: PlanningReaderContract,
+}
+
+/// Stage the series Story Spine or one book sub-spine at the contract level.
+///
+/// The four meaning fields are defaulted so an incomplete spine can be staged
+/// with blocking findings; a proposal carrying such findings cannot be accepted.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningCreateStorySpineInput {
+    /// `None` creates the series spine; `Some` creates that book's sub-spine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_number: Option<i32>,
+    /// Required for a book sub-spine; must name the series spine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_spine_id: Option<PlanningRef>,
+    /// The question the inciting incident raises and the final climax answers.
+    #[serde(default)]
+    pub central_question: String,
+    /// The claim the story proves: a value plus its cause.
+    #[serde(default)]
+    pub controlling_idea: ControllingIdea,
+    /// The opposing idea the story argues against.
+    #[serde(default)]
+    pub counter_idea: String,
+    /// The Value Axis the whole spine turns on.
+    #[serde(default)]
+    pub spine_axis: String,
+    /// Whether the ending is idealist, pessimist, or ironic.
+    pub ending_type: StorySpineEnding,
+    /// Where the inciting incident is placed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inciting_incident: Option<PlanningStoryPlacement>,
+    /// Where the final climax is placed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_climax: Option<PlanningStoryPlacement>,
+    /// Themes this spine references; it never replaces them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub theme_ids: Vec<PlanningRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1747,6 +1787,9 @@ pub struct PlanningStatusOutput {
     /// Planner findings currently visible for the selected session.
     #[serde(default)]
     pub findings: Vec<PlanningFinding>,
+    /// Persisted Story Spines for the selected session's project, when attached.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub story_spines: Vec<StorySpine>,
     /// Readiness report for the selected session, when its project is attached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readiness: Option<PlanningReadinessSummary>,
@@ -2045,4 +2088,5 @@ pub enum PlanningAppliedOutput {
     SetChapterOutline(Box<SetChapterOutlineOutput>),
     PlanChapter(Box<PlanChapterOutput>),
     UpdateReaderContract(Box<UpdateEntityOutput>),
+    CreateStorySpine(Box<crate::story_spine::CreateStorySpineOutput>),
 }

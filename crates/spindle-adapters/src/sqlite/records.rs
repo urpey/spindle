@@ -29,7 +29,7 @@ pub use super::json_records::{
 // Project
 // =============================================================================
 
-pub const PROJECT_COLUMNS: &str = "id, name, project_type, genre, reader_contract, active_branch_id, notes, created_at, updated_at, narrator_voice, active_style_profile_id, style_learning, min_scene_word_count";
+pub const PROJECT_COLUMNS: &str = "id, name, project_type, genre, reader_contract, active_branch_id, notes, created_at, updated_at, narrator_voice, active_style_profile_id, style_learning, min_scene_word_count, mckee_structured";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
@@ -59,6 +59,10 @@ pub struct Project {
     /// path (`("project", "min_scene_word_count")` in the update allowlist).
     #[serde(default)]
     pub min_scene_word_count: Option<i64>,
+    /// True only for projects created through the planning (new-book) root
+    /// (migration V0057). Existing/direct projects serialize without it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mckee_structured: bool,
 }
 
 impl<'a> TryFrom<&Row<'a>> for Project {
@@ -79,6 +83,7 @@ impl<'a> TryFrom<&Row<'a>> for Project {
             active_style_profile_id: row::opt_text(r, 10)?,
             style_learning: row::opt_int(r, 11)?,
             min_scene_word_count: row::opt_int(r, 12)?,
+            mckee_structured: row::boolean(r, 13)?,
         })
     }
 }

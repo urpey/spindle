@@ -17,9 +17,16 @@ pub(crate) fn canonical_artifact_schema() -> (serde_json::Value, String) {
     (value, digest)
 }
 
-fn allowed_operations_for_level(level: PlanningLevel, attached: bool) -> &'static [&'static str] {
+fn allowed_operations_for_level(
+    level: PlanningLevel,
+    attached: bool,
+    mckee_structured: bool,
+) -> &'static [&'static str] {
     match (level, attached) {
         (PlanningLevel::Contract, false) => &["create_project"],
+        (PlanningLevel::Contract, true) if mckee_structured => {
+            &["update_reader_contract", "create_story_spine"]
+        }
         (PlanningLevel::Contract, true) => &["update_reader_contract"],
         (PlanningLevel::CastWorld, _) => &[
             "create_character",
@@ -63,6 +70,7 @@ fn build_level_prompt(
     scope_digest: &[String],
     budget: &PlanningBudget,
     usage: &PlanningBudgetUsage,
+    mckee_structured: bool,
 ) -> PromptBundle {
     let prompt_id = level.prompt_id();
     let (artifact_schema, schema_hash) = canonical_artifact_schema();
@@ -176,7 +184,8 @@ fn build_level_prompt(
     let remaining_in = budget.max_input_tokens.saturating_sub(usage.input_tokens);
     let remaining_out = budget.max_output_tokens.saturating_sub(usage.output_tokens);
     let remaining_total = budget.max_total_tokens.saturating_sub(usage.total_tokens);
-    let allowed_ops = allowed_operations_for_level(level, session.scope.is_some());
+    let allowed_ops =
+        allowed_operations_for_level(level, session.scope.is_some(), mckee_structured);
 
     let user_prompt = format!(
         "[SPINDLE_PROMPT_ID:{}]\n\
@@ -719,6 +728,15 @@ impl SqliteSpindleService {
             .repository
             .describe_planning_scope_digest(session.scope.clone())
             .await?;
+        // The contract prompt may only advertise `create_story_spine` when the
+        // attached project is McKee-structured. Staging still rejects a spine on
+        // an unmarked project; this keeps the prompt honest as well.
+        let mckee_structured = match (&session.scope, level) {
+            (Some(scope), PlanningLevel::Contract) => {
+                self.repository.is_mckee_project(&scope.project_id).await?
+            }
+            _ => false,
+        };
         let base_prompt = build_level_prompt(
             &session,
             level,
@@ -728,6 +746,7 @@ impl SqliteSpindleService {
             &scope_digest,
             &session.budget,
             &session.usage,
+            mckee_structured,
         );
 
         if let Some(submission) = input.host_submission {

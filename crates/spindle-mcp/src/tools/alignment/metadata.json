@@ -574,6 +574,7 @@
     "profiles": [
       "authoring",
       "default",
+      "mckee",
       "minimal",
       "new-book",
       "planning",
@@ -618,6 +619,34 @@
       "list_projects",
       "list_skills",
       "set_active_project"
+    ],
+    "version": 1
+  },
+  "story-structure": {
+    "profiles": [
+      "default",
+      "mckee"
+    ],
+    "references": [
+      {
+        "name": "story-structure/story-spine",
+        "profiles": [
+          "default",
+          "mckee"
+        ],
+        "tools": [],
+        "trigger": "Load when writing, reviewing, or questioning a Story Spine (series or book sub-spine), its ending type, or its Central Question / Controlling Idea / Counter-Idea / Spine Axis."
+      }
+    ],
+    "requires_skills": [
+      "spindle"
+    ],
+    "tools": [
+      "get_entity",
+      "planning_advance",
+      "planning_begin",
+      "planning_decide",
+      "planning_status"
     ],
     "version": 1
   },

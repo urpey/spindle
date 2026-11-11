@@ -477,6 +477,7 @@ mod scene_changes;
 mod scene_commit;
 mod scenes;
 mod source_bridge;
+mod story_spine;
 mod structure;
 mod validators;
 mod writer;

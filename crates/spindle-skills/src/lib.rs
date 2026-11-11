@@ -82,7 +82,7 @@ mod tests {
         assert!(names.contains(&"researcher"));
         assert!(names.contains(&"spindle"));
         assert!(names.contains(&"new-book"));
-        assert_eq!(skills.len(), 14);
+        assert_eq!(skills.len(), 15);
     }
 }
 
@@ -121,7 +121,7 @@ mod profile_contract_tests {
     #[test]
     fn generated_profiles_are_sorted_and_resolve_dependency_closure() {
         let profiles = list_profiles();
-        assert_eq!(profiles.len(), 11);
+        assert_eq!(profiles.len(), 12);
         assert!(profiles.iter().any(|profile| profile.name == "new-book"));
         assert!(profiles.windows(2).all(|p| p[0].name < p[1].name));
         for profile in profiles {

@@ -630,6 +630,7 @@ impl SqliteSpindleService {
                 gate: None,
                 proposals: Vec::new(),
                 findings: Vec::new(),
+                story_spines: Vec::new(),
                 readiness: None,
                 next_action: "No planning session exists yet. Call planning_begin with the author's premise to start one.".to_string(),
                 reconnect_hint: "Planning sessions are durable; call planning_status again after planning_begin.".to_string(),
@@ -647,6 +648,10 @@ impl SqliteSpindleService {
             .map(proposal_summary)
             .collect::<Result<Vec<_>>>()?;
         let gate = Some(gate_for(&session, gate_level(&proposals)));
+        let story_spines = match session.scope.as_ref() {
+            Some(scope) => self.list_story_spines(&scope.project_id).await?,
+            None => Vec::new(),
+        };
 
         let readiness = if include_readiness {
             match session.scope.clone() {
@@ -704,6 +709,7 @@ impl SqliteSpindleService {
             gate,
             proposals: proposal_summaries,
             findings,
+            story_spines,
             readiness,
             next_action,
             reconnect_hint: reconnect_hint(&session),

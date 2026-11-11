@@ -129,6 +129,7 @@ impl Repository {
         let world_states = self
             .list_world_states_by_project_and_branch(project_id, branch_id)
             .await?;
+        let story_spines = self.list_story_spines(project_id).await?;
 
         Ok(SnapshotBatchContext {
             project,
@@ -156,6 +157,7 @@ impl Repository {
             character_states,
             voice_profiles,
             world_states,
+            story_spines,
         })
     }
 }
