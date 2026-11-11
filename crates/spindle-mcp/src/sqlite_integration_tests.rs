@@ -9317,15 +9317,21 @@ fn planning_entry_series_artifact() -> serde_json::Value {
             }}},
             {"output_ref": "pacing:curve_1", "operation": {"operation": "create_pacing_curve", "input": {
                 "book_number": 1,
-                "act_breakpoints": {"first": 0.25, "second": 0.75},
+                "act_breakpoints": {},
                 "scene_type_density": {"action": 0.5, "sequel": 0.5},
                 "intensity_points": [{"position": 0.0, "intensity": 0.2}, {"position": 1.0, "intensity": 0.8}]
             }}}
         ],
-        "schedule": {"promise_events": [
-            {"promise_ref": {"kind": "proposal_ref", "value": "promise:bell"}, "action": "plant", "placement": {"book_number": 1, "chapter_number": 1, "scene_order": 1}},
-            {"promise_ref": {"kind": "proposal_ref", "value": "promise:bell"}, "action": "payoff", "placement": {"book_number": 1, "chapter_number": 2, "scene_order": 2}}
-        ]}
+        "schedule": {
+            "promise_events": [
+                {"promise_ref": {"kind": "proposal_ref", "value": "promise:bell"}, "action": "plant", "placement": {"book_number": 1, "chapter_number": 1, "scene_order": 1}},
+                {"promise_ref": {"kind": "proposal_ref", "value": "promise:bell"}, "action": "payoff", "placement": {"book_number": 1, "chapter_number": 2, "scene_order": 2}}
+            ],
+            "acts": [
+                {"order": 1, "climax": {"book_number": 1, "chapter_number": 1, "scene_order": 2}, "charge": {"sign": "negative", "depth": "contrary"}, "central_question_part": "Mara learns the bell was rung deliberately", "answers_central_question": false},
+                {"order": 2, "climax": {"book_number": 1, "chapter_number": 2, "scene_order": 2}, "charge": {"sign": "negative", "depth": "contradictory"}, "central_question_part": "Mara's trust in the harbor is answered", "answers_central_question": true}
+            ]
+        }
     })
 }
 
@@ -9480,6 +9486,30 @@ async fn new_book_agent_entry_reaches_scene_one_one_ready_through_mcp_tools() {
         Some(range.clone()),
     )
     .await;
+
+    // Public read-back: the accepted Series-Arc proposal carries its Act list
+    // in the planning status schedule, and Acts stay schedule metadata rather
+    // than story records.
+    let status = planning_call(
+        &router,
+        "planning_status",
+        serde_json::json!({"session_id": session_id, "include_readiness": false}),
+    )
+    .await;
+    let series_summary = status["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|proposal| proposal["level"] == "series_arc" && proposal["status"] == "applied")
+        .expect("applied series arc proposal");
+    assert_eq!(
+        series_summary["schedule"]["acts"][0]["order"], 1,
+        "{status}"
+    );
+    assert_eq!(
+        series_summary["schedule"]["acts"][1]["answers_central_question"], true,
+        "{status}"
+    );
 
     planning_advance_and_accept(
         &router,
@@ -10116,7 +10146,7 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
                 }}},
                 {"output_ref": "pacing:curve", "operation": {"operation": "create_pacing_curve", "input": {
                     "book_number": 1,
-                    "act_breakpoints": {"first": 0.5},
+                    "act_breakpoints": {},
                     "scene_type_density": {"action": 1.0},
                     "intensity_points": [{"position": 0.0, "intensity": 0.6}]
                 }}}
@@ -10131,7 +10161,11 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
                     "book_number": 1,
                     "chapter_number": 1,
                     "target_intensity": 0.6
-                }]
+                }],
+                "acts": [
+                    {"order": 1, "climax": {"book_number": 1, "chapter_number": 2, "scene_order": 1}, "charge": {"sign": "negative", "depth": "contrary"}, "central_question_part": "Mara learns who broke the promise", "answers_central_question": false},
+                    {"order": 2, "climax": {"book_number": 1, "chapter_number": 3, "scene_order": 1}, "charge": {"sign": "negative", "depth": "contradictory"}, "central_question_part": "Mara answers the harbor's question", "answers_central_question": true}
+                ]
             }
         }),
         "phase-f-series",

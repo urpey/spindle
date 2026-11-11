@@ -1,4 +1,5 @@
 use super::*;
+use spindle_core::charge::{Charge, ChargeDepth, ChargeSign};
 use spindle_core::models::ReaderContract;
 async fn fresh_service_local() -> (tempfile::TempDir, SqliteSpindleService) {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -480,12 +481,113 @@ fn planned(key: &str, name: &str, input: serde_json::Value) -> PlanningOperation
 fn reference(key: &str) -> serde_json::Value {
     serde_json::json!({"kind":"proposal_ref","value":key})
 }
+
+/// One valid Act for a McKee schedule. Tests that exercise a specific defect
+/// mutate the returned value instead of restating every field.
+#[allow(clippy::too_many_arguments)]
+fn planned_act(
+    order: i32,
+    book_number: i32,
+    chapter_number: i32,
+    scene_order: i32,
+    sign: ChargeSign,
+    depth: ChargeDepth,
+    central_question_part: &str,
+    answers_central_question: bool,
+) -> PlannedAct {
+    PlannedAct {
+        order,
+        climax: Some(PlanningStoryPlacement {
+            book_number,
+            chapter_number,
+            scene_order: Some(scene_order),
+            note: None,
+        }),
+        charge: Some(Charge::new(sign, depth).expect("valid charge pair")),
+        central_question_part: central_question_part.to_string(),
+        answers_central_question,
+    }
+}
+
+fn act_findings(proposal: &PlanningProposal) -> Vec<&PlanningFinding> {
+    proposal
+        .findings
+        .iter()
+        .filter(|finding| finding.code.starts_with("act_"))
+        .collect()
+}
+
+fn assert_blocking_act_finding(proposal: &PlanningProposal, code: &str) {
+    let finding = act_findings(proposal)
+        .into_iter()
+        .find(|finding| finding.code == code)
+        .unwrap_or_else(|| panic!("missing blocking finding {code}: {:?}", proposal.findings));
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+}
+
+fn main_plot_operation() -> PlanningOperationItem {
+    planned(
+        "plot:main",
+        "create_plot_line",
+        serde_json::json!({
+            "name": "Find the heir",
+            "plot_type": "main",
+            "summary": "Trace a forged ledger",
+            "value_axis": "trust",
+            "is_main_plot": true
+        }),
+    )
+}
+
+fn theme_operation() -> PlanningOperationItem {
+    planned(
+        "theme:truth",
+        "create_theme",
+        serde_json::json!({
+            "theme_statement": "Truth requires risk",
+            "thesis_antithesis": "Safety versus connection"
+        }),
+    )
+}
+
+/// A proposal-scoped output-ref suffix. A session rejects two staged proposals
+/// that reuse the same output ref, so fixtures that stage the same shape twice
+/// need distinct refs.
+fn unique_fixture_ref(base: &str) -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    format!("{base}:{}", NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
 async fn bundle(
     svc: &SqliteSpindleService,
     s: &PlanningSession,
     level: PlanningLevel,
     parents: &[&PlanningProposal],
     items: Vec<PlanningOperationItem>,
+) -> PlanningProposal {
+    bundle_with_schedule(svc, s, level, parents, items, PlanningSchedule::default()).await
+}
+
+async fn bundle_with_schedule(
+    svc: &SqliteSpindleService,
+    s: &PlanningSession,
+    level: PlanningLevel,
+    parents: &[&PlanningProposal],
+    items: Vec<PlanningOperationItem>,
+    schedule: PlanningSchedule,
+) -> PlanningProposal {
+    bundle_with_schedule_and_range(svc, s, level, parents, items, schedule, None).await
+}
+
+async fn bundle_with_schedule_and_range(
+    svc: &SqliteSpindleService,
+    s: &PlanningSession,
+    level: PlanningLevel,
+    parents: &[&PlanningProposal],
+    items: Vec<PlanningOperationItem>,
+    schedule: PlanningSchedule,
+    target_range: Option<PlanningTargetRange>,
 ) -> PlanningProposal {
     let mut a = artifact(s, "unused");
     a.level = level;
@@ -494,7 +596,52 @@ async fn bundle(
         .iter()
         .map(|p| (p.id.clone(), p.payload_hash.clone()))
         .collect();
+    a.schedule = schedule;
+    a.target_range = target_range;
     svc.stage_planning(a).await.unwrap()
+}
+
+/// Stage a Series-Arc artifact carrying `acts` and the Main Plot every McKee
+/// series arc needs, so an Act-list test does not fail on the plot-line gate.
+async fn stage_series_arc_with_acts(
+    svc: &SqliteSpindleService,
+    s: &PlanningSession,
+    parents: &[&PlanningProposal],
+    acts: Vec<PlannedAct>,
+) -> PlanningProposal {
+    let suffix = unique_fixture_ref("act");
+    bundle_with_schedule(
+        svc,
+        s,
+        PlanningLevel::SeriesArc,
+        parents,
+        vec![
+            planned(
+                &format!("theme:truth:{suffix}"),
+                "create_theme",
+                serde_json::json!({
+                    "theme_statement": "Truth requires risk",
+                    "thesis_antithesis": "Safety versus connection"
+                }),
+            ),
+            planned(
+                &format!("plot:main:{suffix}"),
+                "create_plot_line",
+                serde_json::json!({
+                    "name": "Find the heir",
+                    "plot_type": "main",
+                    "summary": "Trace a forged ledger",
+                    "value_axis": "trust",
+                    "is_main_plot": true
+                }),
+            ),
+        ],
+        PlanningSchedule {
+            acts,
+            ..PlanningSchedule::default()
+        },
+    )
+    .await
 }
 async fn accept(
     svc: &SqliteSpindleService,
@@ -594,17 +741,31 @@ async fn all_human_fixture_applies_allowlist_and_reads_six_complete_manifests() 
   planned("relationship:rivals","create_relationship",json!({"character_a_id":reference("cast:ada"),"character_b_id":reference("cast:ben"),"relationship_type":"rivals","initial_trust":0,"initial_tension":3})),
  ]).await;
     accept(&svc, &s, &cast).await;
-    let arc=bundle(&svc,&s,PlanningLevel::SeriesArc,&[&cast,&spine],vec![
-  planned("theme:trust","create_theme",json!({"theme_statement":"Trust requires risk","thesis_antithesis":"Safety versus connection"})),
-  planned("conflict:heir","create_conflict",json!({"name":"The missing heir","conflict_type":"mystery","stakes":"Ada's home"})),
-  planned("plot:heir","create_plot_line",json!({"name":"Find the heir","plot_type":"main","summary":"Trace a forged ledger","value_axis":"trust","is_main_plot":true,"connected_theme_ids":[reference("theme:trust")],"connected_conflict_ids":[reference("conflict:heir")]})),
-  planned("motif:seal","create_motif",json!({"name":"Broken seal","description":"An inherited signet","connected_theme_ids":[reference("theme:trust")]})),
-  planned("promise:seal","create_narrative_promise",json!({"promise_type":"mystery","description":"Who forged the seal?","planted_at":{"book_number":1,"chapter_number":1},"planned_payoff":{"book_number":1,"chapter_number":3}})),
-  planned("arc:ada","create_character_arc",json!({"character_id":reference("cast:ada"),"arc_type":"growth","starting_state":"Alone","ending_state":"Trusting","thematic_purpose":"Risk connection","connected_theme_ids":[reference("theme:trust")],"milestones":[{"label":"Ask for help","description":"Ada trusts Ben","placement":{"book_number":1,"chapter_number":2}}]})),
-  planned("pacing:series","create_pacing_config",json!({"total_planned_books":2,"avg_chapters_per_book":3,"avg_scenes_per_chapter":2,"tension_model":"rising"})),
-  planned("pacing:book","create_pacing_curve",json!({"book_number":1,"act_breakpoints":{"first":0.25,"second":0.75},"scene_type_density":{"action":0.5,"sequel":0.5},"intensity_points":[{"position":0.0,"intensity":0.2},{"position":1.0,"intensity":0.8}]})),
-  planned("pacing:ada","set_arc_pacing_constraints",json!({"character_arc_id":reference("arc:ada"),"per_book_budget":{"1":0.7},"max_progress_per_chapter":0.3})),
- ]).await;
+    let arc = bundle_with_schedule(
+        &svc,
+        &s,
+        PlanningLevel::SeriesArc,
+        &[&cast, &spine],
+        vec![
+            planned("theme:trust","create_theme",json!({"theme_statement":"Trust requires risk","thesis_antithesis":"Safety versus connection"})),
+            planned("conflict:heir","create_conflict",json!({"name":"The missing heir","conflict_type":"mystery","stakes":"Ada's home"})),
+            planned("plot:heir","create_plot_line",json!({"name":"Find the heir","plot_type":"main","summary":"Trace a forged ledger","value_axis":"trust","is_main_plot":true,"connected_theme_ids":[reference("theme:trust")],"connected_conflict_ids":[reference("conflict:heir")]})),
+            planned("motif:seal","create_motif",json!({"name":"Broken seal","description":"An inherited signet","connected_theme_ids":[reference("theme:trust")]})),
+            planned("promise:seal","create_narrative_promise",json!({"promise_type":"mystery","description":"Who forged the seal?","planted_at":{"book_number":1,"chapter_number":1},"planned_payoff":{"book_number":1,"chapter_number":3}})),
+            planned("arc:ada","create_character_arc",json!({"character_id":reference("cast:ada"),"arc_type":"growth","starting_state":"Alone","ending_state":"Trusting","thematic_purpose":"Risk connection","connected_theme_ids":[reference("theme:trust")],"milestones":[{"label":"Ask for help","description":"Ada trusts Ben","placement":{"book_number":1,"chapter_number":2}}]})),
+            planned("pacing:series","create_pacing_config",json!({"total_planned_books":2,"avg_chapters_per_book":3,"avg_scenes_per_chapter":2,"tension_model":"rising"})),
+            planned("pacing:book","create_pacing_curve",json!({"book_number":1,"act_breakpoints":{},"scene_type_density":{"action":0.5,"sequel":0.5},"intensity_points":[{"position":0.0,"intensity":0.2},{"position":1.0,"intensity":0.8}]})),
+            planned("pacing:ada","set_arc_pacing_constraints",json!({"character_arc_id":reference("arc:ada"),"per_book_budget":{"1":0.7},"max_progress_per_chapter":0.3})),
+        ],
+        PlanningSchedule {
+            acts: vec![
+                planned_act(1, 1, 1, 2, ChargeSign::Negative, ChargeDepth::Contrary, "Ada learns the seal was forged", false),
+                planned_act(2, 1, 3, 2, ChargeSign::Negative, ChargeDepth::Contradictory, "Trust costs Ada the harbor", true),
+            ],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
     accept(&svc, &s, &arc).await;
     let book=bundle(&svc,&s,PlanningLevel::Book,&[&root,&arc],vec![
   planned("outline:book","set_book_outline",json!({"book_id":reference("project:root:book"),"book_number":1,"content":"Ada finds the ledger, risks trust, and exposes the forgery."})),
@@ -5489,7 +5650,7 @@ fn phase_d_series_input(
             "create_pacing_curve",
             json!({
                 "book_number": 1,
-                "act_breakpoints": {"first": 0.25, "second": 0.75},
+                "act_breakpoints": {},
                 "scene_type_density": {"action": 0.5, "sequel": 0.5},
                 "intensity_points": [
                     {"position": 0.0, "intensity": 0.2},
@@ -5515,6 +5676,28 @@ fn phase_d_series_input(
         ],
         pov_plan: vec![],
         intensity_targets: vec![],
+        acts: vec![
+            planned_act(
+                1,
+                1,
+                1,
+                2,
+                ChargeSign::Negative,
+                ChargeDepth::Contrary,
+                "Mara learns the bell was rung deliberately",
+                false,
+            ),
+            planned_act(
+                2,
+                1,
+                2,
+                2,
+                ChargeSign::Negative,
+                ChargeDepth::Contradictory,
+                "The signal is a confession",
+                true,
+            ),
+        ],
     };
     a
 }
@@ -5863,6 +6046,7 @@ async fn phase_d_validator_enforces_manifest_completeness_references_pov_causali
             }],
             promise_events: vec![],
             intensity_targets: vec![],
+            acts: vec![],
         },
         assumptions: vec![],
         author_questions: vec![],
@@ -6113,6 +6297,7 @@ async fn phase_d_validator_enforces_promise_schedules_pov_rotation_pacing_curves
                 note: None,
             },
         ],
+        acts: vec![],
     };
 
     // With default policy (pov_policy = None, pacing_policy = None):
@@ -8067,6 +8252,1208 @@ async fn mckee_book_acceptance_rechecks_the_main_plot_set() {
         book.findings
     );
     accept(&svc, &session, &book).await;
+}
+
+#[tokio::test]
+async fn mckee_acts_stage_persist_and_read_back_through_planning_status() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let acts = vec![
+        planned_act(
+            1,
+            1,
+            1,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contrary,
+            "Ada learns the seal was forged",
+            false,
+        ),
+        planned_act(
+            2,
+            1,
+            3,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contradictory,
+            "Trust costs Ada the harbor",
+            true,
+        ),
+    ];
+    let arc = stage_series_arc_with_acts(&svc, &session, &[&root], acts.clone()).await;
+    assert!(act_findings(&arc).is_empty(), "{:?}", arc.findings);
+    accept(&svc, &session, &arc).await;
+
+    let scope = session.scope.clone().unwrap();
+    let accepted = svc
+        .repository
+        .accepted_planning_acts(&scope.project_id, &scope.branch_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        accepted, acts,
+        "an accepted Act list must read back deterministically"
+    );
+
+    let status = svc
+        .planning_status(PlanningStatusInput {
+            session_id: Some(session.id.clone()),
+            project_id: None,
+            branch_id: None,
+            target_range: None,
+            include_readiness: Some(false),
+        })
+        .await
+        .unwrap();
+    let applied = status
+        .proposals
+        .iter()
+        .find(|proposal| proposal.proposal_id == arc.id)
+        .expect("the accepted series arc is listed");
+    assert_eq!(applied.status, PlanningProposalStatus::Applied);
+    assert_eq!(
+        applied.schedule["acts"],
+        serde_json::to_value(&acts).unwrap(),
+        "planning_status must expose the Act list on the accepted artifact"
+    );
+}
+
+#[tokio::test]
+async fn mckee_act_blocking_findings_stage_but_refuse_acceptance() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let valid = || {
+        vec![
+            planned_act(
+                1,
+                1,
+                1,
+                2,
+                ChargeSign::Negative,
+                ChargeDepth::Contrary,
+                "Ada learns the seal was forged",
+                false,
+            ),
+            planned_act(
+                2,
+                1,
+                3,
+                2,
+                ChargeSign::Negative,
+                ChargeDepth::Contradictory,
+                "Trust costs Ada the harbor",
+                true,
+            ),
+        ]
+    };
+
+    // The second Act repeats the first Act's full Charge.
+    let mut same_charge = valid();
+    same_charge[1].charge = same_charge[0].charge;
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], same_charge).await;
+    assert_blocking_act_finding(&proposal, "act_charge_unchanged");
+    reject_planning(&svc, &session, &proposal).await;
+
+    // The final Act does not answer the Central Question.
+    let mut unmarked = valid();
+    unmarked[1].answers_central_question = false;
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], unmarked).await;
+    assert_blocking_act_finding(&proposal, "act_final_act_must_answer_central_question");
+    reject_planning(&svc, &session, &proposal).await;
+
+    // Orders must start at 1 and have no gap.
+    let gapped = vec![planned_act(
+        2,
+        1,
+        3,
+        2,
+        ChargeSign::Negative,
+        ChargeDepth::Contradictory,
+        "Trust costs Ada the harbor",
+        true,
+    )];
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], gapped).await;
+    assert_blocking_act_finding(&proposal, "act_order_not_contiguous");
+    reject_planning(&svc, &session, &proposal).await;
+
+    // Duplicate order in one artifact.
+    let mut duplicate = valid();
+    duplicate[1].order = 1;
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], duplicate).await;
+    assert_blocking_act_finding(&proposal, "act_order_duplicate");
+    reject_planning(&svc, &session, &proposal).await;
+
+    // An Act must say which part of the Central Question it answers.
+    let mut empty_part = valid();
+    empty_part[0].central_question_part = "   ".into();
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], empty_part).await;
+    assert_blocking_act_finding(&proposal, "act_missing_central_question_part");
+    reject_planning(&svc, &session, &proposal).await;
+
+    // A missing Charge cannot turn the Spine Axis.
+    let mut missing_charge = valid();
+    missing_charge[1].charge = None;
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], missing_charge).await;
+    assert_blocking_act_finding(&proposal, "act_missing_charge");
+    reject_planning(&svc, &session, &proposal).await;
+
+    // The climax placeholder is required.
+    let mut missing_climax = valid();
+    missing_climax[0].climax = None;
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], missing_climax).await;
+    assert_blocking_act_finding(&proposal, "act_missing_climax_placement");
+    reject_planning(&svc, &session, &proposal).await;
+
+    // A chapter-wide placement cannot reserve an exact scene.
+    let mut missing_scene_order = valid();
+    missing_scene_order[0].climax.as_mut().unwrap().scene_order = None;
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], missing_scene_order).await;
+    assert_blocking_act_finding(&proposal, "act_missing_climax_scene_order");
+    reject_planning(&svc, &session, &proposal).await;
+
+    // Placements use 1-based positive coordinates.
+    let mut non_positive = valid();
+    non_positive[0].climax.as_mut().unwrap().chapter_number = 0;
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], non_positive).await;
+    assert_blocking_act_finding(&proposal, "act_invalid_climax_placement");
+    reject_planning(&svc, &session, &proposal).await;
+
+    // Only the final Act may claim to answer the Central Question.
+    let mut early_answer = valid();
+    early_answer[0].answers_central_question = true;
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], early_answer).await;
+    assert_blocking_act_finding(&proposal, "act_answers_central_question_not_final");
+    reject_planning(&svc, &session, &proposal).await;
+
+    // Climax chapters must rise with order inside one book: 5 then 3 is not a
+    // monotonic Act progression and would make derived breakpoints retreat.
+    let non_rising = vec![
+        planned_act(
+            1,
+            1,
+            5,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contrary,
+            "Ada learns the seal was forged",
+            false,
+        ),
+        planned_act(
+            2,
+            1,
+            3,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contradictory,
+            "Trust costs Ada the harbor",
+            true,
+        ),
+    ];
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], non_rising).await;
+    assert_blocking_act_finding(&proposal, "act_climax_not_rising");
+    reject_planning(&svc, &session, &proposal).await;
+
+    // Climaxes in different books are compared only inside their own book, so
+    // book 2 chapter 3 after book 1 chapter 5 is allowed.
+    let crossing_books = vec![
+        planned_act(
+            1,
+            1,
+            5,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contrary,
+            "Ada learns the seal was forged",
+            false,
+        ),
+        planned_act(
+            2,
+            2,
+            3,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contradictory,
+            "Trust costs Ada the harbor",
+            true,
+        ),
+    ];
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], crossing_books).await;
+    assert!(
+        act_findings(&proposal)
+            .iter()
+            .all(|finding| finding.code != "act_climax_not_rising"),
+        "cross-book climax chapters are not compared: {:?}",
+        proposal.findings
+    );
+
+    // The valid shape (only the final Act answers) stays clean.
+    let proposal = stage_series_arc_with_acts(&svc, &session, &[&root], valid()).await;
+    assert!(
+        act_findings(&proposal).is_empty(),
+        "a final-Act-only answer passes: {:?}",
+        proposal.findings
+    );
+}
+
+#[tokio::test]
+async fn mckee_act_depth_regression_is_advisory_and_does_not_block_acceptance() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let acts = vec![
+        planned_act(
+            1,
+            1,
+            1,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contradictory,
+            "Ada learns the seal was forged",
+            false,
+        ),
+        planned_act(
+            2,
+            1,
+            3,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contrary,
+            "Trust costs Ada the harbor",
+            true,
+        ),
+    ];
+    let arc = stage_series_arc_with_acts(&svc, &session, &[&root], acts).await;
+    assert!(
+        act_findings(&arc)
+            .iter()
+            .all(|finding| finding.severity == PlanningFindingSeverity::Advisory),
+        "a retreating depth must not be blocking: {:?}",
+        arc.findings
+    );
+    let advisory = act_findings(&arc)
+        .into_iter()
+        .find(|finding| finding.code == "act_depth_not_progressing")
+        .expect("the depth advisory is recorded");
+    assert_eq!(advisory.severity, PlanningFindingSeverity::Advisory);
+    // The author can still accept a deliberately shallow progression.
+    accept(&svc, &session, &arc).await;
+}
+
+#[tokio::test]
+async fn mckee_book_acceptance_rechecks_acts_against_the_accepted_list() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let arc = stage_series_arc_with_acts(
+        &svc,
+        &session,
+        &[&root],
+        vec![
+            planned_act(
+                1,
+                1,
+                1,
+                2,
+                ChargeSign::Negative,
+                ChargeDepth::Contrary,
+                "Ada learns the seal was forged",
+                false,
+            ),
+            planned_act(
+                2,
+                1,
+                3,
+                2,
+                ChargeSign::Negative,
+                ChargeDepth::Contradictory,
+                "Trust costs Ada the harbor",
+                true,
+            ),
+        ],
+    )
+    .await;
+    accept(&svc, &session, &arc).await;
+
+    let book_ops = || {
+        let suffix = unique_fixture_ref("outline:book");
+        vec![planned(
+            &suffix,
+            "set_book_outline",
+            serde_json::json!({"book_number":1,"content":"Ada risks the harbor on Ben's word."}),
+        )]
+    };
+    // A Book-level override of Act 2 that repeats Act 1's accepted Charge.
+    let clashing_book = bundle_with_schedule(
+        &svc,
+        &session,
+        PlanningLevel::Book,
+        &[&root, &arc],
+        book_ops(),
+        PlanningSchedule {
+            acts: vec![planned_act(
+                2,
+                1,
+                3,
+                2,
+                ChargeSign::Negative,
+                ChargeDepth::Contrary,
+                "Trust costs Ada the harbor",
+                true,
+            )],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    assert_blocking_act_finding(&clashing_book, "act_charge_unchanged");
+    reject_planning(&svc, &session, &clashing_book).await;
+
+    // A valid override deepens Act 2 and leaves Act 1 inherited.
+    let repaired_book = bundle_with_schedule(
+        &svc,
+        &session,
+        PlanningLevel::Book,
+        &[&root, &arc],
+        book_ops(),
+        PlanningSchedule {
+            acts: vec![planned_act(
+                2,
+                1,
+                3,
+                2,
+                ChargeSign::Negative,
+                ChargeDepth::NegationOfTheNegation,
+                "Trust costs Ada the harbor",
+                true,
+            )],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    assert!(
+        act_findings(&repaired_book).is_empty(),
+        "a repaired Book Act list must pass the re-check: {:?}",
+        repaired_book.findings
+    );
+    accept(&svc, &session, &repaired_book).await;
+
+    let scope = session.scope.clone().unwrap();
+    let accepted = svc
+        .repository
+        .accepted_planning_acts(&scope.project_id, &scope.branch_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        accepted.iter().map(|act| act.order).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    assert_eq!(
+        accepted[1].charge.unwrap().depth(),
+        ChargeDepth::NegationOfTheNegation,
+        "the later Book decision overrides the earlier Act 2"
+    );
+}
+
+#[tokio::test]
+async fn mckee_scene_batches_must_include_the_accepted_act_climax_scene() {
+    use serde_json::json;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let cast = bundle(
+        &svc,
+        &session,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![
+            planned(
+                "cast:ada",
+                "create_character",
+                json!({"name":"Ada","summary":"Harbor archivist","role":"protagonist"}),
+            ),
+            planned(
+                "design:ada",
+                "create_character_design",
+                character_design_payload("cast:ada", &["generous", "ruthless"]),
+            ),
+            planned(
+                "place:harbor",
+                "create_location",
+                json!({"name":"Harbor","kind":"city","summary":"A tidal port"}),
+            ),
+        ],
+    )
+    .await;
+    let cast_report = accept(&svc, &session, &cast).await;
+    let cast_ids = cast_report
+        .operations
+        .iter()
+        .flat_map(|receipt| receipt.returned_ids.iter())
+        .map(|(key, id)| (key.clone(), id.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let character_id = cast_ids["cast:ada"].clone();
+    let location_id = cast_ids["place:harbor"].clone();
+
+    let arc = stage_series_arc_with_acts(
+        &svc,
+        &session,
+        &[&root],
+        vec![
+            planned_act(
+                1,
+                1,
+                1,
+                2,
+                ChargeSign::Negative,
+                ChargeDepth::Contrary,
+                "Ada learns the seal was forged",
+                false,
+            ),
+            planned_act(
+                2,
+                1,
+                2,
+                1,
+                ChargeSign::Negative,
+                ChargeDepth::Contradictory,
+                "Trust costs Ada the harbor",
+                true,
+            ),
+        ],
+    )
+    .await;
+    accept(&svc, &session, &arc).await;
+
+    let scene = |order: i32, summary: &str| {
+        json!({
+            "scene_order": order,
+            "summary": summary,
+            "beat_structure": ["hook", "turn"],
+            "character_ids": [{"kind":"existing_record_id","value": character_id}],
+            "location_id": {"kind":"existing_record_id","value": location_id},
+            "content_rating": "general",
+            "purpose": "Force a trust decision at the tidal gate"
+        })
+    };
+    let range = PlanningTargetRange {
+        book_number: 1,
+        chapter_start: 1,
+        chapter_end: 1,
+        scenes_per_chapter: 2,
+    };
+    let plan = |scenes: Vec<serde_json::Value>| {
+        let suffix = unique_fixture_ref("plan:ch1");
+        vec![planned(
+            &suffix,
+            "plan_chapter",
+            json!({
+                "book_number": 1,
+                "chapter_number": 1,
+                "synopsis": "Ada follows the forged seal to the tidal gate.",
+                "scenes": scenes
+            }),
+        )]
+    };
+
+    // Chapter 1 contains Act 1's reserved climax at scene 2.
+    let missing = bundle_with_schedule_and_range(
+        &svc,
+        &session,
+        PlanningLevel::Chapter,
+        &[&root, &arc],
+        plan(vec![scene(1, "Ada finds the forged seal in the ledger.")]),
+        PlanningSchedule::default(),
+        Some(range.clone()),
+    )
+    .await;
+    assert_blocking_act_finding(&missing, "act_climax_scene_missing");
+    reject_planning(&svc, &session, &missing).await;
+
+    let valid = bundle_with_schedule_and_range(
+        &svc,
+        &session,
+        PlanningLevel::Chapter,
+        &[&root, &arc],
+        plan(vec![
+            scene(1, "Ada finds the forged seal in the ledger."),
+            scene(2, "Ada wagers the harbor on Ben's testimony."),
+        ]),
+        PlanningSchedule::default(),
+        Some(range),
+    )
+    .await;
+    assert!(
+        act_findings(&valid).is_empty(),
+        "the reserved climax scene must satisfy the placeholder: {:?}",
+        valid.findings
+    );
+    accept(&svc, &session, &valid).await;
+}
+
+/// A Chapter/Scene batch can be accepted in the same `planning_decide` as its
+/// Act-bearing Series-Arc/Book parent. The placeholder gate must evaluate the
+/// Act list that batch would leave behind, not only the already-applied Acts.
+#[tokio::test]
+async fn mckee_batched_acceptance_enforces_a_staged_act_parents_climax() {
+    use serde_json::json;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let arc = stage_series_arc_with_acts(
+        &svc,
+        &session,
+        &[&root],
+        vec![
+            planned_act(
+                1,
+                1,
+                1,
+                2,
+                ChargeSign::Negative,
+                ChargeDepth::Contrary,
+                "Ada learns the seal was forged",
+                false,
+            ),
+            planned_act(
+                2,
+                1,
+                2,
+                1,
+                ChargeSign::Negative,
+                ChargeDepth::Contradictory,
+                "Trust costs Ada the harbor",
+                true,
+            ),
+        ],
+    )
+    .await;
+    assert_eq!(
+        arc.status,
+        PlanningProposalStatus::Staged,
+        "the Act parent must be staged, not accepted"
+    );
+
+    let plan = || {
+        let suffix = unique_fixture_ref("plan:ch");
+        vec![planned(
+            &suffix,
+            "plan_chapter",
+            json!({
+                "book_number": 1,
+                "chapter_number": 1,
+                "synopsis": "Ada follows the forged seal to the tidal gate.",
+                "scenes": []
+            }),
+        )]
+    };
+    let range = PlanningTargetRange {
+        book_number: 1,
+        chapter_start: 1,
+        chapter_end: 1,
+        scenes_per_chapter: 2,
+    };
+    let chapter = bundle_with_schedule_and_range(
+        &svc,
+        &session,
+        PlanningLevel::Chapter,
+        &[&root, &arc],
+        plan(),
+        PlanningSchedule::default(),
+        Some(range.clone()),
+    )
+    .await;
+    assert_blocking_act_finding(&chapter, "act_climax_scene_missing");
+
+    // Selecting both proposals preflights the chapter against the Act list the
+    // batch is about to create, so the batch is refused.
+    let mut batch = decision(&session, &arc);
+    batch.expected_hashes = BTreeMap::from([
+        (arc.id.clone(), arc.payload_hash.clone()),
+        (chapter.id.clone(), chapter.payload_hash.clone()),
+    ]);
+    batch.decision = PlanningDecision::Accept;
+    let error = svc.decide_planning(batch).await.unwrap_err().to_string();
+    assert!(
+        error.contains("act_climax_scene_missing"),
+        "the batched acceptance must be refused by the placeholder: {error}"
+    );
+
+    // After the parent is accepted, a fresh chapter batch is still checked.
+    accept(&svc, &session, &arc).await;
+    let repaired = bundle_with_schedule_and_range(
+        &svc,
+        &session,
+        PlanningLevel::Chapter,
+        &[&root, &arc],
+        plan(),
+        PlanningSchedule::default(),
+        Some(range),
+    )
+    .await;
+    assert_blocking_act_finding(&repaired, "act_climax_scene_missing");
+    reject_planning(&svc, &session, &repaired).await;
+}
+
+/// Accepted Acts are read across the branch lineage: a child branch inherits
+/// its parent's accepted list for both the placeholder gate and breakpoints.
+#[tokio::test]
+async fn mckee_accepted_acts_follow_branch_lineage() {
+    use serde_json::json;
+    use spindle_core::models::CreatePacingCurveInput;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let acts = vec![
+        planned_act(
+            1,
+            1,
+            2,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contrary,
+            "Ada learns the seal was forged",
+            false,
+        ),
+        planned_act(
+            2,
+            1,
+            4,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contradictory,
+            "Trust costs Ada the harbor",
+            true,
+        ),
+    ];
+    let arc = stage_series_arc_with_acts(&svc, &session, &[&root], acts.clone()).await;
+    accept(&svc, &session, &arc).await;
+
+    let scope = session.scope.clone().unwrap();
+    let child = svc
+        .create_branch(CreateBranchInput {
+            project_id: scope.project_id.clone(),
+            name: "revision".into(),
+            branch_type: "revision".into(),
+            description: Some("Child branch for the Act lineage test".into()),
+            parent_branch_id: Some(scope.branch_id.clone()),
+        })
+        .await
+        .unwrap();
+    let child_session = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "Revise the harbor ending on a child branch.".into(),
+            scope: Some(PlanningScope {
+                project_id: scope.project_id.clone(),
+                branch_id: child.branch_id.clone(),
+            }),
+        })
+        .await
+        .unwrap();
+
+    let inherited = svc
+        .repository
+        .accepted_planning_acts(&scope.project_id, &child.branch_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        inherited, acts,
+        "the child branch must inherit its parent's accepted Acts"
+    );
+
+    let suffix = unique_fixture_ref("plan:child");
+    let chapter = bundle_with_schedule_and_range(
+        &svc,
+        &child_session,
+        PlanningLevel::Chapter,
+        &[],
+        vec![planned(
+            &suffix,
+            "plan_chapter",
+            json!({
+                "book_number": 1,
+                "chapter_number": 2,
+                "synopsis": "Ada follows the forged seal to the tidal gate.",
+                "scenes": []
+            }),
+        )],
+        PlanningSchedule::default(),
+        None,
+    )
+    .await;
+    assert_blocking_act_finding(&chapter, "act_climax_scene_missing");
+
+    // Derived breakpoints see the inherited Acts on the child branch too.
+    svc.switch_branch(SwitchBranchInput {
+        project_id: scope.project_id.clone(),
+        branch_id: child.branch_id.clone(),
+    })
+    .await
+    .unwrap();
+    let direct = svc
+        .create_pacing_curve(CreatePacingCurveInput {
+            project_id: scope.project_id.clone(),
+            book_number: 1,
+            act_breakpoints: BTreeMap::new(),
+            scene_type_density: BTreeMap::new(),
+            intensity_points: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let curve = svc
+        .repository
+        .get_pacing_curve(&direct.pacing_curve_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        curve.act_breakpoints,
+        BTreeMap::from([("act_1".to_string(), 0.5), ("act_2".to_string(), 1.0)]),
+        "derived breakpoints must be non-empty on a child branch"
+    );
+}
+
+#[tokio::test]
+async fn mckee_pacing_curve_breakpoints_are_derived_from_the_act_list() {
+    use spindle_core::models::CreatePacingCurveInput;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let acts = vec![
+        planned_act(
+            1,
+            1,
+            2,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contrary,
+            "Ada learns the seal was forged",
+            false,
+        ),
+        planned_act(
+            2,
+            1,
+            4,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contradictory,
+            "Trust costs Ada the harbor",
+            true,
+        ),
+    ];
+    // The planning operation path stages the curve with no authored map: the
+    // apply pass derives and persists the breakpoints from the same schedule.
+    let arc = bundle_with_schedule(
+        &svc,
+        &session,
+        PlanningLevel::SeriesArc,
+        &[&root],
+        vec![
+            theme_operation(),
+            main_plot_operation(),
+            planned(
+                "pacing:curve",
+                "create_pacing_curve",
+                serde_json::json!({
+                    "book_number": 1,
+                    "act_breakpoints": {},
+                    "scene_type_density": {"action": 0.5, "sequel": 0.5},
+                    "intensity_points": [{"position": 0.0, "intensity": 0.2}, {"position": 1.0, "intensity": 0.8}]
+                }),
+            ),
+        ],
+        PlanningSchedule {
+            acts: acts.clone(),
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    let report = accept(&svc, &session, &arc).await;
+    let curve_id = report
+        .operations
+        .iter()
+        .find_map(|receipt| receipt.returned_ids.get("pacing:curve").cloned())
+        .expect("pacing curve receipt");
+    let curve = svc.repository.get_pacing_curve(&curve_id).await.unwrap();
+    assert_eq!(
+        curve.act_breakpoints,
+        BTreeMap::from([("act_1".to_string(), 0.5), ("act_2".to_string(), 1.0)]),
+        "breakpoints normalize against the highest Act climax chapter"
+    );
+
+    // The direct tool path derives from the accepted Act list as well.
+    let project_id = session.scope.as_ref().unwrap().project_id.clone();
+    let direct = svc
+        .create_pacing_curve(CreatePacingCurveInput {
+            project_id: project_id.clone(),
+            book_number: 1,
+            act_breakpoints: BTreeMap::new(),
+            scene_type_density: BTreeMap::new(),
+            intensity_points: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let direct_curve = svc
+        .repository
+        .get_pacing_curve(&direct.pacing_curve_id)
+        .await
+        .unwrap();
+    assert_eq!(direct_curve.act_breakpoints, curve.act_breakpoints);
+
+    // A single Act always normalizes to 1.0.
+    let (single_session, single_root) = accepted_root(&svc).await;
+    let single_arc = stage_series_arc_with_acts(
+        &svc,
+        &single_session,
+        &[&single_root],
+        vec![planned_act(
+            1,
+            1,
+            5,
+            1,
+            ChargeSign::Negative,
+            ChargeDepth::Contrary,
+            "The harbor answers",
+            true,
+        )],
+    )
+    .await;
+    accept(&svc, &single_session, &single_arc).await;
+    let single = svc
+        .create_pacing_curve(CreatePacingCurveInput {
+            project_id: single_session.scope.as_ref().unwrap().project_id.clone(),
+            book_number: 1,
+            act_breakpoints: BTreeMap::new(),
+            scene_type_density: BTreeMap::new(),
+            intensity_points: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let single_curve = svc
+        .repository
+        .get_pacing_curve(&single.pacing_curve_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        single_curve.act_breakpoints,
+        BTreeMap::from([("act_1".to_string(), 1.0)])
+    );
+}
+
+#[tokio::test]
+async fn mckee_rejects_authored_act_breakpoints_while_non_mckee_projects_keep_them() {
+    use spindle_core::models::CreatePacingCurveInput;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let authored = BTreeMap::from([("first".to_string(), 0.25), ("second".to_string(), 0.75)]);
+    let arc = bundle_with_schedule(
+        &svc,
+        &session,
+        PlanningLevel::SeriesArc,
+        &[&root],
+        vec![
+            theme_operation(),
+            main_plot_operation(),
+            planned(
+                "pacing:authored",
+                "create_pacing_curve",
+                serde_json::json!({
+                    "book_number": 1,
+                    "act_breakpoints": authored,
+                    "scene_type_density": {"action": 0.5, "sequel": 0.5}
+                }),
+            ),
+        ],
+        PlanningSchedule {
+            acts: vec![
+                planned_act(
+                    1,
+                    1,
+                    1,
+                    2,
+                    ChargeSign::Negative,
+                    ChargeDepth::Contrary,
+                    "Ada learns the seal was forged",
+                    false,
+                ),
+                planned_act(
+                    2,
+                    1,
+                    3,
+                    2,
+                    ChargeSign::Negative,
+                    ChargeDepth::Contradictory,
+                    "Trust costs Ada the harbor",
+                    true,
+                ),
+            ],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    let finding = act_findings(&arc)
+        .into_iter()
+        .find(|finding| finding.code == "act_breakpoints_authored_for_mckee")
+        .expect("authored breakpoints are recorded for McKee");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+    reject_planning(&svc, &session, &arc).await;
+
+    let project_id = session.scope.as_ref().unwrap().project_id.clone();
+    let error = svc
+        .create_pacing_curve(CreatePacingCurveInput {
+            project_id: project_id.clone(),
+            book_number: 1,
+            act_breakpoints: authored.clone(),
+            scene_type_density: BTreeMap::new(),
+            intensity_points: Vec::new(),
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("derived from the Act list"),
+        "the direct tool error must carry the repair hint: {error}"
+    );
+
+    // Non-McKee projects keep the authored map byte for byte, on the direct
+    // path and through a planning operation.
+    let (non_mckee_session, non_mckee_root) = accepted_non_mckee_project(&svc).await;
+    let non_mckee_project = non_mckee_session.scope.as_ref().unwrap().project_id.clone();
+    let direct = svc
+        .create_pacing_curve(CreatePacingCurveInput {
+            project_id: non_mckee_project.clone(),
+            book_number: 1,
+            act_breakpoints: authored.clone(),
+            scene_type_density: BTreeMap::from([("action".to_string(), 1.0)]),
+            intensity_points: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let direct_curve = svc
+        .repository
+        .get_pacing_curve(&direct.pacing_curve_id)
+        .await
+        .unwrap();
+    assert_eq!(direct_curve.act_breakpoints, authored);
+
+    let authored_for_two = BTreeMap::from([("first".to_string(), 0.3), ("third".to_string(), 0.9)]);
+    let non_mckee_arc = bundle(
+        &svc,
+        &non_mckee_session,
+        PlanningLevel::SeriesArc,
+        &[&non_mckee_root],
+        vec![
+            theme_operation(),
+            planned(
+                "pacing:non-mckee",
+                "create_pacing_curve",
+                serde_json::json!({
+                    "book_number": 2,
+                    "act_breakpoints": authored_for_two,
+                    "scene_type_density": {"action": 1.0}
+                }),
+            ),
+        ],
+    )
+    .await;
+    assert!(
+        non_mckee_arc.findings.is_empty(),
+        "non-McKee projects have no Act gates: {:?}",
+        non_mckee_arc.findings
+    );
+    let report = accept(&svc, &non_mckee_session, &non_mckee_arc).await;
+    let curve_id = report
+        .operations
+        .iter()
+        .find_map(|receipt| receipt.returned_ids.get("pacing:non-mckee").cloned())
+        .expect("non-McKee pacing curve receipt");
+    let curve = svc.repository.get_pacing_curve(&curve_id).await.unwrap();
+    assert_eq!(curve.act_breakpoints, authored_for_two);
+}
+
+#[tokio::test]
+async fn non_mckee_projects_do_not_enforce_act_climax_placeholders() {
+    use serde_json::json;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_non_mckee_project(&svc).await;
+    let arc = bundle_with_schedule(
+        &svc,
+        &session,
+        PlanningLevel::SeriesArc,
+        &[&root],
+        vec![theme_operation()],
+        PlanningSchedule {
+            acts: vec![planned_act(
+                1,
+                1,
+                1,
+                2,
+                ChargeSign::Negative,
+                ChargeDepth::Contrary,
+                "The harbor answers",
+                true,
+            )],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    accept(&svc, &session, &arc).await;
+
+    let mut input = artifact(&session, "unused");
+    input.level = PlanningLevel::Scene;
+    input.target_range = Some(PlanningTargetRange {
+        book_number: 1,
+        chapter_start: 1,
+        chapter_end: 1,
+        scenes_per_chapter: 1,
+    });
+    input.operations = vec![planned(
+        "plan:ch1",
+        "plan_chapter",
+        json!({
+            "book_number": 1,
+            "chapter_number": 1,
+            "synopsis": "The harbor keeps its promises.",
+            "scenes": [{
+                "scene_order": 1,
+                "summary": "Ada counts the tide marks.",
+                "purpose": "Force a trust decision",
+                "character_ids": [],
+                "location_id": null,
+                "content_rating": "general"
+            }]
+        }),
+    )];
+    let findings = svc
+        .repository
+        .validate_planning_stage_input(input, None)
+        .await
+        .unwrap();
+    assert!(
+        findings
+            .iter()
+            .all(|finding| !finding.code.starts_with("act_")),
+        "non-McKee projects must not get Act findings: {findings:?}"
+    );
+}
+
+/// Acts are Series-Arc/Book schedule metadata. A lower-level artifact carrying
+/// them is a staging error on McKee projects, and the accepted-Act merge ignores
+/// such lists defensively even when a non-McKee project applies one.
+#[tokio::test]
+async fn mckee_acts_are_series_arc_book_metadata_only() {
+    use serde_json::json;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let chapter_plan = || {
+        let suffix = unique_fixture_ref("plan:act_level");
+        vec![planned(
+            &suffix,
+            "plan_chapter",
+            json!({
+                "book_number": 1,
+                "chapter_number": 1,
+                "synopsis": "Ada follows the forged seal to the tidal gate.",
+                "scenes": []
+            }),
+        )]
+    };
+    let chapter_acts = vec![planned_act(
+        1,
+        2,
+        9,
+        1,
+        ChargeSign::Negative,
+        ChargeDepth::Contrary,
+        "Ada learns the seal was forged",
+        true,
+    )];
+    let proposal = bundle_with_schedule(
+        &svc,
+        &session,
+        PlanningLevel::Chapter,
+        &[&root],
+        chapter_plan(),
+        PlanningSchedule {
+            acts: chapter_acts.clone(),
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    assert_blocking_act_finding(&proposal, "act_schedule_wrong_level");
+    reject_planning(&svc, &session, &proposal).await;
+
+    // A non-McKee project has no Act gate, so such a Chapter proposal applies.
+    // The accepted-Act read must still ignore its lower-level list.
+    let (non_mckee_session, non_mckee_root) = accepted_non_mckee_project(&svc).await;
+    let applied = bundle_with_schedule(
+        &svc,
+        &non_mckee_session,
+        PlanningLevel::Chapter,
+        &[&non_mckee_root],
+        chapter_plan(),
+        PlanningSchedule {
+            acts: chapter_acts,
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    assert!(
+        applied
+            .findings
+            .iter()
+            .all(|finding| !finding.code.starts_with("act_")),
+        "non-McKee projects must not get Act findings: {:?}",
+        applied.findings
+    );
+    accept(&svc, &non_mckee_session, &applied).await;
+    let scope = non_mckee_session.scope.as_ref().unwrap();
+    assert!(
+        svc.repository
+            .accepted_planning_acts(&scope.project_id, &scope.branch_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a Chapter-level Act list must never become an accepted Act"
+    );
+}
+
+/// `act_<n>` keys order by Act number, not lexicographically: `act_10` after
+/// `act_5` after `act_2`. A tie there used to make an ascending authored map
+/// look descending to the monotonic check.
+#[tokio::test]
+async fn act_breakpoint_keys_order_by_act_number() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_non_mckee_project(&svc).await;
+    let authored = BTreeMap::from([
+        ("act_2".to_string(), 0.2),
+        ("act_5".to_string(), 0.5),
+        ("act_10".to_string(), 1.0),
+    ]);
+    let arc = bundle(
+        &svc,
+        &session,
+        PlanningLevel::SeriesArc,
+        &[&root],
+        vec![
+            theme_operation(),
+            planned(
+                "pacing:many-acts",
+                "create_pacing_curve",
+                serde_json::json!({
+                    "book_number": 1,
+                    "act_breakpoints": authored,
+                    "scene_type_density": {"action": 1.0}
+                }),
+            ),
+        ],
+    )
+    .await;
+    assert!(
+        arc.findings
+            .iter()
+            .all(|finding| finding.code != "act_breakpoints_unordered"),
+        "an ascending act_<n> map must not look unordered: {:?}",
+        arc.findings
+    );
 }
 
 #[tokio::test]

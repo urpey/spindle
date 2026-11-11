@@ -897,7 +897,7 @@ Run this sequence when you start a new implementation task.
 
 Core `planning` contracts define closed operations with typed existing/proposal
 references, `PlanningArtifactV1` envelopes, structured schedules (`promise_events`,
-`pov_plan`, `intensity_targets`), RFC 6901 JSON-pointer validation findings, and
+`pov_plan`, `intensity_targets`, `acts`), RFC 6901 JSON-pointer validation findings, and
 session/call budget receipts. V0049 adds pre-project sessions, proposals and the
 operation ledger; V0050 adds apply attempt history, operation audit/output fields
 and a deferred search-index queue; V0052 adds `planning_generation_attempt` for
@@ -1002,6 +1002,29 @@ contradictions, and duplicate designs are blocking findings recorded on the
 proposal (`character_design_*`) that refuse acceptance; characters added
 outside planning are not retro-gated. Non-McKee projects are exempt, and
 staging a design for one is rejected.
+
+The Act list lives on the planning schedule (`PlanningSchedule.acts`) as
+outline intent, never as a story record (ADR 0006). Each entry carries an
+`order`, a climax scene placeholder, the Spine Axis Charge after its climax,
+the `central_question_part` it answers, and `answers_central_question` for the
+final Act. There is no new table or migration: accepted proposals keep their
+schedule, and `planning_status` reads it back on the proposal summary. For
+McKee projects, Series-Arc and Book acceptance merge applied Acts visible from
+the session branch's lineage (farthest ancestor first, session branch last),
+staged-ancestor Acts and the current artifact's Acts by order (later decisions
+override) and record blocking findings for an unchanged adjacent Charge, an
+unmarked final Act, a non-final Act marked `answers_central_question`, climax
+chapters that do not rise with `order` inside one book, non-contiguous or
+duplicate orders, empty question parts and missing/positive climax
+coordinates; a non-increasing depth progression is advisory only. Acts are
+Series-Arc/Book metadata: carrying a non-empty `schedule.acts` on any other
+level is blocking (`act_schedule_wrong_level`) and such lists are ignored by
+the accepted-Act merge. Chapter and Scene artifacts that plan a chapter
+containing an Act climax must include a scene at the reserved `scene_order`
+(`act_climax_scene_missing`), using the same evaluated Act set so a batch that
+accepts the Act parent and the chapter plan together is already checked.
+`act_breakpoints` are derived from the Act list for McKee projects (authored
+maps are refused) and stay authored for unmarked projects.
 
 The hidden layer and the unconscious desire are not plain columns: they are
 registered as secret canonical facts (`secret = 1`, one `knowledge_fact` row

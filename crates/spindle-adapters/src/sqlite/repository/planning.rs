@@ -24,6 +24,146 @@ fn proposals(conn: &rusqlite::Connection, id: &str) -> Result<Vec<PlanningPropos
         .map(|data| Ok(serde_json::from_str(&data)?))
         .collect()
 }
+
+/// The Acts a project branch currently carries, read from applied planning
+/// proposals.
+///
+/// Precedence is two-level and deterministic: the branch's lineage is applied
+/// from the farthest ancestor to the session branch, and within one branch in
+/// decision order (`decided_at`, falling back to `created_at`, then proposal
+/// id). A later decision therefore overrides an Act with the same `order`, and
+/// a nearer branch's accepted decision overrides a farther one. Acts a later
+/// decision does not mention keep their earlier entry. The result is sorted by
+/// order. Applied proposals of branches outside the lineage are not considered.
+///
+/// Only applied Series-Arc/Book proposals contribute: Acts are schedule
+/// metadata for those levels, and a lower-level artifact that somehow carries
+/// `schedule.acts` must never leak into the accepted list.
+pub(crate) fn accepted_planning_acts_in_conn(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    branch_id: &str,
+) -> Result<Vec<PlannedAct>> {
+    merge_applied_act_rows(applied_act_rows_in_conn(conn, project_id, branch_id)?)
+}
+
+/// Raw applied-proposal payloads that may carry Acts, tagged with their branch
+/// rank in the lineage (0 = farthest ancestor, increasing toward the session
+/// branch). The tag is what makes the merge order above deterministic without
+/// relying on decision timestamps across branches.
+fn applied_act_rows_in_conn(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    branch_id: &str,
+) -> rusqlite::Result<Vec<(usize, String)>> {
+    let lineage = resolve_branch_lineage_in_conn(conn, Some(project_id), branch_id)?;
+    let mut rows = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT p.data FROM planning_proposal p \
+         JOIN planning_session s ON s.id=p.session_id \
+         WHERE p.status='applied' AND s.project_id=?1 AND s.branch_id=?2",
+    )?;
+    for (rank, lineage_branch) in lineage.iter().rev().enumerate() {
+        let branch_rows = stmt
+            .query_map(rusqlite::params![project_id, lineage_branch], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.extend(branch_rows.into_iter().map(|data| (rank, data)));
+    }
+    Ok(rows)
+}
+
+/// Merge applied proposal payloads in lineage order, then decision order
+/// within a branch. See [`accepted_planning_acts_in_conn`] for the precedence
+/// rule.
+fn merge_applied_act_rows(rows: Vec<(usize, String)>) -> Result<Vec<PlannedAct>> {
+    let mut decided: Vec<(usize, i64, String, Vec<PlannedAct>)> = Vec::new();
+    for (branch_rank, data) in rows {
+        let proposal: PlanningProposal = serde_json::from_str(&data)?;
+        if !matches!(
+            proposal.artifact.level,
+            PlanningLevel::SeriesArc | PlanningLevel::Book
+        ) {
+            continue;
+        }
+        if proposal.artifact.schedule.acts.is_empty() {
+            continue;
+        }
+        decided.push((
+            branch_rank,
+            proposal.decided_at.unwrap_or(proposal.created_at),
+            proposal.id,
+            proposal.artifact.schedule.acts,
+        ));
+    }
+    decided.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    let mut acts = Vec::new();
+    for (_, _, _, proposal_acts) in decided {
+        acts = spindle_core::acts::merge_planned_acts(&acts, &proposal_acts);
+    }
+    Ok(acts)
+}
+
+/// Staged ancestor proposals of `input`, nearest-first insertion order but
+/// returned in creation order, so merging their Act lists is deterministic.
+fn collect_staged_ancestor_proposals_in_conn(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+) -> Result<Vec<PlanningProposal>> {
+    let mut visited = std::collections::HashSet::new();
+    let mut pending: Vec<String> = input.parents.keys().cloned().collect();
+    let mut proposals = Vec::new();
+    while let Some(proposal_id) = pending.pop() {
+        if !visited.insert(proposal_id.clone()) {
+            continue;
+        }
+        let data: Option<String> = conn
+            .query_row(
+                "SELECT data FROM planning_proposal WHERE id=?1 AND status='staged'",
+                [&proposal_id],
+                |row| row.get(0),
+            )
+            .optional_inner()?;
+        let Some(data) = data else {
+            continue;
+        };
+        let proposal: PlanningProposal = serde_json::from_str(&data)?;
+        pending.extend(proposal.artifact.parents.keys().cloned());
+        proposals.push(proposal);
+    }
+    proposals.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(proposals)
+}
+
+fn planning_finding(
+    code: &str,
+    severity: PlanningFindingSeverity,
+    path: String,
+    related_refs: Vec<String>,
+    expected: impl Into<String>,
+    actual: impl Into<String>,
+    repair_hint: impl Into<String>,
+) -> PlanningFinding {
+    PlanningFinding {
+        code: code.to_string(),
+        severity,
+        path,
+        related_refs,
+        expected: expected.into(),
+        actual: actual.into(),
+        repair_hint: repair_hint.into(),
+    }
+}
 fn check_scope(conn: &rusqlite::Connection, scope: &Option<PlanningScope>) -> Result<()> {
     if let Some(scope) = scope {
         let matches: bool = conn.query_row(
@@ -395,6 +535,25 @@ impl Repository {
             .await?
     }
 
+    /// The Acts accepted on one project branch, merged by order in decision
+    /// order (a later decision overrides the same order). This is the
+    /// deterministic read behind derived pacing breakpoints and the climax
+    /// placeholder gate; precedence is documented on
+    /// [`accepted_planning_acts_in_conn`].
+    pub async fn accepted_planning_acts(
+        &self,
+        project_id: &str,
+        branch_id: &str,
+    ) -> Result<Vec<PlannedAct>> {
+        let project_id = project_id.to_owned();
+        let branch_id = branch_id.to_owned();
+        let rows = self
+            .pool()
+            .read(move |conn| applied_act_rows_in_conn(conn, &project_id, &branch_id))
+            .await?;
+        merge_applied_act_rows(rows)
+    }
+
     pub async fn stage_planning(&self, input: StagePlanningInput) -> Result<PlanningProposal> {
         anyhow::ensure!(
             input.schema_version == 1,
@@ -737,6 +896,21 @@ const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "character_design_too_few_contradictions",
     "character_design_too_many_contradictions",
     "character_design_duplicate",
+    "act_order_invalid",
+    "act_order_duplicate",
+    "act_order_not_contiguous",
+    "act_missing_charge",
+    "act_missing_central_question_part",
+    "act_missing_climax_placement",
+    "act_missing_climax_scene_order",
+    "act_invalid_climax_placement",
+    "act_charge_unchanged",
+    "act_answers_central_question_not_final",
+    "act_final_act_must_answer_central_question",
+    "act_climax_not_rising",
+    "act_schedule_wrong_level",
+    "act_climax_scene_missing",
+    "act_breakpoints_authored_for_mckee",
 ];
 
 /// One blocking finding rendered for a caller-facing error string. The path
@@ -1056,7 +1230,14 @@ fn is_noop_scene_purpose(purpose: &str) -> bool {
         || norm.starts_with("nothing changes")
 }
 
-fn act_breakpoint_stage_rank(key: &str) -> u8 {
+/// Stage order for one pacing-curve `act_breakpoints` key.
+///
+/// The named aliases of the five-act model keep their existing ranks. Any
+/// other `act_<n>` / `act<n>` key (optionally with an `_end` suffix) parses to
+/// its Act number, so any number of Acts orders correctly: `act_10` ranks
+/// after `act_2` instead of tying with it and sorting lexicographically before
+/// it. An unrecognised key sorts after every numbered Act.
+fn act_breakpoint_stage_rank(key: &str) -> u32 {
     let k = key.trim().to_ascii_lowercase();
     match k.as_str() {
         "setup" | "opening" | "inciting" | "inciting_incident" | "act_1" | "act1" | "act1_end"
@@ -1066,8 +1247,16 @@ fn act_breakpoint_stage_rank(key: &str) -> u8 {
         | "3" => 3,
         "climax" | "fourth" | "act_4" | "act4" | "4" => 4,
         "resolution" | "denouement" | "ending" | "fifth" | "5" => 5,
-        _ => 10,
+        _ => parse_act_breakpoint_rank(&k).unwrap_or(u32::MAX),
     }
+}
+
+/// Parse `act<n>`, `act_<n>` and their `_end` variants into the Act number.
+fn parse_act_breakpoint_rank(key: &str) -> Option<u32> {
+    let rest = key.strip_prefix("act")?;
+    let rest = rest.strip_prefix('_').unwrap_or(rest);
+    let rest = rest.strip_suffix("_end").unwrap_or(rest);
+    rest.parse().ok()
 }
 
 fn interpolate_intensity(points: &[PlanningIntensityPoint], pos: f64) -> f64 {
@@ -1814,12 +2003,7 @@ fn validate_mckee_plot_lines(
         // A pre-project root chain has no project/branch to evaluate yet.
         return Ok(());
     };
-    let mckee_structured: i64 = conn.query_row(
-        "SELECT mckee_structured FROM project WHERE id=?1",
-        [&scope.project_id],
-        |row| row.get(0),
-    )?;
-    if mckee_structured != 1 {
+    if !project_is_mckee_in_conn(conn, &scope.project_id)? {
         return Ok(());
     }
 
@@ -2105,11 +2289,7 @@ fn validate_mckee_character_designs(
         // A pre-project root chain has no project/branch to evaluate yet.
         return Ok(());
     };
-    let mckee_structured: i64 = conn.query_row(
-        "SELECT mckee_structured FROM project WHERE id=?1",
-        [&scope.project_id],
-        |row| row.get(0),
-    )?;
+    let mckee_structured = project_is_mckee_in_conn(conn, &scope.project_id)?;
 
     let mut characters: Vec<(usize, String)> = Vec::new();
     let mut designs: Vec<(usize, String)> = Vec::new();
@@ -2208,7 +2388,7 @@ fn validate_mckee_character_designs(
         }
     }
 
-    if mckee_structured != 1 {
+    if !mckee_structured {
         for (index, _) in &designs {
             findings.push(design_blocking_finding(
                 "character_design_requires_mckee_project",
@@ -2305,6 +2485,486 @@ fn validate_mckee_character_designs(
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+/// The Act list a decision would leave behind: applied Acts visible from the
+/// session branch's lineage, then the Acts of staged ancestors in the same
+/// approved closure, then this artifact's own schedule (later entries override
+/// an Act with the same `order`; see [`accepted_planning_acts_in_conn`]).
+///
+/// Both the Act-list gate and the Chapter/Scene climax placeholder gate
+/// evaluate this same set. A batch that accepts a Series-Arc/Book proposal
+/// together with a Chapter/Scene proposal therefore enforces the Act list the
+/// batch is about to create, not just the list already applied.
+fn evaluated_mckee_acts_in_conn(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &PlanningScope,
+) -> Result<Vec<PlannedAct>> {
+    let mut evaluated = accepted_planning_acts_in_conn(conn, &scope.project_id, &scope.branch_id)?;
+    for ancestor in collect_staged_ancestor_proposals_in_conn(conn, input)? {
+        evaluated =
+            spindle_core::acts::merge_planned_acts(&evaluated, &ancestor.artifact.schedule.acts);
+    }
+    Ok(spindle_core::acts::merge_planned_acts(
+        &evaluated,
+        &input.schedule.acts,
+    ))
+}
+
+/// The McKee Act-list gate for Series-Arc and Book acceptance.
+///
+/// The evaluated list is what acceptance would leave behind (see
+/// [`evaluated_mckee_acts_in_conn`]). A Book proposal may therefore refine one
+/// Act without restating the whole list, while a clash with a previously
+/// accepted neighbour is still caught. Acts carried by a lower-level artifact
+/// are a staging error: they are never Act-validated and used to be merged as
+/// accepted Acts later.
+///
+/// Every blocking finding records on the staged proposal and refuses
+/// acceptance. The one advisory finding never blocks: human acceptance of a
+/// shallow or retreating depth progression stays available.
+fn validate_mckee_acts(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &Option<PlanningScope>,
+    findings: &mut Vec<PlanningFinding>,
+) -> Result<()> {
+    let Some(scope) = scope else {
+        // A pre-project root chain has no project/branch to evaluate yet.
+        return Ok(());
+    };
+    if !project_is_mckee_in_conn(conn, &scope.project_id)? {
+        return Ok(());
+    }
+    if !matches!(input.level, PlanningLevel::SeriesArc | PlanningLevel::Book) {
+        // Acts are Series-Arc/Book schedule metadata. A Chapter or Scene
+        // artifact cannot validate them, so accepting one would let an
+        // unvalidated list leak into the accepted Acts through the merge.
+        if !input.schedule.acts.is_empty() {
+            findings.push(planning_finding(
+                "act_schedule_wrong_level",
+                PlanningFindingSeverity::Blocking,
+                "/schedule/acts".to_string(),
+                Vec::new(),
+                "an empty schedule.acts at Chapter and Scene levels",
+                format!(
+                    "{} Act(s) on a {level:?} artifact",
+                    input.schedule.acts.len(),
+                    level = input.level
+                ),
+                "Stage Acts at the Series-Arc or Book level; Chapter and Scene artifacts plan scenes, not Acts.",
+            ));
+        }
+        return Ok(());
+    }
+    if input.schedule.acts.is_empty() {
+        // An empty Act list is not a new blocking rule: a project may still be
+        // planning its books, and the fixed gates are the ones the ticket names.
+        return Ok(());
+    }
+
+    let mut own_index_by_order: std::collections::BTreeMap<i32, usize> =
+        std::collections::BTreeMap::new();
+    for (index, act) in input.schedule.acts.iter().enumerate() {
+        if let Some(previous_index) = own_index_by_order.insert(act.order, index) {
+            findings.push(planning_finding(
+                "act_order_duplicate",
+                PlanningFindingSeverity::Blocking,
+                format!("/schedule/acts/{index}/order"),
+                Vec::new(),
+                "a unique 1-based order per Act",
+                format!(
+                    "order {} is used by acts {} and {}",
+                    act.order, previous_index, index
+                ),
+                "An Act list is an ordered set: give every Act a unique order and renumber the list 1..=n.",
+            ));
+        }
+        validate_planned_act_entry(act, index, findings);
+    }
+
+    let evaluated = evaluated_mckee_acts_in_conn(conn, input, scope)?;
+
+    // Orders must run 1..=n after the merge: a partial Book list may override
+    // an accepted Act, but it may not leave a hole in the Act sequence.
+    let orders: Vec<i32> = evaluated.iter().map(|act| act.order).collect();
+    if orders
+        .iter()
+        .enumerate()
+        .any(|(index, order)| *order != index as i32 + 1)
+    {
+        findings.push(planning_finding(
+            "act_order_not_contiguous",
+            PlanningFindingSeverity::Blocking,
+            "/schedule/acts".to_string(),
+            Vec::new(),
+            "Act orders 1..=n with no gaps".to_string(),
+            format!("merged Act orders {orders:?}"),
+            "Renumber the Act list 1..=n. A Book-level list may override an accepted Act, but it cannot skip an order.",
+        ));
+    }
+
+    // An Act climax must turn the Spine Axis away from the previous Act's
+    // Charge. The first Act has nothing to compare against.
+    for window in evaluated.windows(2) {
+        let (previous, next) = (&window[0], &window[1]);
+        let (Some(previous_charge), Some(next_charge)) = (previous.charge, next.charge) else {
+            continue;
+        };
+        if previous_charge != next_charge {
+            continue;
+        }
+        let path = own_index_by_order
+            .get(&next.order)
+            .or_else(|| own_index_by_order.get(&previous.order))
+            .map(|index| format!("/schedule/acts/{index}/charge"))
+            .unwrap_or_else(|| "/schedule/acts".to_string());
+        findings.push(planning_finding(
+            "act_charge_unchanged",
+            PlanningFindingSeverity::Blocking,
+            path,
+            Vec::new(),
+            format!(
+                "a Charge different from Act {} ({} / {})",
+                previous.order,
+                previous_charge.sign(),
+                previous_charge.depth()
+            ),
+            format!(
+                "the same Charge as Act {} ({} / {})",
+                previous.order,
+                next_charge.sign(),
+                next_charge.depth()
+            ),
+            "An Act climax must turn the Spine Axis: change the Charge sign or depth from the previous Act's closing Charge.",
+        ));
+    }
+
+    // Only the final (highest-order) Act answers the Central Question. A
+    // non-final Act that claims it would split the ending across Acts, so this
+    // is blocking rather than an implicit override.
+    if evaluated.len() > 1 {
+        for act in evaluated.iter().take(evaluated.len() - 1) {
+            if !act.answers_central_question {
+                continue;
+            }
+            let path = own_index_by_order
+                .get(&act.order)
+                .map(|index| format!("/schedule/acts/{index}/answers_central_question"))
+                .unwrap_or_else(|| "/schedule/acts".to_string());
+            findings.push(planning_finding(
+                "act_answers_central_question_not_final",
+                PlanningFindingSeverity::Blocking,
+                path,
+                Vec::new(),
+                "answers_central_question=true only on the highest-order Act",
+                format!(
+                    "Act {} is not final but is marked answers_central_question=true",
+                    act.order
+                ),
+                "Mark answers_central_question=true only on the final Act; state what the earlier Act answers in central_question_part.",
+            ));
+        }
+    }
+
+    // The final (highest-order) Act is the one that answers the Central
+    // Question. Inherited Acts were already validated when they were accepted,
+    // so only a final Act authored by this artifact can introduce the defect.
+    if let Some(last) = evaluated.last()
+        && own_index_by_order.contains_key(&last.order)
+        && !last.answers_central_question
+    {
+        let index = own_index_by_order[&last.order];
+        findings.push(planning_finding(
+            "act_final_act_must_answer_central_question",
+            PlanningFindingSeverity::Blocking,
+            format!("/schedule/acts/{index}/answers_central_question"),
+            Vec::new(),
+            "the highest-order Act has answers_central_question=true",
+            "the final Act is not marked as answering the Central Question",
+            "Mark the final Act answers_central_question=true and state the part of the Central Question it answers.",
+        ));
+    }
+
+    // Within one book the Act climax chapters must rise strictly with `order`;
+    // otherwise the derived `act_breakpoints` map would be non-monotonic and
+    // the pacing curve would contradict the structure it comes from. Acts in
+    // different books are compared only inside their own book: the global
+    // order still rises because the evaluated list is merged by order.
+    let mut acts_by_book: std::collections::BTreeMap<i32, Vec<&PlannedAct>> =
+        std::collections::BTreeMap::new();
+    for act in &evaluated {
+        if let Some(climax) = act.climax.as_ref()
+            && climax.book_number >= 1
+            && climax.chapter_number >= 1
+        {
+            acts_by_book
+                .entry(climax.book_number)
+                .or_default()
+                .push(act);
+        }
+    }
+    for (book_number, acts) in acts_by_book {
+        for window in acts.windows(2) {
+            let (previous, next) = (window[0], window[1]);
+            let (Some(previous_climax), Some(next_climax)) =
+                (previous.climax.as_ref(), next.climax.as_ref())
+            else {
+                continue;
+            };
+            if next_climax.chapter_number > previous_climax.chapter_number {
+                continue;
+            }
+            let path = own_index_by_order
+                .get(&next.order)
+                .or_else(|| own_index_by_order.get(&previous.order))
+                .map(|index| format!("/schedule/acts/{index}/climax/chapter_number"))
+                .unwrap_or_else(|| "/schedule/acts".to_string());
+            findings.push(planning_finding(
+                "act_climax_not_rising",
+                PlanningFindingSeverity::Blocking,
+                path,
+                Vec::new(),
+                format!(
+                    "Act {}'s climax after Act {}'s chapter {} in book {book_number}",
+                    next.order, previous.order, previous_climax.chapter_number
+                ),
+                format!(
+                    "Act {}'s climax is chapter {}",
+                    next.order, next_climax.chapter_number
+                ),
+                "Move the later Act's climax after the previous Act's climax in the same book; derived act_breakpoints follow this order.",
+            ));
+        }
+    }
+
+    // Advisory: the Spine Axis should keep deepening across Acts. A flat or
+    // retreating depth is a structural smell, never a hard error.
+    if evaluated.len() > 1 && evaluated.iter().all(|act| act.charge.is_some()) {
+        let ranks: Vec<u8> = evaluated
+            .iter()
+            .map(|act| {
+                spindle_core::acts::charge_depth_rank(
+                    act.charge
+                        .expect("guarded by the all-some check above")
+                        .depth(),
+                )
+            })
+            .collect();
+        if !ranks.windows(2).all(|window| window[0] < window[1]) {
+            findings.push(planning_finding(
+                "act_depth_not_progressing",
+                PlanningFindingSeverity::Advisory,
+                "/schedule/acts".to_string(),
+                Vec::new(),
+                "strictly increasing Charge depth across Acts (positive < contrary < contradictory < negation of the negation)",
+                format!("Charge depth ranks {ranks:?}"),
+                "Deepen the Spine Axis across Acts. This is advisory: a deliberately shallow progression can still be accepted by the author.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_planned_act_entry(act: &PlannedAct, index: usize, findings: &mut Vec<PlanningFinding>) {
+    let base = format!("/schedule/acts/{index}");
+    if act.order <= 0 {
+        findings.push(planning_finding(
+            "act_order_invalid",
+            PlanningFindingSeverity::Blocking,
+            format!("{base}/order"),
+            Vec::new(),
+            "a positive 1-based Act order",
+            format!("order {}", act.order),
+            "Use a positive 1-based order and keep the list contiguous from 1.",
+        ));
+    }
+    if act.charge.is_none() {
+        findings.push(planning_finding(
+            "act_missing_charge",
+            PlanningFindingSeverity::Blocking,
+            format!("{base}/charge"),
+            Vec::new(),
+            "the Spine Axis Charge after this Act's climax",
+            "no Charge",
+            "Give the Act the Charge the Spine Axis holds after its climax (sign plus one of the four depths).",
+        ));
+    }
+    if act.central_question_part.trim().is_empty() {
+        findings.push(planning_finding(
+            "act_missing_central_question_part",
+            PlanningFindingSeverity::Blocking,
+            format!("{base}/central_question_part"),
+            Vec::new(),
+            "the part of the Central Question this Act answers",
+            "an empty central_question_part",
+            "State which part of the Central Question this Act answers; do not leave the field blank.",
+        ));
+    }
+    match &act.climax {
+        None => findings.push(planning_finding(
+            "act_missing_climax_placement",
+            PlanningFindingSeverity::Blocking,
+            format!("{base}/climax"),
+            Vec::new(),
+            "a climax scene placeholder (book_number, chapter_number, scene_order)",
+            "no climax placement",
+            "Name the reserved place where a later scene batch must land this Act's climax.",
+        )),
+        Some(climax) => {
+            if climax.scene_order.is_none() {
+                findings.push(planning_finding(
+                    "act_missing_climax_scene_order",
+                    PlanningFindingSeverity::Blocking,
+                    format!("{base}/climax/scene_order"),
+                    Vec::new(),
+                    "a scene_order for the reserved climax scene",
+                    "a chapter-wide placement without scene_order",
+                    "Give the Act climax an exact scene_order so the placeholder can be enforced when its chapter is planned.",
+                ));
+            }
+            if climax.book_number < 1
+                || climax.chapter_number < 1
+                || climax
+                    .scene_order
+                    .is_some_and(|scene_order| scene_order < 1)
+            {
+                findings.push(planning_finding(
+                    "act_invalid_climax_placement",
+                    PlanningFindingSeverity::Blocking,
+                    format!("{base}/climax"),
+                    Vec::new(),
+                    "positive book_number, chapter_number and scene_order",
+                    format!(
+                        "book={}, chapter={}, scene_order={:?}",
+                        climax.book_number, climax.chapter_number, climax.scene_order
+                    ),
+                    "Use 1-based positive book, chapter and scene coordinates for the Act climax.",
+                ));
+            }
+        }
+    }
+}
+
+/// A Chapter or Scene artifact that plans a chapter containing an Act climax
+/// must include a planned scene at the reserved `scene_order`.
+///
+/// The evaluated list is the same one the Act-list gate uses
+/// ([`evaluated_mckee_acts_in_conn`]): Acts already applied on the session
+/// branch's lineage plus the Acts of staged ancestors in the same decision
+/// closure. A Chapter/Scene batch accepted together with its Act-bearing
+/// Series-Arc/Book parent in one `planning_decide` therefore enforces the
+/// reserved climax before the parent is applied.
+///
+/// The reserved placement is what "the Act climax exists before its chapter is
+/// detailed" means in practice: every later scene batch for that chapter has to
+/// arrive at it. A missing scene is a blocking finding that stages with the
+/// proposal and refuses acceptance.
+fn validate_mckee_act_climax_placements(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &Option<PlanningScope>,
+    findings: &mut Vec<PlanningFinding>,
+) -> Result<()> {
+    if !matches!(input.level, PlanningLevel::Chapter | PlanningLevel::Scene) {
+        return Ok(());
+    }
+    let Some(scope) = scope else {
+        return Ok(());
+    };
+    if !project_is_mckee_in_conn(conn, &scope.project_id)? {
+        return Ok(());
+    }
+    let evaluated = evaluated_mckee_acts_in_conn(conn, input, scope)?;
+    if evaluated.is_empty() {
+        return Ok(());
+    }
+    for (index, item) in input.operations.iter().enumerate() {
+        let PlanningOperation::PlanChapter(plan) = &item.operation else {
+            continue;
+        };
+        for act in &evaluated {
+            let Some(climax) = act.climax.as_ref() else {
+                continue;
+            };
+            let Some(scene_order) = climax.scene_order else {
+                continue;
+            };
+            if climax.book_number != plan.book_number
+                || climax.chapter_number != plan.chapter_number
+            {
+                continue;
+            }
+            if plan
+                .scenes
+                .iter()
+                .any(|scene| scene.scene_order == scene_order)
+            {
+                continue;
+            }
+            findings.push(planning_finding(
+                "act_climax_scene_missing",
+                PlanningFindingSeverity::Blocking,
+                format!("/operations/{index}/operation/input/scenes"),
+                vec![item.output_ref.clone()],
+                format!(
+                    "a planned scene at book {} chapter {} scene_order {} for Act {}'s climax",
+                    climax.book_number,
+                    climax.chapter_number,
+                    scene_order,
+                    act.order
+                ),
+                format!("no scene at scene_order {scene_order}"),
+                "An accepted Act climax reserves its scene: plan a scene at that scene_order in the scene batch that details the chapter. Repair the batch; do not move the Act climax.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// McKee projects derive `act_breakpoints` from the Act list. An authored map
+/// would let pacing and structure disagree, so it records a blocking finding
+/// and refuses acceptance; the direct `create_pacing_curve` service path
+/// rejects it outright with the same repair hint.
+fn validate_mckee_pacing_curve_breakpoints(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &Option<PlanningScope>,
+    findings: &mut Vec<PlanningFinding>,
+) -> Result<()> {
+    let Some(scope) = scope else {
+        return Ok(());
+    };
+    if !project_is_mckee_in_conn(conn, &scope.project_id)? {
+        return Ok(());
+    }
+    for (index, item) in input.operations.iter().enumerate() {
+        let PlanningOperation::CreatePacingCurve(curve) = &item.operation else {
+            continue;
+        };
+        if curve.act_breakpoints.is_empty() {
+            continue;
+        }
+        findings.push(planning_finding(
+            "act_breakpoints_authored_for_mckee",
+            PlanningFindingSeverity::Blocking,
+            format!("/operations/{index}/operation/input/act_breakpoints"),
+            vec![item.output_ref.clone()],
+            "an empty act_breakpoints map; McKee breakpoints are derived from the Act list",
+            format!(
+                "authored act_breakpoints: {}",
+                curve
+                    .act_breakpoints
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            "act_breakpoints is derived from the Act list for McKee projects; omit it so the accepted Act list drives the pacing curve.",
+        ));
     }
     Ok(())
 }
@@ -2704,12 +3364,7 @@ fn validate_stage_input_in_conn_excluding(
                     .scope
                     .as_ref()
                     .context("story spine requires an attached project")?;
-                let project_is_mckee: bool = conn.query_row(
-                    "SELECT mckee_structured FROM project WHERE id=?1",
-                    [&scope.project_id],
-                    |row| row.get(0),
-                )?;
-                if !project_is_mckee {
+                if !project_is_mckee_in_conn(conn, &scope.project_id)? {
                     findings.push(PlanningFinding {
                         code: "story_spine_requires_mckee_project".to_string(),
                         severity: PlanningFindingSeverity::Blocking,
@@ -3302,7 +3957,7 @@ fn validate_stage_input_in_conn_excluding(
                         repair_hint: "Use a positive 1-based book_number.".to_string(),
                     });
                 }
-                let mut ordered_breakpoints: Vec<(u8, &String, f64)> = Vec::new();
+                let mut ordered_breakpoints: Vec<(u32, &String, f64)> = Vec::new();
                 for (k, &v) in &curve.act_breakpoints {
                     if v.is_nan() || !(0.0..=1.0).contains(&v) {
                         findings.push(PlanningFinding {
@@ -4268,6 +4923,9 @@ fn validate_stage_input_in_conn_excluding(
 
     validate_mckee_plot_lines(conn, input, &s.scope, &mut findings)?;
     validate_mckee_character_designs(conn, input, &s.scope, &mut findings)?;
+    validate_mckee_acts(conn, input, &s.scope, &mut findings)?;
+    validate_mckee_act_climax_placements(conn, input, &s.scope, &mut findings)?;
+    validate_mckee_pacing_curve_breakpoints(conn, input, &s.scope, &mut findings)?;
 
     Ok(findings)
 }

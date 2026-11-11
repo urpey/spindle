@@ -33,6 +33,10 @@ The Value Axis whose Charge each Act climax turns.
 A run of Sequences that ends in a climax which turns the Spine Axis. An Act is
 outline intent, not a story event.
 
+**Act breakpoint** (幕界點):
+The normalized position of an Act climax on a book's pacing curve, derived from
+the Act list (`act_<order>`) rather than authored separately.
+
 **Sequence** (段落):
 A group of Scenes inside an Act that ends in a scene with more impact than any
 before it, answering part of the Act's question.

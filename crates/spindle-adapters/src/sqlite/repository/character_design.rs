@@ -257,13 +257,8 @@ impl Repository {
                         }
                         None => character_branch,
                     };
-                    let mckee: i64 = tx.query_row(
-                        "SELECT mckee_structured FROM project WHERE id=?1",
-                        [&project_id],
-                        |row| row.get(0),
-                    )?;
                     anyhow::ensure!(
-                        mckee == 1,
+                        project_is_mckee_in_conn(&tx, &project_id)?,
                         "character design requires a McKee-structured project"
                     );
                     let existing: Option<String> = tx

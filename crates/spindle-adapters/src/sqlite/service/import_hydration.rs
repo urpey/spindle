@@ -1,5 +1,24 @@
 use super::*;
 
+/// `act_breakpoints` for a pacing curve hydrated into `target_project`.
+///
+/// A McKee project derives breakpoints from its accepted Act list, and the
+/// pacing-curve gate refuses an authored map on that path. Hydration therefore
+/// passes an empty map so the service derives one instead of aborting the
+/// hydration pass; an import target has no accepted Acts yet, so the derived
+/// map is empty, exactly like a project with no Acts. Non-McKee projects keep
+/// the imported hints byte for byte.
+fn hydrated_act_breakpoints(
+    target_is_mckee: bool,
+    authored: &std::collections::BTreeMap<String, f64>,
+) -> std::collections::BTreeMap<String, f64> {
+    if target_is_mckee {
+        std::collections::BTreeMap::new()
+    } else {
+        authored.clone()
+    }
+}
+
 impl SqliteSpindleService {
     // =========================================================================
     // Import-pipeline private helpers.
@@ -1353,7 +1372,10 @@ impl SqliteSpindleService {
                     self.create_pacing_curve(CreatePacingCurveInput {
                         project_id: target_project_id.clone(),
                         book_number,
-                        act_breakpoints: hint.act_breakpoints.clone(),
+                        act_breakpoints: hydrated_act_breakpoints(
+                            target_project.mckee_structured,
+                            &hint.act_breakpoints,
+                        ),
                         scene_type_density: hint.scene_type_density.clone(),
                         intensity_points: Vec::new(),
                     })
@@ -1921,5 +1943,29 @@ impl SqliteSpindleService {
             session_id: input.session_id,
             report,
         })
+    }
+}
+
+#[cfg(test)]
+mod hydration_breakpoint_tests {
+    use super::hydrated_act_breakpoints;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn mckee_targets_hand_the_act_list_the_derivation() {
+        let authored = BTreeMap::from([("first".to_string(), 0.25), ("second".to_string(), 0.75)]);
+        assert!(
+            hydrated_act_breakpoints(true, &authored).is_empty(),
+            "a McKee target must never pass an authored map"
+        );
+    }
+
+    #[test]
+    fn non_mckee_targets_keep_the_authored_hints() {
+        let authored = BTreeMap::from([
+            ("act_1_end".to_string(), 0.25),
+            ("act_2_end".to_string(), 0.75),
+        ]);
+        assert_eq!(hydrated_act_breakpoints(false, &authored), authored);
     }
 }

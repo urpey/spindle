@@ -396,7 +396,7 @@ fn diagnose_parse_failure(raw_json: Option<&serde_json::Value>, err: &str) -> Pl
                 related_refs: Vec::new(),
                 expected: "valid PlanningSchedule".to_string(),
                 actual: err.to_string(),
-                repair_hint: "Ensure `/schedule` contains only `promise_events`, `pov_plan`, and `intensity_targets` with valid typed fields.".to_string(),
+                repair_hint: "Ensure `/schedule` contains only `promise_events`, `pov_plan`, `intensity_targets`, and `acts` with valid typed fields.".to_string(),
             };
         }
     }
