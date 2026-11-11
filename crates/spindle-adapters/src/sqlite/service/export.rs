@@ -342,6 +342,17 @@ impl SqliteSpindleService {
                     .await?,
             )?,
         );
+        // McKee Character Design (V0059). Branch-scoped and part of the branch
+        // restore set; its hidden/unconscious texts live on the canonical facts
+        // exported below, so the design row's fact ids stay resolvable.
+        insert_export_rows(
+            &mut tables,
+            &mut counts,
+            "character_design",
+            self.repository
+                .dump_table_by_column_in("character_design", "branch_id", &branch_ids)
+                .await?,
+        );
         insert_export_rows(
             &mut tables,
             &mut counts,
@@ -605,6 +616,17 @@ impl SqliteSpindleService {
             &mut counts,
             "canonical_fact",
             to_values(self.repository.list_all_canonical_facts(project_id).await?)?,
+        );
+        // Story Spine (V0057) is project-level: it belongs in the full operator
+        // backup but is deliberately not in BRANCH_RESTORE_TABLES, because a
+        // branch rewind must not delete the project's accepted spine.
+        insert_export_rows(
+            &mut tables,
+            &mut counts,
+            "story_spine",
+            self.repository
+                .dump_table_by_column_in("story_spine", "project_id", &[project_id.to_string()])
+                .await?,
         );
         insert_export_rows(
             &mut tables,

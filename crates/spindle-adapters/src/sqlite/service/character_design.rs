@@ -27,6 +27,21 @@ impl SqliteSpindleService {
             .repository
             .get_canonical_fact(&design.unconscious_desire_fact_id)
             .await?;
+        // The design write always stores these as string facts. A row that is
+        // missing its text is corrupt, not an empty layer: surface it instead
+        // of silently rendering an empty hidden/unconscious text.
+        let hidden_text = hidden.value_text.clone().with_context(|| {
+            format!(
+                "character design hidden-self fact {} has no text value",
+                hidden.id
+            )
+        })?;
+        let unconscious_text = unconscious.value_text.clone().with_context(|| {
+            format!(
+                "character design unconscious-desire fact {} has no text value",
+                unconscious.id
+            )
+        })?;
         Ok(CharacterDesignView {
             character_design_id: design.character_design_id.clone(),
             character_id: design.character_id.clone(),
@@ -34,9 +49,9 @@ impl SqliteSpindleService {
             public_self: design.public_self.clone(),
             personal_self: design.personal_self.clone(),
             private_self: design.private_self.clone(),
-            hidden_self: hidden.value_text.unwrap_or_default(),
+            hidden_self: hidden_text,
             conscious_desire: design.conscious_desire.clone(),
-            unconscious_desire: unconscious.value_text.unwrap_or_default(),
+            unconscious_desire: unconscious_text,
             pressure_on_protagonist: design.pressure_on_protagonist.clone(),
             behavior_cues: design.behavior_cues.clone(),
         })

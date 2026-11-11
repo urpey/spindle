@@ -4088,6 +4088,21 @@ pub enum SecretDecision {
     },
 }
 
+/// Whether a canonical fact is author-only planning knowledge rather than a
+/// draftable secret. Character Design's hidden layer and unconscious desire use
+/// the reserved `character_design.*` predicate namespace: planning tools read
+/// their full text, and every other carrier strips the fact instead of
+/// rendering a `[SECRETS IN PLAY]` envelope (the design's behaviour cues are
+/// the writer-facing rendering).
+///
+/// This is the single predicate every non-planning withholding path routes
+/// through — scene-context assembly, subject snapshots and both
+/// `check_consistency` secret-leak tiers — so a new planning-only fact class
+/// cannot be forgotten in one carrier.
+pub fn is_planning_only_secret_fact(fact: &CanonicalFact) -> bool {
+    spindle_core::character_design::is_character_design_fact(&fact.predicate)
+}
+
 /// Resolve how a single secret fact should be gated for one scene.
 ///
 /// `circle` is the fact's derived circle of trust: one entry per holder, the

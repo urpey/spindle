@@ -9,9 +9,11 @@
 //! **Visibility.** The hidden layer and the unconscious desire are stored as
 //! secret canonical facts, so their raw text is read only by planning tools
 //! (which see the full [`CharacterDesignView`]). Non-planning reads get the
-//! [`CharacterDesignRedactedView`] and never the secret fact ids, values or
-//! concealment notes. The facts use the reserved predicate namespace below so
-//! the context assembly can recognise them and always withhold them.
+//! [`CharacterDesignRedactedView`] — contradictions, `public_self`,
+//! `conscious_desire`, `pressure_on_protagonist` and `behavior_cues` — and
+//! never the secret fact ids, values, concealment notes or the personal/private
+//! layers. The facts use the reserved predicate namespace below so every
+//! non-planning carrier can recognise them and always withhold them.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -96,6 +98,11 @@ pub struct CharacterDesign {
 pub struct CreateCharacterDesignInput {
     /// Project that owns the design.
     pub project_id: String,
+    /// Branch the design is written on. The planning application fills this
+    /// from the session scope (ADR 0004); direct callers may omit it, in which
+    /// case the character's own branch is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_id: Option<String>,
     /// Character this design belongs to.
     pub character_id: String,
     /// Two to five contradictions that give the character dimension.
@@ -168,8 +175,11 @@ pub struct CharacterDesignView {
 
 /// Redacted Character Design slice for non-planning reads (for example
 /// `get_character_snapshot`). It deliberately has no hidden-layer or
-/// unconscious-desire fields, no secret fact ids and no concealment notes, so
-/// there is nothing to leak when it serializes.
+/// unconscious-desire fields, no secret fact ids and no concealment notes, and
+/// it drops the personal/private layers too: the writer-facing slice is the
+/// triggered contradiction, the conscious desire, the pressure on the
+/// protagonist and the observable behaviour cues (plus public-safe identity).
+/// There is nothing to leak when it serializes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CharacterDesignRedactedView {
@@ -181,10 +191,6 @@ pub struct CharacterDesignRedactedView {
     pub contradictions: Vec<String>,
     /// The self the character shows the world.
     pub public_self: String,
-    /// The self the character shares with intimates.
-    pub personal_self: String,
-    /// The self the character keeps to themselves.
-    pub private_self: String,
     /// What the character wants on the page.
     pub conscious_desire: String,
     /// The pressure this character puts on the protagonist.
@@ -196,17 +202,15 @@ pub struct CharacterDesignRedactedView {
 }
 
 impl CharacterDesignRedactedView {
-    /// Project the public half of a persisted design. The hidden and
-    /// unconscious texts are not reachable from this constructor, so a
-    /// redacted read cannot leak them by construction.
+    /// Project the writer-facing half of a persisted design. The hidden,
+    /// unconscious, personal and private texts are not reachable from this
+    /// constructor, so a redacted read cannot leak them by construction.
     pub fn from_design(design: &CharacterDesign) -> Self {
         Self {
             character_design_id: design.character_design_id.clone(),
             character_id: design.character_id.clone(),
             contradictions: design.contradictions.clone(),
             public_self: design.public_self.clone(),
-            personal_self: design.personal_self.clone(),
-            private_self: design.private_self.clone(),
             conscious_desire: design.conscious_desire.clone(),
             pressure_on_protagonist: design.pressure_on_protagonist.clone(),
             behavior_cues: design.behavior_cues.clone(),
@@ -278,6 +282,13 @@ mod tests {
         assert!(!text.contains("canonical_fact:unconscious"));
         assert!(!text.contains("hidden_self"));
         assert!(!text.contains("unconscious_desire"));
+        // The personal and private layers are not part of the writer-facing
+        // slice either: only the public self, contradiction, conscious desire,
+        // pressure and behaviour cues survive.
+        assert!(!text.contains("personal_self"));
+        assert!(!text.contains("private_self"));
+        assert!(!text.contains("Loyal to her sister"));
+        assert!(!text.contains("Fears the water"));
         assert_eq!(json["public_self"], "Harbour archivist");
         assert_eq!(json["contradictions"][0], "kind");
     }

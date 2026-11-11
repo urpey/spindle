@@ -778,6 +778,16 @@ async fn receipt_failure_keeps_committed_prefix_and_retries_without_duplicate_en
                 character_design_payload("cast:a", &["kind", "cold"]),
             ),
             planned(
+                "cast:b",
+                "create_character",
+                json!({"name":"Ben","summary":"Heir","role":"support"}),
+            ),
+            planned(
+                "design:b",
+                "create_character_design",
+                character_design_payload("cast:b", &["proud", "ashamed"]),
+            ),
+            planned(
                 "place:port",
                 "create_location",
                 json!({"name":"Port","kind":"city","summary":"Tidal harbor"}),
@@ -785,9 +795,12 @@ async fn receipt_failure_keeps_committed_prefix_and_retries_without_duplicate_en
         ],
     )
     .await;
+    // Calls 1..=5 are the rollback-only preflight; the real write's receipts
+    // start at 6. Failing on call 8 targets cast:b's receipt (a, design:a, b),
+    // restoring the original "second character's receipt fails" semantics.
     let counter = Arc::new(AtomicUsize::new(0));
     svc.repository.pool().write(move |c| {
-  c.create_scalar_function("planning_fail_receipt",0,rusqlite::functions::FunctionFlags::SQLITE_UTF8,move |_|Ok(counter.fetch_add(1,Ordering::SeqCst)+1==5))?;
+  c.create_scalar_function("planning_fail_receipt",0,rusqlite::functions::FunctionFlags::SQLITE_UTF8,move |_|Ok(counter.fetch_add(1,Ordering::SeqCst)+1==8))?;
   c.execute_batch("CREATE TEMP TRIGGER fail_planning_receipt BEFORE INSERT ON planning_operation_receipt WHEN planning_fail_receipt() BEGIN SELECT RAISE(ABORT,'injected receipt failure'); END")?;Ok(())
  }).await.unwrap();
     let mut d = decision(&s, &p);
@@ -806,8 +819,10 @@ async fn receipt_failure_keeps_committed_prefix_and_retries_without_duplicate_en
             .collect::<Vec<_>>(),
         vec![
             PlanningOperationOutcome::Applied,
+            PlanningOperationOutcome::Applied,
             PlanningOperationOutcome::Failed,
-            PlanningOperationOutcome::NotReached
+            PlanningOperationOutcome::NotReached,
+            PlanningOperationOutcome::NotReached,
         ]
     );
     assert_eq!(
@@ -824,7 +839,7 @@ async fn receipt_failure_keeps_committed_prefix_and_retries_without_duplicate_en
         .unwrap();
     assert_eq!(
         count, 1,
-        "the committed character prefix survives a later failed receipt"
+        "the failed receipt must roll back its own character, keeping only the committed prefix"
     );
     assert!(
         svc.decide_planning(decision(&s, &p)).await.is_err(),
@@ -840,7 +855,155 @@ async fn receipt_failure_keeps_committed_prefix_and_retries_without_duplicate_en
         .read(|c| c.query_row("SELECT COUNT(*) FROM character", [], |r| r.get(0)))
         .await
         .unwrap();
-    assert_eq!(count, 1, "retry must not duplicate the committed character");
+    assert_eq!(
+        count, 2,
+        "retry creates the rolled-back character exactly once"
+    );
+    let designs: i64 = svc
+        .repository
+        .pool()
+        .read(|c| c.query_row("SELECT COUNT(*) FROM character_design", [], |r| r.get(0)))
+        .await
+        .unwrap();
+    assert_eq!(
+        designs, 2,
+        "both valid designs exist exactly once after retry"
+    );
+}
+
+#[tokio::test]
+async fn failed_character_design_receipt_rolls_back_its_own_design() {
+    use serde_json::json;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let (_tmp, svc) = fresh_service_local().await;
+    let (s, root) = accepted_root(&svc).await;
+    let p = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![
+            planned(
+                "cast:a",
+                "create_character",
+                json!({"name":"Ada","summary":"Archivist","role":"lead"}),
+            ),
+            planned(
+                "design:a",
+                "create_character_design",
+                character_design_payload("cast:a", &["kind", "cold"]),
+            ),
+            planned(
+                "cast:b",
+                "create_character",
+                json!({"name":"Ben","summary":"Heir","role":"support"}),
+            ),
+            planned(
+                "design:b",
+                "create_character_design",
+                character_design_payload("cast:b", &["proud", "ashamed"]),
+            ),
+            planned(
+                "place:port",
+                "create_location",
+                json!({"name":"Port","kind":"city","summary":"Tidal harbor"}),
+            ),
+        ],
+    )
+    .await;
+    // Failing on call 9 targets design:b's receipt after the five preflight
+    // calls plus cast:a, design:a and cast:b.
+    let counter = Arc::new(AtomicUsize::new(0));
+    svc.repository.pool().write(move |c| {
+  c.create_scalar_function("planning_fail_receipt",0,rusqlite::functions::FunctionFlags::SQLITE_UTF8,move |_|Ok(counter.fetch_add(1,Ordering::SeqCst)+1==9))?;
+  c.execute_batch("CREATE TEMP TRIGGER fail_planning_receipt BEFORE INSERT ON planning_operation_receipt WHEN planning_fail_receipt() BEGIN SELECT RAISE(ABORT,'injected receipt failure'); END")?;Ok(())
+ }).await.unwrap();
+    let mut d = decision(&s, &p);
+    d.decision = PlanningDecision::Accept;
+    let failed = svc
+        .apply_planning(d.clone())
+        .await
+        .unwrap_or_else(|error| panic!("apply preflight failed: {error:#}"));
+    assert!(failed.error.is_some());
+    assert_eq!(
+        failed
+            .operations
+            .iter()
+            .map(|r| r.outcome)
+            .collect::<Vec<_>>(),
+        vec![
+            PlanningOperationOutcome::Applied,
+            PlanningOperationOutcome::Applied,
+            PlanningOperationOutcome::Applied,
+            PlanningOperationOutcome::Failed,
+            PlanningOperationOutcome::NotReached,
+        ]
+    );
+    let characters: i64 = svc
+        .repository
+        .pool()
+        .read(|c| c.query_row("SELECT COUNT(*) FROM character", [], |r| r.get(0)))
+        .await
+        .unwrap();
+    assert_eq!(
+        characters, 2,
+        "the failed design does not undo either character"
+    );
+    let designs: i64 = svc
+        .repository
+        .pool()
+        .read(|c| c.query_row("SELECT COUNT(*) FROM character_design", [], |r| r.get(0)))
+        .await
+        .unwrap();
+    assert_eq!(designs, 1, "only the accepted design survives");
+    let secret_facts: i64 = svc
+        .repository
+        .pool()
+        .read(|c| {
+            c.query_row(
+                "SELECT COUNT(*) FROM canonical_fact WHERE predicate IN \
+                 ('character_design.hidden_self','character_design.unconscious_desire')",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        secret_facts, 2,
+        "the failed design's secret facts roll back with it"
+    );
+
+    let retry = svc.apply_planning(d).await.unwrap();
+    assert!(retry.complete);
+    assert!(retry.error.is_none());
+    let designs: i64 = svc
+        .repository
+        .pool()
+        .read(|c| c.query_row("SELECT COUNT(*) FROM character_design", [], |r| r.get(0)))
+        .await
+        .unwrap();
+    assert_eq!(designs, 2, "retry creates the failed design exactly once");
+    let secret_facts: i64 = svc
+        .repository
+        .pool()
+        .read(|c| {
+            c.query_row(
+                "SELECT COUNT(*) FROM canonical_fact WHERE predicate IN \
+                 ('character_design.hidden_self','character_design.unconscious_desire')",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        secret_facts, 4,
+        "retry creates the rolled-back design facts exactly once"
+    );
 }
 
 #[tokio::test]
@@ -8196,8 +8359,15 @@ async fn mckee_plot_line_gate_sees_parent_branch_rows_and_catches_a_child_duplic
 }
 
 fn character_design_payload(character_key: &str, contradictions: &[&str]) -> serde_json::Value {
+    character_design_payload_for(reference(character_key), contradictions)
+}
+
+fn character_design_payload_for(
+    character_ref: serde_json::Value,
+    contradictions: &[&str],
+) -> serde_json::Value {
     serde_json::json!({
-        "character_id": reference(character_key),
+        "character_id": character_ref,
         "contradictions": contradictions,
         "public_self": "Harbor archivist who keeps the tide tables",
         "personal_self": "Loyal to the sister she raised",
@@ -8310,6 +8480,34 @@ async fn mckee_character_design_stages_accepts_and_reads_back_full_hidden_text()
         );
     }
 
+    // The circle rows are author-only: reader_visible stays 0, and their `fact`
+    // text is a non-revealing label rather than a copy of the secret. The
+    // canonical facts remain the only source of the hidden/unconscious texts.
+    let knowledge_rows = svc
+        .repository
+        .list_knowledge_facts_by_project_and_branch(&scope.project_id, &scope.branch_id)
+        .await
+        .unwrap();
+    for (fact_id, label) in [
+        (
+            &design.hidden_self_fact_id,
+            "Character design hidden self (secret)",
+        ),
+        (
+            &design.unconscious_desire_fact_id,
+            "Character design unconscious desire (secret)",
+        ),
+    ] {
+        let row = knowledge_rows
+            .iter()
+            .find(|row| row.secret_of_fact_id.as_deref() == Some(fact_id.as_str()))
+            .expect("holder knowledge row");
+        assert!(!row.reader_visible, "design holder rows are author-only");
+        assert_eq!(row.fact, label);
+        assert!(!row.fact.contains("She caused the fire"));
+        assert!(!row.fact.contains("To be punished for the fire"));
+    }
+
     // Planning tools read the full design, hidden text included.
     let status = svc
         .planning_status(PlanningStatusInput {
@@ -8361,6 +8559,12 @@ async fn mckee_character_design_stages_accepts_and_reads_back_full_hidden_text()
     assert!(!snapshot_json.contains("To be punished for the fire"));
     assert!(!snapshot_json.contains("hidden_self_fact_id"));
     assert!(!snapshot_json.contains("unconscious_desire_fact_id"));
+    // The writer-facing slice is deliberate: the personal and private selves
+    // are not part of it.
+    assert!(!snapshot_json.contains("personal_self"));
+    assert!(!snapshot_json.contains("private_self"));
+    assert!(!snapshot_json.contains("Loyal to the sister she raised"));
+    assert!(!snapshot_json.contains("Fears deep water after the wreck"));
 
     let entity = svc
         .get_entity(GetEntityInput {
@@ -8553,6 +8757,254 @@ fn assert_blocking_design_finding(proposal: &PlanningProposal, code: &str) {
         .find(|finding| finding.code == code)
         .unwrap_or_else(|| panic!("missing finding {code}: {:?}", proposal.findings));
     assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+}
+
+async fn accept_error(
+    svc: &SqliteSpindleService,
+    s: &PlanningSession,
+    p: &PlanningProposal,
+) -> String {
+    let mut d = decision(s, p);
+    d.decision = PlanningDecision::Accept;
+    svc.apply_planning(d).await.unwrap_err().to_string()
+}
+
+#[tokio::test]
+async fn character_design_unresolved_character_stages_with_a_blocking_finding() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let (s, root) = accepted_root(&svc).await;
+
+    // A proposal_ref that no operation (earlier or later) declares.
+    let missing_ref = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![planned(
+            "design:ghost",
+            "create_character_design",
+            character_design_payload("cast:ghost", &["kind", "cold"]),
+        )],
+    )
+    .await;
+    let finding = missing_ref
+        .findings
+        .iter()
+        .find(|finding| finding.code == "character_design_unresolved_character")
+        .expect("unresolved character finding");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+    assert_eq!(finding.path, "/operations/0/operation/input/character_id");
+    assert!(
+        finding.actual.contains("not declared"),
+        "{}",
+        finding.actual
+    );
+    assert!(
+        finding.repair_hint.contains("earlier"),
+        "{}",
+        finding.repair_hint
+    );
+    let error = accept_error(&svc, &s, &missing_ref).await;
+    assert!(
+        error.contains("character_design_unresolved_character"),
+        "acceptance must refuse with the finding code: {error}"
+    );
+    assert!(
+        !error
+            .to_lowercase()
+            .contains("character design character not found"),
+        "the apply path must not reach the internal repository error: {error}"
+    );
+
+    // A design that appears before its create_character in the same artifact.
+    let out_of_order = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![
+            planned(
+                "design:late",
+                "create_character_design",
+                character_design_payload("cast:late", &["brave", "afraid"]),
+            ),
+            planned(
+                "cast:late",
+                "create_character",
+                serde_json::json!({"name":"Late","summary":"Introduced later","role":"support"}),
+            ),
+        ],
+    )
+    .await;
+    let finding = out_of_order
+        .findings
+        .iter()
+        .find(|finding| finding.code == "character_design_unresolved_character")
+        .expect("out-of-order finding");
+    assert!(
+        finding.actual.contains("declared after"),
+        "the finding must explain the ordering: {}",
+        finding.actual
+    );
+    let error = accept_error(&svc, &s, &out_of_order).await;
+    assert!(
+        error.contains("character_design_unresolved_character"),
+        "{error}"
+    );
+
+    // An existing_record_id that names no visible character.
+    let deleted = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![planned(
+            "design:deleted",
+            "create_character_design",
+            character_design_payload_for(
+                serde_json::json!({"kind":"existing_record_id","value":"character:deleted"}),
+                &["kind", "cold"],
+            ),
+        )],
+    )
+    .await;
+    let finding = deleted
+        .findings
+        .iter()
+        .find(|finding| finding.code == "character_design_unresolved_character")
+        .expect("missing existing character finding");
+    assert!(
+        finding.actual.contains("character:deleted"),
+        "{}",
+        finding.actual
+    );
+    let error = accept_error(&svc, &s, &deleted).await;
+    assert!(
+        error.contains("character_design_unresolved_character"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn character_design_pins_the_session_branch_and_rejects_foreign_characters() {
+    use spindle_core::models::{
+        CharacterEmotionalProfileData, CharacterVoiceProfileData, CreateBranchInput,
+        CreateCharacterInput, SwitchBranchInput,
+    };
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let project = svc
+        .create_mckee_project(CreateProjectInput {
+            name: "BranchPinnedDesign".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Pin the design branch".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    let main_character = svc
+        .create_character(CreateCharacterInput {
+            project_id: project.project_id.clone(),
+            name: "Ada".into(),
+            summary: "Main-branch lead".into(),
+            role: "protagonist".into(),
+            realm: None,
+            aliases: Vec::new(),
+            voice_profile: CharacterVoiceProfileData::default(),
+            emotional_profile: CharacterEmotionalProfileData::default(),
+            initial_state: None,
+        })
+        .await
+        .unwrap()
+        .character_id;
+    let feature = svc
+        .create_branch(CreateBranchInput {
+            project_id: project.project_id.clone(),
+            name: "feature".into(),
+            branch_type: "alternative".into(),
+            description: None,
+            parent_branch_id: Some(project.branch_id.clone()),
+        })
+        .await
+        .unwrap();
+
+    // The session branch is stored on the design even when the character row
+    // lives on the parent branch.
+    let design = svc
+        .create_character_design(spindle_core::character_design::CreateCharacterDesignInput {
+            project_id: project.project_id.clone(),
+            branch_id: Some(feature.branch_id.clone()),
+            character_id: main_character.clone(),
+            contradictions: vec!["kind".into(), "cold".into()],
+            public_self: "Harbor archivist".into(),
+            personal_self: "Raises her nephew".into(),
+            private_self: "Fears water".into(),
+            hidden_self: "She signed the manifest".into(),
+            conscious_desire: "Clear her name".into(),
+            unconscious_desire: "To be forgiven".into(),
+            pressure_on_protagonist: "Withholds the chart".into(),
+            behavior_cues: vec!["counts the exits".into()],
+        })
+        .await
+        .unwrap();
+    let stored = svc
+        .repository
+        .get_character_design_for_character(&project.project_id, &main_character)
+        .await
+        .unwrap()
+        .expect("persisted design");
+    assert_eq!(stored.character_design_id, design.character_design_id);
+    assert_eq!(stored.branch_id, feature.branch_id);
+
+    // A character created on the derived branch is not visible from main, so a
+    // design pinned to main must fail with a readable branch error.
+    svc.switch_branch(SwitchBranchInput {
+        project_id: project.project_id.clone(),
+        branch_id: feature.branch_id.clone(),
+    })
+    .await
+    .unwrap();
+    let feature_character = svc
+        .create_character(CreateCharacterInput {
+            project_id: project.project_id.clone(),
+            name: "Ben".into(),
+            summary: "Feature-only support".into(),
+            role: "support".into(),
+            realm: None,
+            aliases: Vec::new(),
+            voice_profile: CharacterVoiceProfileData::default(),
+            emotional_profile: CharacterEmotionalProfileData::default(),
+            initial_state: None,
+        })
+        .await
+        .unwrap()
+        .character_id;
+    let error = svc
+        .create_character_design(spindle_core::character_design::CreateCharacterDesignInput {
+            project_id: project.project_id.clone(),
+            branch_id: Some(project.branch_id.clone()),
+            character_id: feature_character,
+            contradictions: vec!["brave".into(), "afraid".into()],
+            public_self: "Feature self".into(),
+            personal_self: String::new(),
+            private_self: String::new(),
+            hidden_self: "Hidden".into(),
+            conscious_desire: "Desire".into(),
+            unconscious_desire: "Unconscious".into(),
+            pressure_on_protagonist: "Pressure".into(),
+            behavior_cues: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("not visible on branch"),
+        "the write must reject a character outside the session branch: {error}"
+    );
 }
 
 #[tokio::test]

@@ -182,6 +182,17 @@ facts on the target branch. Voice profiles are keyed to their owning character,
 so inherited characters' profiles are read-only until branch-local profile storage
 is available.
 
+`export_bible` and save-point snapshots are **full operator backups**, not
+reader-facing artifacts: they include the project's tables (project- and
+branch-scoped rows), so secret canonical-fact text (including the Character
+Design hidden layer and unconscious desire) is present in the exported
+`canonical_fact` rows. That is pre-existing backup behaviour and is why those
+files are written under the data directory, never into reader exports; the
+model-facing read tools still withhold the same facts. The payload now also
+carries `character_design` (branch-scoped, restored with the branch) and
+`story_spine` (project-level, export-only: a branch rewind never deletes the
+accepted spine).
+
 ## Drafting packet foundation
 
 `spindle-core/src/drafting.rs` owns `DraftingPacketV1`, the scene card, source
@@ -1003,11 +1014,15 @@ resolves those fact texts. Every non-planning read is redacted: subject
 snapshots and scene context strip the design facts (they never get a
 `[SECRETS IN PLAY]` envelope because the writer-facing rendering is the
 behaviour cues), and `get_character_snapshot` exposes only the
-`CharacterDesignRedactedView` (contradictions, public/personal/private layers,
-conscious desire, pressure, behaviour cues). Secret fact ids, values and
-concealment notes never appear outside planning. Arc milestones gain an
-optional `kind` (`change` / `reveal`); absent kinds and legacy milestone JSON
-serialize exactly as before.
+`CharacterDesignRedactedView` (contradictions, public self, conscious desire,
+pressure, behaviour cues; the personal and private selves are not part of the
+writer-facing slice). Secret fact ids, values and concealment notes never appear
+outside planning: `check_consistency`'s deterministic and deep secret-leak tiers
+drop the author-only design facts through the same
+`format::is_planning_only_secret_fact` helper as context assembly and subject
+snapshots, so no finding echoes their text, predicate or fact id. Arc milestones
+gain an optional `kind` (`change` / `reveal`); absent kinds and legacy milestone
+JSON serialize exactly as before.
 
 All gates remain human. Delegation activation, route generation, manifest/run
 validation and agent entry arrive in subsequent phases. See

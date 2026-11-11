@@ -2651,7 +2651,7 @@ impl SqliteSpindleService {
             // strips them. They never get a [SECRETS IN PLAY] envelope because
             // the writer-facing rendering is the design's behaviour cues, not
             // the hidden layer or unconscious desire.
-            if spindle_core::character_design::is_character_design_fact(&fact.predicate) {
+            if crate::format::is_planning_only_secret_fact(fact) {
                 gate.gated_fact_ids.insert(fact.id.clone());
                 gate.withheld_snapshot_facts
                     .insert(snapshot_fact_string(fact));

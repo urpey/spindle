@@ -274,12 +274,18 @@ design (`character_design_missing`), fewer than two or more than five
 contradictions (`character_design_too_few_contradictions` /
 `character_design_too_many_contradictions`), and two designs for one character
 or a design for an already-designed character
-(`character_design_duplicate`). Those findings stage but refuse acceptance
-(they are stage-recordable, like the Story Spine and Main Plot gates). "Major
-character" is read structurally: every character created by the Cast & World
-artifact needs a design; characters added outside planning are not retro-gated.
-Non-McKee projects get no findings, and staging a design for one is rejected
-(`character_design_requires_mckee_project`).
+(`character_design_duplicate`). A design whose target is neither an existing
+character visible from the session branch nor an earlier `create_character`
+(output) in the same artifact records `character_design_unresolved_character`,
+including a design placed before its own `create_character`; the design write
+is pinned to the session branch and rejects a character not visible from it.
+Those findings stage but refuse acceptance (they are stage-recordable, like the
+Story Spine and Main Plot gates). "Major character" is read structurally: every
+character created by the Cast & World artifact needs a design; characters added
+outside planning are not retro-gated.
+Non-McKee projects get no Character Design gate findings, but staging a design
+for one carries a blocking `character_design_requires_mckee_project` finding
+that rejects staging.
 
 Planning reads are full reads: `planning_status.character_designs` carries the
 design plus the hidden layer and unconscious desire texts resolved from the
@@ -287,9 +293,9 @@ secret facts. Non-planning reads are redacted: subject snapshots and scene
 context strip the two design facts instead of enveloping them (the
 `[SECRETS IN PLAY]` block is not used for Character Design), and
 `get_character_snapshot` returns only `CharacterDesignRedactedView`
-(contradictions, public/personal/private layers, conscious desire, pressure,
-behaviour cues). Secret fact ids, values and concealment notes never leave the
-planning surface. Arc milestones gain an optional `kind` (`change` / `reveal`);
+(contradictions, public self, conscious desire, pressure, behaviour cues; the
+personal and private selves are not part of the writer-facing slice). Secret
+fact ids, values and concealment notes never leave the planning surface. Arc milestones gain an optional `kind` (`change` / `reveal`);
 both are stored in the milestone JSON, and legacy milestone JSON without the
 field keeps deserializing and serializing unchanged.
 

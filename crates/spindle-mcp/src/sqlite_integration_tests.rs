@@ -11277,6 +11277,18 @@ async fn mckee_character_design_is_full_in_planning_status_and_redacted_in_other
         snapshot_json.contains("straightens the chart corners"),
         "behaviour cues are the writer-facing rendering: {snapshot_json}"
     );
+    // The writer-facing slice is deliberately narrower than the planning read:
+    // the personal and private selves are not exposed to non-planning tools.
+    for withheld in ["personal_self", "private_self", "Raises her nephew alone"] {
+        assert!(
+            !snapshot_json.contains(withheld),
+            "the redacted slice must not expose {withheld:?}: {snapshot_json}"
+        );
+    }
+    assert!(
+        status_json.contains("Raises her nephew alone"),
+        "planning_status keeps the full design: {status_json}"
+    );
 
     // A non-McKee project gains no Character Design surface anywhere.
     let direct = svc

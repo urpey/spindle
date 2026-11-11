@@ -25,6 +25,12 @@ const CHARACTER_DESIGN_COLUMNS: &str = "id, project_id, branch_id, character_id,
 /// than feeding a `[SECRETS IN PLAY]` envelope.
 const DESIGN_SECRET_CONCEALMENT_NOTE: &str = "Author-only Character Design layer; dramatise it through the design's behaviour cues, never state it in drafting context.";
 
+/// Non-revealing labels for the circle-of-trust `knowledge_fact` rows. The
+/// canonical fact remains the only source of the secret text; these labels exist
+/// only to keep the holder row's normalized name unique per fact kind.
+const HIDDEN_SELF_KNOWLEDGE_LABEL: &str = "Character design hidden self (secret)";
+const UNCONSCIOUS_DESIRE_KNOWLEDGE_LABEL: &str = "Character design unconscious desire (secret)";
+
 struct CharacterDesignRow {
     id: String,
     project_id: String,
@@ -121,22 +127,28 @@ fn insert_design_fact(
     )?;
     // The circle of trust is derived from these rows: one knowledge_fact row
     // linking the character to the secret fact (learned_at NULL = known from
-    // the start). `fact` carries the layer label so the two design facts never
-    // collide on the (project, branch, character, normalized_fact) key.
+    // the start). The row carries a non-revealing layer label and never the
+    // secret text, so the canonical fact stays the only copy. The two labels
+    // differ per fact kind, keeping the (project, branch, character,
+    // normalized_fact) key unique.
     let knowledge_id = mint_id("knowledge_fact");
-    let fact_text = format!("{predicate}: {value}");
-    let normalized = spindle_core::models::normalize_name(&fact_text);
+    let fact_text = match predicate {
+        HIDDEN_SELF_FACT_PREDICATE => HIDDEN_SELF_KNOWLEDGE_LABEL,
+        UNCONSCIOUS_DESIRE_FACT_PREDICATE => UNCONSCIOUS_DESIRE_KNOWLEDGE_LABEL,
+        other => anyhow::bail!("unknown character design secret predicate: {other}"),
+    };
+    let normalized = spindle_core::models::normalize_name(fact_text);
     conn.execute(
         "INSERT INTO knowledge_fact (id, project_id, branch_id, character_id, fact, \
          normalized_fact, source_summary, learned_at, confidence, tags, reader_visible, \
          source_import_session_id, created_at, updated_at, secret_of_fact_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'character design', NULL, NULL, '[]', 1, NULL, ?7, ?7, ?8)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'character design', NULL, NULL, '[]', 0, NULL, ?7, ?7, ?8)",
         rusqlite::params![
             &knowledge_id,
             project_id,
             branch_id,
             character_id,
-            &fact_text,
+            fact_text,
             &normalized,
             now,
             &fact_id,
@@ -162,6 +174,7 @@ impl Repository {
             MAX_CHARACTER_DESIGN_CONTRADICTIONS
         );
         let project_id = input.project_id.clone();
+        let branch_id = input.branch_id.clone();
         let character_id = input.character_id.clone();
         let contradictions = serde_json::to_string(&input.contradictions)?;
         let public_self = input.public_self.clone();
@@ -180,17 +193,40 @@ impl Repository {
             .write(move |conn| {
                 (|| -> Result<()> {
                     let tx = conn.savepoint()?;
-                    let (character_project, branch_id): (String, String) = tx
+                    let (character_project, character_branch): (String, String) = tx
                         .query_row(
                             "SELECT project_id, branch_id FROM character WHERE id=?1",
                             [&character_id],
                             |row| Ok((row.get(0)?, row.get(1)?)),
                         )
-                        .context("character design character not found")?;
+                        .with_context(|| {
+                            format!("character design character {character_id} not found")
+                        })?;
                     anyhow::ensure!(
                         character_project == project_id,
                         "character {character_id} does not belong to project {project_id}"
                     );
+                    // ADR 0004: the design is written on the planning session's
+                    // branch, not blindly on the character's owning branch. The
+                    // character must be visible from that branch (its own branch
+                    // or an ancestor).
+                    let branch_id = match branch_id {
+                        Some(expected_branch) => {
+                            let lineage = resolve_branch_lineage_in_conn(
+                                &tx,
+                                Some(&project_id),
+                                &expected_branch,
+                            )?;
+                            anyhow::ensure!(
+                                lineage.contains(&character_branch),
+                                "character {character_id} is not visible on branch \
+                                 {expected_branch}; a Character Design is written on the \
+                                 planning session's branch"
+                            );
+                            expected_branch
+                        }
+                        None => character_branch,
+                    };
                     let mckee: i64 = tx.query_row(
                         "SELECT mckee_structured FROM project WHERE id=?1",
                         [&project_id],
@@ -262,31 +298,6 @@ impl Repository {
         Ok(CreateCharacterDesignOutput {
             character_design_id: design_id_out,
         })
-    }
-
-    pub async fn get_character_design(
-        &self,
-        project_id: &str,
-        character_design_id: &str,
-    ) -> Result<CharacterDesign> {
-        let project_id = project_id.to_string();
-        let character_design_id = character_design_id.to_string();
-        self.inner
-            .pool
-            .read(move |conn| {
-                let sql = format!(
-                    "SELECT {CHARACTER_DESIGN_COLUMNS} FROM character_design \
-                     WHERE project_id=?1 AND id=?2"
-                );
-                let mut stmt = conn.prepare_cached(&sql)?;
-                stmt.query_row(rusqlite::params![project_id, character_design_id], |row| {
-                    CharacterDesignRow::try_from(row)
-                })
-                .optional_inner()
-            })
-            .await?
-            .context("character design not found")?
-            .into_core()
     }
 
     pub async fn get_character_design_for_character(

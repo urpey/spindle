@@ -916,6 +916,236 @@ async fn restore_save_point_rewinds_active_branch_to_snapshot() {
     assert_eq!(post[0].name, "Mara");
 }
 
+/// A full operator backup must not drop the McKee records: `character_design`
+/// is branch-scoped and travels through a save-point restore with its secret
+/// fact links, while `story_spine` is project-level and export-only.
+#[tokio::test]
+async fn export_payload_and_save_point_round_trip_keep_character_designs_and_story_spines() {
+    use spindle_core::character_design::CreateCharacterDesignInput;
+    use spindle_core::models::{
+        CharacterEmotionalProfileData, CharacterVoiceProfileData, CreateCharacterInput,
+        CreateSavePointInput, RestoreSavePointInput,
+    };
+    use spindle_core::story_spine::{ControllingIdea, CreateStorySpineInput, StorySpineEnding};
+
+    let (_tmp, svc) = fresh_service().await;
+    let project = svc
+        .create_mckee_project(CreateProjectInput {
+            name: "McKeeBackup".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Back up the design".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    let character = svc
+        .create_character(CreateCharacterInput {
+            project_id: project.project_id.clone(),
+            name: "Ada".into(),
+            summary: "Harbor archivist".into(),
+            role: "protagonist".into(),
+            realm: None,
+            aliases: Vec::new(),
+            voice_profile: CharacterVoiceProfileData::default(),
+            emotional_profile: CharacterEmotionalProfileData::default(),
+            initial_state: None,
+        })
+        .await
+        .unwrap()
+        .character_id;
+    svc.create_character_design(CreateCharacterDesignInput {
+        project_id: project.project_id.clone(),
+        branch_id: Some(project.branch_id.clone()),
+        character_id: character.clone(),
+        contradictions: vec!["kind".into(), "cold".into()],
+        public_self: "Harbor archivist".into(),
+        personal_self: "Raises her nephew".into(),
+        private_self: "Fears the tide".into(),
+        hidden_self: "She forged the harbor manifest".into(),
+        conscious_desire: "Clear her name".into(),
+        unconscious_desire: "To be forgiven for the forgery".into(),
+        pressure_on_protagonist: "Withholds the chart".into(),
+        behavior_cues: vec!["counts the exits".into()],
+    })
+    .await
+    .unwrap();
+    svc.create_story_spine(CreateStorySpineInput {
+        project_id: project.project_id.clone(),
+        series_spine_id: None,
+        book_number: None,
+        central_question: "Who forged the manifest?".into(),
+        controlling_idea: ControllingIdea {
+            value: "Truth".into(),
+            cause: "costs safety".into(),
+        },
+        counter_idea: "Safety is worth a lie".into(),
+        spine_axis: "truth versus safety".into(),
+        ending_type: StorySpineEnding::Ironic,
+        inciting_incident: None,
+        final_climax: None,
+        theme_ids: Vec::new(),
+    })
+    .await
+    .unwrap();
+
+    let stored = svc
+        .repository
+        .get_character_design_for_character(&project.project_id, &character)
+        .await
+        .unwrap()
+        .expect("persisted design");
+
+    // The full export payload carries both McKee tables. Like every operator
+    // backup, it also carries the secret canon text through canonical_fact.
+    let artifact = svc
+        .build_project_export_payload(
+            &project.project_id,
+            "spindle-save-point-v1",
+            std::collections::BTreeMap::new(),
+        )
+        .await
+        .unwrap();
+    let payload = &artifact.payload;
+    assert_eq!(
+        payload["tables"]["character_design"]
+            .as_array()
+            .expect("character_design table")
+            .len(),
+        1
+    );
+    assert_eq!(
+        payload["tables"]["story_spine"]
+            .as_array()
+            .expect("story_spine table")
+            .len(),
+        1
+    );
+    assert_eq!(
+        payload["tables"]["character_design"][0]["id"],
+        stored.character_design_id
+    );
+    assert_eq!(
+        payload["tables"]["character_design"][0]["hidden_self_fact_id"],
+        stored.hidden_self_fact_id
+    );
+    assert!(
+        payload["tables"]["canonical_fact"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|fact| fact["id"] == stored.hidden_self_fact_id
+                && fact["value_text"] == "She forged the harbor manifest"),
+        "the full operator backup intentionally contains secret canon text"
+    );
+
+    // Snapshot, add a second design, then restore: the design row and its
+    // secret-fact links come back, and the post-snapshot design disappears.
+    let save_point = svc
+        .create_save_point(CreateSavePointInput {
+            project_id: project.project_id.clone(),
+            name: "with-design".into(),
+            description: None,
+        })
+        .await
+        .unwrap();
+    let extra = svc
+        .create_character(CreateCharacterInput {
+            project_id: project.project_id.clone(),
+            name: "Ben".into(),
+            summary: "Post-snapshot support".into(),
+            role: "support".into(),
+            realm: None,
+            aliases: Vec::new(),
+            voice_profile: CharacterVoiceProfileData::default(),
+            emotional_profile: CharacterEmotionalProfileData::default(),
+            initial_state: None,
+        })
+        .await
+        .unwrap()
+        .character_id;
+    svc.create_character_design(CreateCharacterDesignInput {
+        project_id: project.project_id.clone(),
+        branch_id: Some(project.branch_id.clone()),
+        character_id: extra,
+        contradictions: vec!["proud".into(), "ashamed".into()],
+        public_self: "Magistrate".into(),
+        personal_self: String::new(),
+        private_self: String::new(),
+        hidden_self: "He signed it too".into(),
+        conscious_desire: "Keep order".into(),
+        unconscious_desire: "To be caught".into(),
+        pressure_on_protagonist: "Offers silence".into(),
+        behavior_cues: Vec::new(),
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        svc.repository
+            .list_character_designs(&project.project_id)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+
+    svc.restore_save_point(RestoreSavePointInput {
+        project_id: project.project_id.clone(),
+        save_point_id: save_point.save_point_id,
+    })
+    .await
+    .unwrap();
+
+    let designs = svc
+        .repository
+        .list_character_designs(&project.project_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        designs.len(),
+        1,
+        "restore keeps exactly the snapshot design"
+    );
+    assert_eq!(designs[0].character_design_id, stored.character_design_id);
+    assert_eq!(designs[0].hidden_self_fact_id, stored.hidden_self_fact_id);
+    let hidden = svc
+        .repository
+        .get_canonical_fact(&stored.hidden_self_fact_id)
+        .await
+        .unwrap();
+    assert!(hidden.secret, "the restored fact keeps its secret flag");
+    assert_eq!(
+        hidden.value_text.as_deref(),
+        Some("She forged the harbor manifest")
+    );
+    let circle = svc
+        .repository
+        .secret_circle_members(
+            &project.project_id,
+            &project.branch_id,
+            &stored.hidden_self_fact_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        circle.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+        vec![character.as_str()],
+        "the restored holder row keeps the circle link"
+    );
+    assert_eq!(
+        svc.repository
+            .list_story_spines(&project.project_id)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "the project-level spine is untouched by a branch rewind"
+    );
+}
+
 #[tokio::test]
 async fn merge_branch_carries_canonical_fact_canon() {
     use crate::sqlite::repository::CreateCanonicalFactParams;

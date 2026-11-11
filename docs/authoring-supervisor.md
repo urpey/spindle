@@ -39,8 +39,8 @@ before, and a run on an unmarked project never sees the new fields.
 
 Cast & World planning may also have produced a Character Design per character
 (see [planning engine](planning-engine-design.md)). Drafting reads only the
-redacted slice: `get_character_snapshot` returns contradictions, the
-public/personal/private layers, conscious desire, pressure and behaviour cues.
+redacted slice: `get_character_snapshot` returns contradictions, the public
+self, conscious desire, pressure and behaviour cues.
 `hidden_self` and `unconscious_desire` are secret canonical facts that every
 non-planning carrier strips (they are never rendered as a `[SECRETS IN PLAY]`
 envelope), so the writer renders depth through behaviour cues rather than

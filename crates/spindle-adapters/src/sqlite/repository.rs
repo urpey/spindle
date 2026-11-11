@@ -135,6 +135,7 @@ pub(crate) const BRANCH_RESTORE_TABLES: &[&str] = &[
     "scene_source_link",
     "character_voice_profile",
     "character_emotional_profile",
+    "character_design",
     "character_state",
     "future_knowledge",
     "timeline_event",
@@ -3309,7 +3310,7 @@ fn batch_canonical_fact_summaries(
         // full text from their facts, and every non-planning read (including
         // the scene context snapshot carrier) strips them instead of rendering
         // a `[SECRETS IN PLAY]` envelope.
-        .filter(|fact| !spindle_core::character_design::is_character_design_fact(&fact.predicate))
+        .filter(|fact| !crate::format::is_planning_only_secret_fact(fact))
         .filter(|fact| fact_matches_subject(fact, &needle))
         .filter(|fact| fact_at_or_before(fact, placement))
         .map(|fact| CanonicalFactSummary {
@@ -3354,7 +3355,7 @@ fn batch_knowledge_summaries(
     let design_fact_ids: std::collections::BTreeSet<&str> = batch
         .canonical_facts
         .iter()
-        .filter(|fact| spindle_core::character_design::is_character_design_fact(&fact.predicate))
+        .filter(|fact| crate::format::is_planning_only_secret_fact(fact))
         .map(|fact| fact.id.as_str())
         .collect();
     Ok(batch

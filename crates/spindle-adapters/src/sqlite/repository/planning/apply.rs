@@ -62,6 +62,18 @@ pub(crate) fn resolve_operation(
         Ok(())
     }
     resolve(&mut input, refs)?;
+    // ADR 0004: a Character Design is written on the planning session's branch,
+    // not on whichever branch the referenced character row happens to live on.
+    // The repository re-validates that the character is visible from it.
+    if matches!(item.operation, PlanningOperation::CreateCharacterDesign(_)) {
+        let scope = scope
+            .as_ref()
+            .context("character design requires accepted project contract")?;
+        input
+            .as_object_mut()
+            .context("planning input object")?
+            .insert("branch_id".into(), Value::String(scope.branch_id.clone()));
+    }
     if !matches!(
         item.operation,
         PlanningOperation::CreateProject(_)
@@ -683,7 +695,7 @@ fn scope_guard(
                 for (key, v) in m {
                     if matches!(
                         key.as_str(),
-                        "project_id" | "emotional_state" | "base_emotions"
+                        "project_id" | "branch_id" | "emotional_state" | "base_emotions"
                     ) {
                         continue;
                     }
