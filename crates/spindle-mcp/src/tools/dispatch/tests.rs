@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test(flavor = "current_thread")]
 async fn invalid_tool_input_returns_structured_tool_error() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let result = router
         .call_tool("create_project", Some(&serde_json::Map::new()))
@@ -24,7 +24,7 @@ async fn invalid_tool_input_returns_structured_tool_error() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn unknown_tool_returns_structured_tool_error() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let result = router
         .call_tool("not_a_real_tool", None)

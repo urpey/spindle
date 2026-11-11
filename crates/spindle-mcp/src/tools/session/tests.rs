@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_project_sets_session_defaults_for_follow_up_tools() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let create_project_args = serde_json::to_value(CreateProjectInput {
         name: "Session Defaults".to_string(),
@@ -141,7 +141,7 @@ async fn create_project_sets_session_defaults_for_follow_up_tools() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_character_infers_single_project_without_active_session_project() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let project = router
         .service
@@ -213,7 +213,7 @@ async fn create_character_infers_single_project_without_active_session_project()
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_character_without_project_id_errors_when_session_is_ambiguous() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     for name in ["First Project", "Second Project"] {
         router
@@ -276,7 +276,7 @@ async fn create_character_without_project_id_errors_when_session_is_ambiguous() 
 
 #[tokio::test(flavor = "current_thread")]
 async fn set_active_project_switches_session_defaults() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let create_project = |name: &str| CreateProjectInput {
         name: name.to_string(),
@@ -367,7 +367,7 @@ async fn set_active_project_switches_session_defaults() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn project_selection_is_callable_in_every_profile() {
-    let mut router = router().await;
+    let (mut router, _tmp_guard) = router().await;
     let args = serde_json::json!({
         "name": "Existing book", "project_type": "novel", "genre": "fantasy",
         "reader_contract": {"promise": "An existing story", "style_notes": [], "boundaries": []}

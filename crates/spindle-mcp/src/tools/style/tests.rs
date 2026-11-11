@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn test_style_profile_mcp_tools() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let tools = router.list_tools();
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
     assert!(tool_names.contains(&"create_style_profile_from_markdown"));

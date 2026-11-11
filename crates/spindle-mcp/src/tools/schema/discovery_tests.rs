@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test(flavor = "current_thread")]
 async fn generated_discovery_omits_selected_context_schemas_but_keeps_receipts() {
-    let mut router = router().await;
+    let (mut router, _tmp_guard) = router().await;
     let legacy = router.list_tools();
     router.tool_profile = Some("workflow-write".to_owned());
     let generated = router.list_tools();
@@ -36,7 +36,7 @@ async fn generated_discovery_omits_selected_context_schemas_but_keeps_receipts()
 
 #[tokio::test(flavor = "current_thread")]
 async fn optional_response_contracts_work_with_resources_and_tool_only_hosts() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let resources = crate::resources::ResourceRouter::new(router.service().clone());
     let uri = "bible://contracts/tools/v1/get_scene_context";
     let response = resources.read_resource(uri).await.unwrap();
@@ -79,7 +79,7 @@ async fn optional_response_contracts_work_with_resources_and_tool_only_hosts() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn all_optional_contracts_are_exact_valid_and_listed() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let resources = crate::resources::ResourceRouter::new(router.service().clone());
     let index = resources
         .read_resource("bible://contracts/tools/v1")
@@ -136,7 +136,7 @@ async fn all_optional_contracts_are_exact_valid_and_listed() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn output_omission_does_not_change_the_actual_structured_result() {
-    let mut router = router().await;
+    let (mut router, _tmp_guard) = router().await;
     let args = serde_json::json!({"name":"Contract test", "project_type":"novel", "genre":"fantasy", "reader_contract":{"promise":"A test story", "style_notes":[], "boundaries":[]}});
     let project = structured_json(
         router

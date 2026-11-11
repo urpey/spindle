@@ -22,7 +22,7 @@ async fn invoke_json(router: &ToolRouter, name: &str, args: Value) -> Value {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_scene_single_call_assembles_ordinary_scene_without_mutating_cursor() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let project = invoke_json(
         &router,
@@ -298,7 +298,7 @@ async fn prepare_scene_single_call_assembles_ordinary_scene_without_mutating_cur
 
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_scene_branch_and_secret_visibility() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let project = invoke_json(
         &router,
@@ -656,7 +656,7 @@ async fn prepare_scene_branch_and_secret_visibility() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_scene_preserves_hard_constraints_and_reports_truncation_and_unavailable_passes() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let project = invoke_json(
         &router,
@@ -971,7 +971,7 @@ agent = "broken-embed"
 
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_scene_dependency_tokens_detect_scene_canon_style_and_plan_staleness() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let project = invoke_json(
         &router,

@@ -91,7 +91,7 @@ fn knowledge_learned_counts_toward_package_satisfaction() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn update_promise_status_accepts_common_alias_fields() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let project = router
         .service
@@ -152,7 +152,7 @@ async fn update_promise_status_accepts_common_alias_fields() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn set_active_project_does_not_depend_on_writer_state_budget() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
 
     let create_project_args = serde_json::to_value(CreateProjectInput {
         name: "Budget Independent Session Defaults".to_string(),
@@ -338,7 +338,7 @@ fn start_run_seed_still_honors_legacy_markers() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_run_chapter_count_max_single_accepted() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let project_id = prepare_run_project(&router, "Overflow Max Single").await;
     // True end is exactly i32::MAX: representable, so no range message.
     let args = serde_json::json!({
@@ -365,7 +365,7 @@ async fn prepare_run_chapter_count_max_single_accepted() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_run_chapter_count_min_rejected() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let args = serde_json::json!({
         "project_id": "project:overflow",
         "book_number": 1,
@@ -399,7 +399,7 @@ async fn prepare_run_chapter_count_min_rejected() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_run_chapter_count_boundary_overflow_and_fit() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let project_id = prepare_run_project(&router, "Overflow Boundary").await;
 
     // True end i32::MAX + 1 is unrepresentable: validation error.
@@ -510,7 +510,7 @@ fn chapter_range_end_accepts_representable_max_ranges() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_run_chapter_span_over_max_rejected() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let project_id = prepare_run_project(&router, "Span Over Max").await;
 
     // count=1001 → span 1001, rejected before the per-chapter loop.
@@ -567,7 +567,7 @@ async fn prepare_run_chapter_span_over_max_rejected() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_run_chapter_span_at_max_accepted() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let project_id = prepare_run_project(&router, "Span At Max").await;
 
     // count=1000 → span 1000, no span message.
@@ -616,7 +616,7 @@ async fn prepare_run_chapter_span_at_max_accepted() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_run_chapter_count_happy_path_computes_end_chapter() {
-    let router = router().await;
+    let (router, _tmp_guard) = router().await;
     let project_id = prepare_run_project(&router, "Overflow Happy Path").await;
     let args = serde_json::json!({
         "project_id": project_id,

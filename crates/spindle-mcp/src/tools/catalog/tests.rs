@@ -48,7 +48,7 @@ async fn tools_list_matches_pre_split_snapshots_for_every_profile() {
             )),
         ),
     ];
-    let mut router = router().await;
+    let (mut router, _tmp_guard) = router().await;
     if std::env::var("SPINDLE_UPDATE_SNAPSHOTS").as_deref() == Ok("1") {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools/snapshots");
         let mut profiles: Vec<Option<&str>> = vec![None, Some("unknown-profile")];
@@ -86,7 +86,7 @@ async fn skill_tools_are_listed_in_every_tool_profile() {
         let db = SqlitePool::open(&temp.path().join("router.db"))
             .await
             .expect("db init");
-        let data_dir = temp.keep();
+        let data_dir = temp.path().to_path_buf();
         let router = ToolRouter::with_tool_profile_and_serialization(
             SpindleService::new(SpindleRepository::with_model_router(
                 db,
