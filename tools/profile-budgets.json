@@ -4,7 +4,7 @@
     "default": {
       "tools": 181,
       "input_bytes": 180181,
-      "full_bytes": 793183
+      "full_bytes": 793333
     },
     "new-book": {
       "tools": 14,
@@ -84,7 +84,7 @@
     "legacy-all": {
       "tools": 181,
       "input_bytes": 180181,
-      "full_bytes": 793183
+      "full_bytes": 793333
     },
     "mckee": {
       "tools": 11,

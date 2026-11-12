@@ -116,20 +116,121 @@ delegated acceptance is a second, audited transition with actor
   author decision remains. Optional warning thresholds are in the policy.
 - `hold`: stage only; useful for later horizons and cost control.
 
-**Open question for the author — default gates.** Recommendation: human gate
-for reader contract, cast/world seed, and series/current-arc + book shape;
-delegate chapter and scene detail after those approvals, with structural errors
-always blocking and creative advisories visible. Until the author selects or
-accepts this profile, use human gates at every level. Offer an all-human profile
-and allow changing the policy for future proposals. This is a product decision,
-not permission for implementation to silently enable automation.
+**Default gates (resolved).** Every planning session starts with human gates at
+every level (ADR 0004). The McKee gate profile below is an *explicit author
+decision*, not a default: implementation never silently enables automation.
+
+### McKee gate profile (explicit author activation)
+
+The **McKee gate profile** is human at Contract, CastWorld, SeriesArc and Book
+and `delegate_if_valid` at Chapter and Scene. It is never applied automatically;
+every session — including one created in a **McKee context** — starts all-human.
+
+A McKee context is decided once, at session creation, and only pins the prompt
+version: an **unattached** session is the new-book flow and will create a McKee
+project; an **attached** session follows the bound project's
+`mckee_structured` marker. A directly-created project is not a McKee context.
+
+The author activates the profile through the existing `planning_advance` action
+(`planning_begin` accepts the same override for a session it creates), with a
+human actor and a note:
+
+```json
+{
+  "session_id": "<session>",
+  "action": "set_policy",
+  "policy": {
+    "gates": {
+      "contract": "human",
+      "cast_world": "human",
+      "series_arc": "human",
+      "book": "human",
+      "chapter": "delegate_if_valid",
+      "scene": "delegate_if_valid"
+    },
+    "policy_id": "mckee-default",
+    "policy_version": 1
+  },
+  "policy_actor": "author:<name>",
+  "policy_note": "Activate the McKee gate profile: roots human, Chapter and Scene delegate."
+}
+```
+
+The new-book flow asks for this decision **after the contract/cast gate and
+before the chapter/scene batches**. `policy_actor` and `policy_note` are
+required, so activation is attributable. Activation requires a McKee context and
+is rejected for an attached non-McKee project; root levels can never be
+delegated in any override.
+
+The profile is stable and audited:
+
+- `policy_id = "mckee-default"`, `policy_version = 1`; a delegated decision is
+  recorded as `policy:mckee-default:1` on the proposal and its operation
+  receipts, and the proposal's policy snapshot must still equal the live session
+  policy at apply time.
+- Contract, CastWorld, SeriesArc and Book are always `human`. This is
+  structural, not advisory: `set_planning_policy` (and therefore every explicit
+  `PlanningPolicyOverride`, including the one accepted by `planning_begin`)
+  rejects `delegate_if_valid` on a root level with a readable error, and the
+  apply-time policy-actor check refuses a staged root as well.
+- Chapter and Scene are `delegate_if_valid`. The author may explicitly override
+  either back to `human`; the profile identity is kept so later delegated
+  decisions still name the policy version that was in force. There is no
+  advisory cap in version 1: a delegated level is accepted when every hard check
+  passes.
+- A delegated Chapter or Scene that carries any **blocking finding** (stored or
+  revalidated), any **unresolved author question**, a stale policy snapshot, an
+  advisory count over an explicit cap, a stale planning projection, an
+  unaccepted upstream root, or no attached project is refused for the policy
+  actor and stays staged for the author. One shared refusal helper drives both
+  the apply-time checks and the human-review reason, so the two can never drift.
+  `planning_status`'s existing `next_action` reports the human-review state and
+  the reasons (for example `unresolved author question 'q1'` or `blocking
+  finding 'scene_missing_inaction_cost' at ...`).
+- The profile changes nothing about ratification families. Canon deltas (ADR
+  0001) and plan amendments (ADR 0003) still require a human operator decision,
+  and the `policy:` actor is rejected for both; in-run amendments never
+  auto-accept. The `mckee-default` identity is reserved for McKee contexts at
+  every version, so a non-McKee session cannot borrow it.
+- No new tool, table, field or migration: the profile is stored in the existing
+  `planning_session.policy` JSON and activated through the existing
+  `set_policy` action and `PlanningPolicyOverride` DTO.
 
 ADR 0003 explicitly requires every amendment to be a human decision
 ([docs/adr/0003-plan-amendment-classes.md:64–77][adr-policy]). Initial-plan
-policy delegation is a **new bounded permission**, requiring an additive ADR
-clarifying the distinction; it does not enable auto-accept on `plan_amendment`
-or `canon_delta`. During a run, amendments remain human-ratified. Any future
-change to that rule needs a separate author decision and superseding ADR.
+policy delegation is a **bounded, explicitly activated permission**; it does not
+enable auto-accept on `plan_amendment` or `canon_delta`. During a run,
+amendments remain human-ratified. Any future change to that rule needs a
+separate author decision and superseding ADR.
+
+### Versioned planning prompts
+
+Prompt IDs are versioned per context, not rewritten in place. McKee contexts
+resolve `planning_contract_v2`, `planning_seed_v2`,
+`planning_series_arc_v2`, `outline_book_v2`, `outline_chapters_v2`,
+`outline_manifest_v2` and the single bounded repair pass
+`planning_repair_v2`; non-McKee sessions keep `_v1` byte-identically.
+
+The version is **pinned on the session at creation** in
+`PlanningSession.prompt_version` (an additive, serde-defaulted field): `2` for
+a McKee context, `1` for an attached non-McKee project. Prompt selection and the
+repair pass read that pinned value; they do not re-derive it from the current
+scope, so an existing session cannot flip from `_v1` to `_v2` on its next
+advance, and a McKee session keeps `_v2` across attach and later advances. A
+session created before the field existed (`None`) resolves `_v1`
+byte-identically; the v1 system prompts are pinned by hash in the test suite.
+
+The resolved ID and the exact prompt hash are recorded in the generation
+receipt, and model-call usage attribution records the matching `v1`/`v2` label
+rather than a hard-coded version. The `_v2` system prompt is the same v1
+hard-rules block plus a clearly headed, host-neutral McKee guidance block per
+level, naming only operations the level's `check_level` allowlist accepts (Story
+Spine at Contract; Character Designs at Cast & World; ordered Acts, Main
+Plot/Subplots and long-range promises at Series Arc; book outline and Acts at
+Book — promises stay Series-Arc-level and a sub-spine stays Contract-level;
+Sequences and value-chain plans at Chapter; value plans, structured Beats and
+Key Facts at Scene). The artifact schema does not change.
+
 
 ### Apply, stale proposals and failure
 

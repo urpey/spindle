@@ -1,5 +1,6 @@
 //! Thin agent-entry orchestration over the planning staging, generation and
 //! ratification services: begin/resume, advance, status and decide.
+use super::apply::PolicyRefusal;
 use super::*;
 
 fn premise_preview(premise: &str) -> String {
@@ -169,6 +170,66 @@ fn gate_for(session: &PlanningSession, level: PlanningLevel) -> PlanningGate {
     PlanningGatePolicy::from_gates(&session.policy.gates).gate_for(level)
 }
 
+/// Why a staged proposal under a delegated gate still needs the author.
+///
+/// This delegates to the apply-time refusal helper instead of re-implementing
+/// its predicates: the reasons shown here are exactly the checks that refuse
+/// the audited policy actor, including revalidated blocking findings,
+/// unaccepted upstream roots and the advisory cap computed from the larger of
+/// the stored and revalidated counts. A session without a delegated gate gets
+/// `None`, so its default wording is unchanged.
+async fn delegated_human_review_reason(
+    svc: &SqliteSpindleService,
+    session: &PlanningSession,
+    proposals: &[PlanningProposal],
+    proposal: &PlanningProposal,
+) -> Result<Option<String>> {
+    if gate_for(session, proposal.artifact.level) != PlanningGate::DelegateIfValid {
+        return Ok(None);
+    }
+    let Some(actor) = session.policy.delegated_actor() else {
+        return Ok(None);
+    };
+    let refusals = svc
+        .policy_actor_refusals(session, proposals, proposal, &actor)
+        .await?;
+    if refusals.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "policy {actor} cannot accept it because {}",
+        refusals
+            .iter()
+            .map(PolicyRefusal::for_status)
+            .collect::<Vec<_>>()
+            .join("; ")
+    )))
+}
+
+async fn staged_review_action(
+    svc: &SqliteSpindleService,
+    session: &PlanningSession,
+    proposals: &[PlanningProposal],
+    proposal: &PlanningProposal,
+) -> Result<String> {
+    if let Some(reason) = delegated_human_review_reason(svc, session, proposals, proposal).await? {
+        return Ok(format!(
+            "The staged {} proposal needs a human decision: {reason}. Repair or replace it, then call planning_decide with its payload_hash as a human actor.",
+            proposal_level_name(proposal.artifact.level)
+        ));
+    }
+    if !proposal.artifact.author_questions.is_empty() {
+        return Ok(format!(
+            "Answer the author questions on the staged {} proposal, supersede it, then call planning_advance to regenerate.",
+            proposal_level_name(proposal.artifact.level)
+        ));
+    }
+    Ok(format!(
+        "Review the staged {} proposal with the author, then call planning_decide with its payload_hash.",
+        proposal_level_name(proposal.artifact.level)
+    ))
+}
+
 /// The active gate belongs to a proposal awaiting a decision, not to the next
 /// unfilled level. Falling through to `next_level` would report Scene's gate
 /// while a human-gated Chapter proposal is still staged.
@@ -180,34 +241,37 @@ fn gate_level(proposals: &[PlanningProposal]) -> PlanningLevel {
         .unwrap_or_else(|| next_level(proposals))
 }
 
-fn review_next_action(session: &PlanningSession, proposals: &[PlanningProposal]) -> String {
+/// Whether any level of the policy can be accepted by its audited actor.
+fn has_delegated_gate(policy: &PlanningPolicy) -> bool {
+    policy
+        .gates
+        .values()
+        .any(|gate| *gate == PlanningGate::DelegateIfValid)
+}
+
+async fn review_next_action(
+    svc: &SqliteSpindleService,
+    session: &PlanningSession,
+    proposals: &[PlanningProposal],
+) -> Result<String> {
     if session.projection_stale {
-        return "Resolve the stale planning projection before continuing: review the staged reconciliation proposal and record a human decision."
-            .to_string();
+        return Ok("Resolve the stale planning projection before continuing: review the staged reconciliation proposal and record a human decision."
+            .to_string());
     }
     if let Some(staged) = proposals
         .iter()
         .find(|p| p.status == PlanningProposalStatus::Staged)
     {
-        if !staged.artifact.author_questions.is_empty() {
-            return format!(
-                "Answer the author questions on the staged {} proposal, supersede it, then call planning_advance to regenerate.",
-                proposal_level_name(staged.artifact.level)
-            );
-        }
-        return format!(
-            "Review the staged {} proposal with the author, then call planning_decide with its payload_hash.",
-            proposal_level_name(staged.artifact.level)
-        );
+        return staged_review_action(svc, session, proposals, staged).await;
     }
     if session.scope.is_none() {
-        return "Call planning_advance to stage the Contract proposal. It stays staged until a human decision.".to_string();
+        return Ok("Call planning_advance to stage the Contract proposal. It stays staged until a human decision.".to_string());
     }
     let next = next_level(proposals);
-    format!(
+    Ok(format!(
         "Call planning_advance to generate the next {} level, or planning_status to recheck readiness.",
         proposal_level_name(next)
-    )
+    ))
 }
 
 fn proposal_level_name(level: PlanningLevel) -> &'static str {
@@ -398,7 +462,9 @@ impl SqliteSpindleService {
             .iter()
             .any(|p| p.status == PlanningProposalStatus::Staged)
         {
-            review_next_action(&session, &proposals)
+            review_next_action(self, &session, &proposals).await?
+        } else if has_delegated_gate(&session.policy) {
+            "Call planning_advance to generate the first planning level. Root levels stay staged until a human decision; delegated Chapter and Scene levels are accepted only when no blocking finding or author question remains.".to_string()
         } else {
             "Call planning_advance to generate the first planning level. Every level stays staged until a human decision.".to_string()
         };
@@ -463,7 +529,7 @@ impl SqliteSpindleService {
                 action: input.action,
                 advance: None,
                 readiness: None,
-                next_action: review_next_action(&session, &proposals),
+                next_action: review_next_action(self, &session, &proposals).await?,
             });
         }
 
@@ -489,12 +555,10 @@ impl SqliteSpindleService {
             let next_action = if readiness.ready_to_draft {
                 "The planned range is ready. Call planning_decide with action=prepare_authoring_run, then start drafting only on the author's instruction.".to_string()
             } else {
-                readiness
-                    .prepare_run
-                    .missing_requirements
-                    .first()
-                    .map(|missing| format!("Readiness is blocked: {missing}"))
-                    .unwrap_or_else(|| review_next_action(&session, &proposals))
+                match readiness.prepare_run.missing_requirements.first() {
+                    Some(missing) => format!("Readiness is blocked: {missing}"),
+                    None => review_next_action(self, &session, &proposals).await?,
+                }
             };
             return Ok(PlanningAdvanceOutput {
                 session: session_summary(&session, &proposals),
@@ -550,16 +614,34 @@ impl SqliteSpindleService {
                 retry_key: input.retry_key.clone(),
             })
             .await?;
+        let session = self.get_planning_session(&session.id).await?;
+        let proposals = self
+            .list_planning_proposals(&session.id, session.scope.clone())
+            .await?;
         let next_action = match report.outcome {
             PlanningSessionOutcome::Staged => match report.proposal.as_ref() {
                 Some(proposal) if proposal.status == PlanningProposalStatus::Staged => {
-                    if proposal.artifact.author_questions.is_empty() {
+                    // A delegated session gains the human-review reason; every
+                    // other session keeps the pre-profile wording byte-for-byte.
+                    if let Some(reason) = delegated_human_review_reason(
+                        self,
+                        &session,
+                        &proposals,
+                        proposal,
+                    )
+                    .await?
+                    {
+                        format!(
+                            "The staged {} proposal needs a human decision: {reason}. Repair or replace it, then call planning_decide with its payload_hash as a human actor.",
+                            proposal_level_name(proposal.artifact.level)
+                        )
+                    } else if !proposal.artifact.author_questions.is_empty() {
+                        "The proposal carries unresolved author questions. Resolve them, then stage a replacement proposal.".to_string()
+                    } else {
                         format!(
                             "Review the staged {} proposal with the author, then call planning_decide with its payload_hash.",
                             proposal_level_name(proposal.artifact.level)
                         )
-                    } else {
-                        "The proposal carries unresolved author questions. Resolve them, then stage a replacement proposal.".to_string()
                     }
                 }
                 _ => "The proposal was accepted under the delegated gate. Continue with planning_advance or check planning_status.".to_string(),
@@ -577,10 +659,6 @@ impl SqliteSpindleService {
                 "The planning budget is exhausted. Raise the session budget explicitly, then retry with a new retry_key.".to_string()
             }
         };
-        let session = self.get_planning_session(&session.id).await?;
-        let proposals = self
-            .list_planning_proposals(&session.id, session.scope.clone())
-            .await?;
         Ok(PlanningAdvanceOutput {
             session: session_summary(&session, &proposals),
             action: input.action,
@@ -705,10 +783,10 @@ impl SqliteSpindleService {
             if readiness.ready_to_draft {
                 "The planned range is ready. Call planning_decide with action=prepare_authoring_run, then start drafting only on the author's instruction.".to_string()
             } else {
-                review_next_action(&session, &proposals)
+                review_next_action(self, &session, &proposals).await?
             }
         } else {
-            review_next_action(&session, &proposals)
+            review_next_action(self, &session, &proposals).await?
         };
 
         Ok(PlanningStatusOutput {
@@ -819,7 +897,7 @@ impl SqliteSpindleService {
             .iter()
             .map(proposal_summary)
             .collect::<Result<Vec<_>>>()?;
-        let next_action = review_next_action(&session, &proposals);
+        let next_action = review_next_action(self, &session, &proposals).await?;
         Ok(PlanningDecideOutput {
             session: session_summary(&session, &proposals),
             action: input.action,

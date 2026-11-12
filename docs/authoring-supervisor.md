@@ -91,6 +91,21 @@ finding on the accepted Act rather than silently invalidating it. The Act list,
 including any cause, reads back through `planning_status` as planning intent and
 never becomes a timeline event or canonical fact.
 
+Planning gates are not drafting gates. Every planning session starts all-human
+(ADR 0004). The author may explicitly activate the McKee gate profile
+(`policy_id = "mckee-default"`, version 1) with
+`planning_advance(action = "set_policy")`: roots stay human, Chapter and Scene
+detail may then be accepted by the audited policy actor
+`policy:mckee-default:1`, and any stored or revalidated blocking finding,
+unresolved author question, stale policy snapshot or projection, unaccepted
+upstream root or over-cap advisory count returns that level to the author.
+Activation is never automatic and is rejected for a non-McKee project, and the
+profile never auto-accepts canon deltas or plan amendments. The supervisor's
+`authoring_prepare_run` remains the real drafting-readiness check for the
+planned range regardless of how a plan was accepted; a delegated acceptance is
+recorded planning history, not a quality signal, and it never starts a drafting
+run.
+
 ## MCP Tools Interface
 
 The supervisor exposes 9 MCP tools through the `spindle-mcp` server:

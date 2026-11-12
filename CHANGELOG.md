@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+- Add the **McKee gate profile** for planning sessions. Every session still
+  starts all-human (ADR 0004); the profile is an **explicit author decision**
+  made with `planning_advance(action = "set_policy")` (or `planning_begin`'s
+  policy override) and a human `policy_actor` plus note: human at Contract,
+  CastWorld, SeriesArc and Book, `delegate_if_valid` at Chapter and Scene, under
+  the stable identity `policy_id = "mckee-default"`,
+  `policy_version = 1`. A delegated decision is audited as
+  `policy:mckee-default:1` on the proposal and its operation receipts.
+  Activation requires a McKee context (an unattached new-book session or a
+  session attached to a project carrying the marker) and is rejected for an
+  attached non-McKee project. Root levels can never be delegated: every
+  explicit override (including `planning_begin`'s) rejects root-level
+  `delegate_if_valid` before staging, in addition to the apply-time
+  policy-actor check. Chapter/Scene `delegate_if_valid` remains explicitly
+  overridable back to human, and the profile identity survives the override. A
+  delegated level that carries a stored or revalidated blocking finding, an
+  unresolved author question, a stale policy snapshot or projection, an
+  unaccepted upstream root or an over-cap advisory count is refused for the
+  policy actor and stays staged for a human; one shared refusal helper drives
+  both the apply checks and `planning_status`'s existing `next_action`, so the
+  human-review reason cannot drift. All-human sessions keep their previous
+  `next_action`/`message` wording. Canon-delta and plan-amendment ratification
+  are unchanged: both still require a human operator and reject `policy:`
+  actors (ADR 0001 / 0003 / 0004).
+- Add **versioned `_v2` planning prompts** for McKee sessions:
+  `planning_contract_v2`, `planning_seed_v2`, `planning_series_arc_v2`,
+  `outline_book_v2`, `outline_chapters_v2`, `outline_manifest_v2` and
+  `planning_repair_v2`. The prompt version is **pinned per session at creation**
+  (`PlanningSession.prompt_version`: `2` for a McKee context, `1` for an
+  attached non-McKee project; legacy rows without the field keep `_v1`
+  byte-identically), so selection never re-derives from the current scope and a
+  session cannot flip version on attach or advance. McKee sessions resolve the
+  `_v2` family at every level (including the single repair pass) and record the
+  resolved ID and prompt hash in the existing generation receipt; model-call
+  usage attribution records the matching `v1`/`v2` label instead of a
+  hard-coded version, and the v1 system prompts are pinned by hash in tests. The
+  v2 text is the same hard-rules block plus a clearly headed, host-neutral McKee
+  guidance block per level, restricted to operations each level can actually
+  stage (Story Spine; Character Designs; Acts/Subplots/long-range promises; book
+  outline and Acts, with promises at Series-Arc and a sub-spine at Contract;
+  Sequences/value-chain plans; value plans/structured Beats/Key Facts). The
+  artifact schema is unchanged. There is no new tool, table or migration: the
+  profile lives in the existing session policy JSON and prompt selection in the
+  existing receipts.
+
 - Add McKee **Subplot structural checks** over planned Sequences and
   Convergence Points. A Subplot Sequence whose climax lands after every one of
   that Subplot's Convergence Points is a stage-recordable Blocking finding
