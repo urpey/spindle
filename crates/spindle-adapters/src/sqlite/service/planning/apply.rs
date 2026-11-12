@@ -17,6 +17,232 @@ fn references(receipts: &[PlanningOperationReceipt]) -> BTreeMap<String, String>
     }
     out
 }
+
+/// Why the delegated gate policy cannot accept a staged proposal.
+///
+/// This is the single refusal vocabulary shared by the apply-time policy-actor
+/// checks and `planning_status`'s human-review next action, so the predicates
+/// that refuse a `policy:` actor and the reason shown to the author cannot
+/// drift apart. Each cause mirrors one apply-time check, including the
+/// revalidated findings and the advisory cap computed from the larger of the
+/// stored and revalidated counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PolicyRefusal {
+    /// No project is attached yet, so no policy actor may decide.
+    UnattachedScope,
+    /// The planning projection is stale and reconciliation comes first.
+    StaleProjection,
+    /// An upstream root proposal is still waiting for a human decision.
+    UnacceptedRoots,
+    /// A root level is always a human decision.
+    RootLevel,
+    /// The level's gate is not `delegate_if_valid` in the live policy.
+    GateNotDelegated,
+    /// The requested actor is not the live policy's audited actor.
+    ActorMismatch {
+        requested: String,
+        active: Option<String>,
+    },
+    /// The proposal was staged under a different policy snapshot.
+    StalePolicySnapshot,
+    /// The proposal carries a blocking finding, stored or revalidated.
+    BlockingFinding {
+        code: String,
+        path: String,
+        described: String,
+    },
+    /// The proposal carries an unresolved author question.
+    UnresolvedAuthorQuestion { id: String },
+    /// Advisory findings exceed the policy's explicit cap.
+    AdvisoryCap { count: usize, max: usize },
+}
+
+impl PolicyRefusal {
+    /// Wording for an apply-time error. These are the messages the policy
+    /// actor's refusal has always produced.
+    pub(crate) fn for_apply(&self) -> String {
+        match self {
+            Self::UnattachedScope => {
+                "human decision actor required before project root attachment".to_string()
+            }
+            Self::StaleProjection => {
+                "human decision actor required while planning projection is stale".to_string()
+            }
+            Self::UnacceptedRoots => {
+                "human decision actor required while upstream root proposals remain unaccepted"
+                    .to_string()
+            }
+            Self::RootLevel => "human decision actor required for root planning levels".to_string(),
+            Self::GateNotDelegated => {
+                "human decision actor required when delegate_if_valid is not active".to_string()
+            }
+            Self::ActorMismatch { requested, active } => format!(
+                "policy actor '{}' does not match active session policy ({active:?})",
+                requested.trim()
+            ),
+            Self::StalePolicySnapshot => {
+                "delegated policy cannot accept proposal with stale policy_snapshot".to_string()
+            }
+            Self::BlockingFinding { described, .. } => format!(
+                "cannot accept planning proposal with blocking validation findings: {described}"
+            ),
+            Self::UnresolvedAuthorQuestion { .. } => {
+                "delegated policy cannot accept proposal with unresolved author_questions"
+                    .to_string()
+            }
+            Self::AdvisoryCap { .. } => {
+                "delegated policy cannot accept proposal exceeding max_advisory_findings"
+                    .to_string()
+            }
+        }
+    }
+
+    /// Wording for `planning_status`'s human-review next action.
+    pub(crate) fn for_status(&self) -> String {
+        match self {
+            Self::UnattachedScope => "the project root is not attached yet".to_string(),
+            Self::StaleProjection => "the planning projection is stale".to_string(),
+            Self::UnacceptedRoots => {
+                "upstream root proposals are still waiting for a human decision".to_string()
+            }
+            Self::RootLevel => "a root level always needs a human decision".to_string(),
+            Self::GateNotDelegated => "the level's delegated gate is no longer active".to_string(),
+            Self::ActorMismatch { active, .. } => {
+                format!("the session policy actor is {active:?}")
+            }
+            Self::StalePolicySnapshot => {
+                "the gate policy changed after this proposal was staged".to_string()
+            }
+            Self::BlockingFinding { code, path, .. } => {
+                format!("blocking finding '{code}' at {path}")
+            }
+            Self::UnresolvedAuthorQuestion { id } => {
+                format!("unresolved author question '{id}'")
+            }
+            Self::AdvisoryCap { count, max } => {
+                format!("{count} advisory findings exceed the policy cap of {max}")
+            }
+        }
+    }
+}
+
+impl SqliteSpindleService {
+    /// The findings acceptance would evaluate right now: a staged proposal is
+    /// revalidated, a decided one keeps its stored findings. Apply uses this
+    /// same rule before its policy-actor checks.
+    pub(crate) async fn planning_current_findings(
+        &self,
+        session: &PlanningSession,
+        proposal: &PlanningProposal,
+    ) -> Result<Vec<PlanningFinding>> {
+        if proposal.status == PlanningProposalStatus::Staged {
+            self.repository
+                .revalidate_staged_planning_proposal(&session.id, &proposal.id)
+                .await
+        } else {
+            Ok(proposal.findings.clone())
+        }
+    }
+
+    /// Every reason the live delegated policy refuses `actor` for `proposal`.
+    ///
+    /// An empty list means the policy actor may accept the proposal. The apply
+    /// path turns a non-empty list into its refusal error; the status path
+    /// renders the same causes as the human-review reason. A cause is included
+    /// only when its apply-time check exists, so the status text never reports
+    /// a condition acceptance does not actually enforce.
+    pub(crate) async fn policy_actor_refusals(
+        &self,
+        session: &PlanningSession,
+        proposals: &[PlanningProposal],
+        proposal: &PlanningProposal,
+        actor: &str,
+    ) -> Result<Vec<PolicyRefusal>> {
+        let current_findings = self.planning_current_findings(session, proposal).await?;
+        let mut refusals = Vec::new();
+        if session.scope.is_none() {
+            refusals.push(PolicyRefusal::UnattachedScope);
+        }
+        if session.projection_stale {
+            refusals.push(PolicyRefusal::StaleProjection);
+        }
+        if proposals
+            .iter()
+            .any(|p| p.status == PlanningProposalStatus::Staged && p.artifact.level.is_root())
+        {
+            refusals.push(PolicyRefusal::UnacceptedRoots);
+        }
+        if proposal.artifact.level.is_root() {
+            refusals.push(PolicyRefusal::RootLevel);
+        }
+        let effective_gate = session
+            .policy
+            .gates
+            .get(&proposal.artifact.level)
+            .copied()
+            .unwrap_or_default();
+        if effective_gate != PlanningGate::DelegateIfValid {
+            refusals.push(PolicyRefusal::GateNotDelegated);
+        }
+        let active_actor = session.policy.delegated_actor();
+        if active_actor.as_deref() != Some(actor.trim()) {
+            refusals.push(PolicyRefusal::ActorMismatch {
+                requested: actor.trim().to_string(),
+                active: active_actor,
+            });
+        }
+        if proposal.policy_snapshot != session.policy {
+            refusals.push(PolicyRefusal::StalePolicySnapshot);
+        }
+        let blocking: Vec<&PlanningFinding> = proposal
+            .findings
+            .iter()
+            .chain(current_findings.iter())
+            .filter(|finding| finding.severity == PlanningFindingSeverity::Blocking)
+            .collect();
+        if let Some(finding) = blocking.first() {
+            let described = blocking
+                .iter()
+                .map(|finding| crate::sqlite::repository::describe_blocking_finding(finding))
+                .fold(Vec::new(), |mut described: Vec<String>, text| {
+                    if !described.contains(&text) {
+                        described.push(text);
+                    }
+                    described
+                })
+                .join("; ");
+            refusals.push(PolicyRefusal::BlockingFinding {
+                code: finding.code.clone(),
+                path: finding.path.clone(),
+                described,
+            });
+        }
+        if let Some(question) = proposal.artifact.author_questions.first() {
+            refusals.push(PolicyRefusal::UnresolvedAuthorQuestion {
+                id: question.id.clone(),
+            });
+        }
+        let stored_advisories = proposal
+            .findings
+            .iter()
+            .filter(|finding| finding.severity == PlanningFindingSeverity::Advisory)
+            .count();
+        let current_advisories = current_findings
+            .iter()
+            .filter(|finding| finding.severity == PlanningFindingSeverity::Advisory)
+            .count();
+        let advisory_count = stored_advisories.max(current_advisories);
+        if let Some(max) = session.policy.max_advisory_findings
+            && advisory_count > max
+        {
+            refusals.push(PolicyRefusal::AdvisoryCap {
+                count: advisory_count,
+                max,
+            });
+        }
+        Ok(refusals)
+    }
+}
 impl SqliteSpindleService {
     pub async fn planning_apply_status(
         &self,
@@ -86,11 +312,11 @@ impl SqliteSpindleService {
         );
         let s = self.get_planning_session(&input.session_id).await?;
         anyhow::ensure!(s.scope == input.scope, "planning scope mismatch");
-        // A session created in a McKee context carries the McKee profile. The
+        // A session may explicitly activate the McKee profile, and the
         // planning CreateProject apply path is the only writer of the marker,
         // so an unattached session can only ever attach to a McKee project;
         // this guard makes that invariant explicit instead of trusting it.
-        if s.policy.is_mckee_default()
+        if s.policy.has_mckee_policy_id()
             && let Some(scope) = &s.scope
         {
             anyhow::ensure!(
@@ -100,30 +326,6 @@ impl SqliteSpindleService {
         }
         let all = self.list_planning_proposals(&s.id, s.scope.clone()).await?;
         let is_policy_actor = input.actor.trim_start().starts_with("policy:");
-        if is_policy_actor {
-            anyhow::ensure!(
-                s.scope.is_some(),
-                "human decision actor required before project root attachment"
-            );
-            anyhow::ensure!(
-                !s.projection_stale,
-                "human decision actor required while planning projection is stale"
-            );
-            let unaccepted_root = all.iter().any(|p| {
-                p.status == PlanningProposalStatus::Staged
-                    && matches!(
-                        p.artifact.level,
-                        PlanningLevel::Contract
-                            | PlanningLevel::CastWorld
-                            | PlanningLevel::SeriesArc
-                            | PlanningLevel::Book
-                    )
-            });
-            anyhow::ensure!(
-                !unaccepted_root,
-                "human decision actor required while upstream root proposals remain unaccepted"
-            );
-        }
         let mut pending = Vec::new();
         for (id, expected) in &input.expected_hashes {
             let p = all
@@ -145,13 +347,7 @@ impl SqliteSpindleService {
                 p.artifact.intent_hash == s.intent_hash,
                 "stale planning intent"
             );
-            let current_findings = if p.status == PlanningProposalStatus::Staged {
-                self.repository
-                    .revalidate_staged_planning_proposal(&s.id, &p.id)
-                    .await?
-            } else {
-                p.findings.clone()
-            };
+            let current_findings = self.planning_current_findings(&s, p).await?;
             let blocking: Vec<&PlanningFinding> = p
                 .findings
                 .iter()
@@ -181,56 +377,23 @@ impl SqliteSpindleService {
                 .copied()
                 .unwrap_or_default();
             if is_policy_actor {
+                // One shared refusal vocabulary, so the status next-action
+                // explains exactly the checks enforced here.
+                let refusals = self
+                    .policy_actor_refusals(&s, &all, p, input.actor.as_str())
+                    .await?;
                 anyhow::ensure!(
-                    matches!(
-                        p.artifact.level,
-                        PlanningLevel::Chapter | PlanningLevel::Scene
-                    ),
-                    "human decision actor required for root planning levels"
-                );
-                anyhow::ensure!(
-                    effective_gate == PlanningGate::DelegateIfValid,
-                    "human decision actor required when delegate_if_valid is not active"
-                );
-                anyhow::ensure!(
-                    s.policy.delegated_actor().as_deref() == Some(input.actor.trim()),
-                    "policy actor '{}' does not match active session policy ({:?})",
-                    input.actor,
-                    s.policy.delegated_actor()
-                );
-                anyhow::ensure!(
-                    p.policy_snapshot == s.policy,
-                    "delegated policy cannot accept proposal with stale policy_snapshot"
-                );
-                anyhow::ensure!(
-                    p.artifact.author_questions.is_empty(),
-                    "delegated policy cannot accept proposal with unresolved author_questions"
-                );
-                let stored_adv_count = p
-                    .findings
-                    .iter()
-                    .filter(|f| f.severity == PlanningFindingSeverity::Advisory)
-                    .count();
-                let current_adv_count = current_findings
-                    .iter()
-                    .filter(|f| f.severity == PlanningFindingSeverity::Advisory)
-                    .count();
-                let adv_count = stored_adv_count.max(current_adv_count);
-                anyhow::ensure!(
-                    s.policy
-                        .max_advisory_findings
-                        .is_none_or(|max_adv| adv_count <= max_adv),
-                    "delegated policy cannot accept proposal exceeding max_advisory_findings"
+                    refusals.is_empty(),
+                    "{}",
+                    refusals
+                        .iter()
+                        .map(PolicyRefusal::for_apply)
+                        .collect::<Vec<_>>()
+                        .join("; ")
                 );
             } else {
                 anyhow::ensure!(
-                    !matches!(
-                        p.artifact.level,
-                        PlanningLevel::Contract
-                            | PlanningLevel::CastWorld
-                            | PlanningLevel::SeriesArc
-                            | PlanningLevel::Book
-                    ) || effective_gate != PlanningGate::DelegateIfValid,
+                    !p.artifact.level.is_root() || effective_gate != PlanningGate::DelegateIfValid,
                     "root planning levels cannot use delegate_if_valid"
                 );
             }

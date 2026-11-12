@@ -54,8 +54,10 @@ impl PlanningLevel {
         }
     }
 
-    /// The v1 prompt for this level. Non-McKee sessions keep this version
-    /// byte-identically; a McKee session selects [`Self::prompt_id_for`].
+    /// The original (v1) prompt for this level.
+    ///
+    /// A session that pins version 1 keeps this prompt byte-identically; a
+    /// session that pins version 2 selects [`Self::prompt_id_for_version`].
     pub const fn prompt_id(self) -> PlanningPromptId {
         match self {
             Self::Contract => PlanningPromptId::PlanningContractV1,
@@ -67,13 +69,14 @@ impl PlanningLevel {
         }
     }
 
-    /// The prompt version for this level in the session's context.
+    /// The prompt for this level at a pinned session prompt version.
     ///
-    /// A McKee-structured session (a session that will create a McKee project,
-    /// or one attached to a project carrying the McKee marker) resolves the
-    /// `_v2` prompt for every level. Every other session keeps `_v1`.
-    pub const fn prompt_id_for(self, mckee_structured: bool) -> PlanningPromptId {
-        match (mckee_structured, self) {
+    /// Version 2 is the McKee guidance family; every other version (including
+    /// the legacy default 1) is the original family. The version is pinned once
+    /// on the session at creation, so a later advance never re-derives it from
+    /// a scope that changed in between.
+    pub const fn prompt_id_for_version(self, prompt_version: u32) -> PlanningPromptId {
+        match (prompt_version >= 2, self) {
             (true, Self::Contract) => PlanningPromptId::PlanningContractV2,
             (true, Self::CastWorld) => PlanningPromptId::PlanningSeedV2,
             (true, Self::SeriesArc) => PlanningPromptId::PlanningSeriesArcV2,
@@ -82,6 +85,17 @@ impl PlanningLevel {
             (true, Self::Scene) => PlanningPromptId::OutlineManifestV2,
             (false, level) => level.prompt_id(),
         }
+    }
+
+    /// Whether this level is a root level.
+    ///
+    /// Root levels (Contract, CastWorld, SeriesArc, Book) always require a human
+    /// decision and can never be delegated, at any policy version.
+    pub const fn is_root(self) -> bool {
+        matches!(
+            self,
+            Self::Contract | Self::CastWorld | Self::SeriesArc | Self::Book
+        )
     }
 }
 
@@ -159,6 +173,11 @@ impl PlanningPromptId {
         } else {
             Self::PlanningRepairV1
         }
+    }
+
+    /// The version label recorded in model-call usage attribution (`v1`/`v2`).
+    pub const fn version_label(self) -> &'static str {
+        if self.is_mckee_v2() { "v2" } else { "v1" }
     }
 }
 
@@ -746,14 +765,14 @@ impl PlanningPolicy {
     /// The McKee gate profile: human at Contract, CastWorld, SeriesArc and Book;
     /// `delegate_if_valid` at Chapter and Scene.
     ///
-    /// This is the default policy for a McKee context only (an unattached
-    /// new-book session, or a session attached to a project carrying the McKee
-    /// marker). It carries the stable identity [`MCKEE_POLICY_ID`] /
-    /// [`MCKEE_POLICY_VERSION`], so a policy-actor acceptance is recorded as
-    /// `policy:mckee-default:1`. No advisory cap applies: a delegated level is
-    /// accepted when hard checks pass and no blocking finding or unresolved
-    /// author question remains, and the apply-time gate still refuses anything
-    /// else.
+    /// The profile is **never** applied automatically: every session starts
+    /// all-human (ADR 0004), and an author activates this profile with an
+    /// explicit `planning_advance(action = set_policy)` override. It carries
+    /// the stable identity [`MCKEE_POLICY_ID`] / [`MCKEE_POLICY_VERSION`], so a
+    /// policy-actor acceptance is recorded as `policy:mckee-default:1`. No
+    /// advisory cap applies: a delegated level is accepted when hard checks
+    /// pass and no blocking finding or unresolved author question remains, and
+    /// the apply-time gate still refuses anything else.
     pub fn mckee_default() -> Self {
         Self {
             gates: BTreeMap::from([
@@ -772,13 +791,26 @@ impl PlanningPolicy {
         }
     }
 
-    /// Whether this policy carries the McKee profile identity (id and version).
+    /// Whether this policy carries the exact McKee profile identity (id and
+    /// version).
     ///
     /// Gate overrides do not change the identity: an author may return Chapter
     /// or Scene to `human` and the session is still a McKee-profile session.
+    /// Use [`Self::has_mckee_policy_id`] for the reserved-identity check, which
+    /// covers every version of the profile.
     pub fn is_mckee_default(&self) -> bool {
         self.policy_id.as_deref() == Some(MCKEE_POLICY_ID)
             && self.policy_version == Some(MCKEE_POLICY_VERSION)
+    }
+
+    /// Whether this policy claims the reserved `mckee-default` identity at any
+    /// version.
+    ///
+    /// The identity is reserved for McKee contexts for every version, not only
+    /// the shipped `mckee-default:1` tuple, so a non-McKee session can never
+    /// borrow the audited `policy:mckee-default:<version>` actor.
+    pub fn has_mckee_policy_id(&self) -> bool {
+        self.policy_id.as_deref() == Some(MCKEE_POLICY_ID)
     }
 
     pub fn delegated_actor(&self) -> Option<String> {
@@ -824,6 +856,15 @@ pub struct PlanningSession {
     pub intent_hash: String,
     pub scope: Option<PlanningScope>,
     pub policy: PlanningPolicy,
+    /// Prompt version pinned when the session was created: 2 for a McKee
+    /// context (an unattached new-book session or an attached project carrying
+    /// the McKee marker), 1 for an attached non-McKee project.
+    ///
+    /// Sessions created before this field existed have `None` and resolve
+    /// version 1 byte-identically. The stored value is never re-derived, so a
+    /// session does not flip prompt versions when it attaches or advances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_version: Option<u32>,
     #[serde(default, skip_serializing_if = "PlanningTargetRange::is_default")]
     pub horizon: PlanningTargetRange,
     #[serde(default, skip_serializing_if = "PlanningBudget::is_default")]
@@ -841,6 +882,13 @@ pub struct PlanningSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_outcome: Option<PlanningSessionOutcome>,
     pub created_at: i64,
+}
+
+impl PlanningSession {
+    /// The prompt version pinned at creation; legacy sessions resolve version 1.
+    pub fn prompt_version_or_v1(&self) -> u32 {
+        self.prompt_version.unwrap_or(1)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -2316,7 +2364,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_versions_resolve_by_session_context_and_repair_pairs() {
+    fn prompt_versions_resolve_by_pinned_version_and_repair_pairs() {
         let v1 = [
             PlanningPromptId::PlanningContractV1,
             PlanningPromptId::PlanningSeedV1,
@@ -2335,14 +2383,32 @@ mod tests {
         ];
         for (level, (old, new)) in PlanningLevel::all().into_iter().zip(v1.into_iter().zip(v2)) {
             assert_eq!(level.prompt_id(), old);
-            assert_eq!(level.prompt_id_for(false), old);
-            assert_eq!(level.prompt_id_for(true), new);
+            assert_eq!(level.prompt_id_for_version(0), old);
+            assert_eq!(level.prompt_id_for_version(1), old);
+            assert_eq!(level.prompt_id_for_version(2), new);
+            assert_eq!(level.prompt_id_for_version(3), new);
             assert!(!old.is_mckee_v2());
             assert!(new.is_mckee_v2());
+            assert_eq!(old.version_label(), "v1");
+            assert_eq!(new.version_label(), "v2");
             assert_eq!(old.repair_prompt_id(), PlanningPromptId::PlanningRepairV1);
             assert_eq!(new.repair_prompt_id(), PlanningPromptId::PlanningRepairV2);
+            assert_eq!(PlanningPromptId::PlanningRepairV1.version_label(), "v1");
+            assert_eq!(PlanningPromptId::PlanningRepairV2.version_label(), "v2");
             assert!(!PlanningPromptId::PlanningRepairV1.is_mckee_v2());
             assert!(PlanningPromptId::PlanningRepairV2.is_mckee_v2());
+        }
+        // Root levels are exactly the always-human levels.
+        for level in [PlanningLevel::Chapter, PlanningLevel::Scene] {
+            assert!(!level.is_root(), "{level:?}");
+        }
+        for level in [
+            PlanningLevel::Contract,
+            PlanningLevel::CastWorld,
+            PlanningLevel::SeriesArc,
+            PlanningLevel::Book,
+        ] {
+            assert!(level.is_root(), "{level:?}");
         }
         // Wire names are stable JSON-safe strings in both directions.
         for id in [
@@ -2370,10 +2436,47 @@ mod tests {
         );
     }
 
+    /// The pinned session version is the only input to prompt selection, and a
+    /// session without one (created before the field existed) resolves v1.
+    #[test]
+    fn session_prompt_version_is_pinned_and_legacy_sessions_resolve_v1() {
+        let mut session: PlanningSession = serde_json::from_value(json!({
+            "id": "planning_session:legacy",
+            "premise": "A legacy session",
+            "intent_hash": "hash",
+            "scope": null,
+            "policy": {},
+            "created_at": 1
+        }))
+        .unwrap();
+        assert_eq!(session.prompt_version, None);
+        assert_eq!(session.prompt_version_or_v1(), 1);
+        for level in PlanningLevel::all() {
+            assert_eq!(
+                level.prompt_id_for_version(session.prompt_version_or_v1()),
+                level.prompt_id()
+            );
+        }
+        session.prompt_version = Some(2);
+        assert_eq!(session.prompt_version_or_v1(), 2);
+        for level in PlanningLevel::all() {
+            assert!(
+                level
+                    .prompt_id_for_version(session.prompt_version_or_v1())
+                    .is_mckee_v2()
+            );
+        }
+        // `None` is skipped on the wire so legacy JSON stays byte-identical.
+        session.prompt_version = None;
+        let wire = serde_json::to_value(&session).unwrap();
+        assert!(wire.get("prompt_version").is_none(), "{wire}");
+    }
+
     #[test]
     fn mckee_default_policy_keeps_roots_human_and_delegates_detail() {
         let policy = PlanningPolicy::mckee_default();
         assert!(policy.is_mckee_default());
+        assert!(policy.has_mckee_policy_id());
         assert_eq!(
             policy.delegated_actor().as_deref(),
             Some("policy:mckee-default:1")
@@ -2396,16 +2499,26 @@ mod tests {
             );
         }
         assert_eq!(policy.max_advisory_findings, None);
-        // The all-human default is a different policy with no delegated actor.
+        // The all-human default is a different policy with no delegated actor:
+        // the profile is never applied automatically.
         assert!(PlanningPolicy::default().gates.is_empty());
         assert_eq!(PlanningPolicy::default().delegated_actor(), None);
         assert!(!PlanningPolicy::default().is_mckee_default());
+        assert!(!PlanningPolicy::default().has_mckee_policy_id());
         // Identity survives an author override back to human detail gates.
         let overridden = PlanningPolicy {
             gates: PlanningGatePolicy::default().to_gates(),
             ..policy.clone()
         };
         assert!(overridden.is_mckee_default());
+        assert!(overridden.has_mckee_policy_id());
+        // The reserved identity covers every version, not only the v1 tuple.
+        let other_version = PlanningPolicy {
+            policy_version: Some(9),
+            ..policy.clone()
+        };
+        assert!(!other_version.is_mckee_default());
+        assert!(other_version.has_mckee_policy_id());
     }
 
     #[test]

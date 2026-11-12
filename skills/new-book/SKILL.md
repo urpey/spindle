@@ -29,7 +29,7 @@ Record unknowns as assumptions. Do not invent canon to fill a missing answer.
 
 Call `planning_begin` with the premise, the agreed horizon, the content-rating ceiling, and the budget when the author set one. For a new book in an existing series, pass `project_id` (and `branch_id` when the author chose a non-default branch) so the session binds to that canon.
 
-Every level is human-gated by default. Only pass a gate policy when the author explicitly asks to delegate Chapter or Scene detail. Contract, CastWorld, SeriesArc, and Book always stay human-approved, and in-run amendments always stay human-ratified.
+Every session starts with human gates at every level. Do not pass a gate policy here unless the author explicitly asks to delegate Chapter or Scene detail. Contract, CastWorld, SeriesArc, and Book always stay human-approved, and in-run amendments always stay human-ratified.
 
 The next action in the result names the safe next step. Follow it.
 
@@ -42,21 +42,58 @@ The next action in the result names the safe next step. Follow it.
 
 Never treat model output, passing checks, or silence as approval.
 
-## Step 4: Arc, Book, and Chapter Gate
+## Step 4: Arc and Book Gate, then the Optional McKee Profile
 
-Continue the same staged, review, decide loop for SeriesArc, Book, and Chapter:
+Continue the same staged, review, decide loop for SeriesArc and Book. Both are root levels and always need an explicit author decision:
 
-- Show the central question, arc exit condition, promise setup and payoff schedule, POV plan, and chapter turns.
+- Show the central question, arc exit condition, promise setup and payoff schedule, POV plan, and the book turns.
 - Keep later books coarse. Detail only the agreed near horizon.
 - Surface author questions before asking for a decision.
-- Require an explicit author decision for each level. Record the author as the decision actor.
+- Record the author as the decision actor for each root.
 
 If a level returns a host generation request instead of a proposal, generate the artifact with the host model, then resubmit it through `planning_advance` with the host artifact action. The same validator and human gates apply to host output.
 
-## Step 5: Scene Packets and Handoff
+### The McKee gate profile is opt-in
 
-1. Advance the Scene level so every chapter in the horizon gets concrete scene packets: purpose, cast, location, rating, beats, and promise movements.
-2. Call `planning_status` and read the real readiness report. It distinguishes planner checks from the authoring prepare result.
+After every root level (Contract, CastWorld, SeriesArc, Book) is accepted and before you stage the Chapter batch, ask the author whether to activate the McKee gate profile. Explain the trade-off in plain terms:
+
+- Roots stay human: Contract, CastWorld, SeriesArc and Book always need an author decision.
+- Chapter and Scene batches are then accepted automatically by the audited policy actor `policy:mckee-default:1`, but only when the bundle is clean: no blocking finding and no unresolved author question. A flagged batch still comes back to the author with the reason.
+- Canon deltas and plan amendments are never auto-accepted, with or without the profile.
+
+Only on an explicit yes, call `planning_advance` with:
+
+```json
+{
+  "session_id": "<session>",
+  "action": "set_policy",
+  "policy": {
+    "gates": {
+      "contract": "human",
+      "cast_world": "human",
+      "series_arc": "human",
+      "book": "human",
+      "chapter": "delegate_if_valid",
+      "scene": "delegate_if_valid"
+    },
+    "policy_id": "mckee-default",
+    "policy_version": 1
+  },
+  "policy_actor": "author:<name>",
+  "policy_note": "Activate the McKee gate profile: roots human, Chapter and Scene delegate."
+}
+```
+
+Never activate it silently or from a vague answer, and never claim that every level is human-gated once it is active. If the author declines, keep the all-human default and continue level by level.
+
+## Step 5: Chapter and Scene Batches
+
+1. Advance the Chapter level. With the profile active, a clean batch is already applied by `policy:mckee-default:1`; report that audited acceptance and its operation receipts instead of asking the author to rubber-stamp it. Without the profile, stage it and require an explicit author decision as before.
+2. Advance the Scene level for every chapter in the horizon: purpose, cast, location, rating, beats, and promise movements.
+
+## Step 6: Scene Packets and Handoff
+
+1. Call `planning_status` and read the real readiness report. It distinguishes planner checks from the authoring prepare result.
 3. Call `planning_decide` with the prepare action to get the real prepare report for the exact range. Do not claim readiness from planner checks alone.
 4. When readiness passes, summarize accepted IDs, the chapter and scene packets, and any advisory warnings. Then load the drafting workflow: `scene-writer` for one scene, or `authoring-supervisor` for a supervised multi-chapter run. Starting prose remains a separate author instruction.
 5. If readiness fails, show the missing requirements and advance or repair the relevant level. `authoring_prepare_run` remains available for an independent low-level recheck.

@@ -9239,10 +9239,14 @@ async fn planning_advance_and_accept(
     let proposal = &advanced["advance"]["proposal"];
     assert_eq!(advanced["advance"]["outcome"], "staged", "{advanced}");
     assert_eq!(proposal["level"], level);
-    // A clean Chapter/Scene bundle on a McKee session is accepted by the
-    // delegated gate policy during the same advance call; roots (and
-    // explicitly human-gated levels) remain staged for the human decision.
+    // A clean Chapter/Scene bundle may be auto-applied when the author has
+    // explicitly activated a delegated gate policy. Roots must never auto-apply
+    // and always continue through the human decision below.
     if proposal["status"] == "applied" {
+        assert!(
+            level == "chapter" || level == "scene",
+            "a root planning level must never auto-apply: {advanced}"
+        );
         assert_eq!(
             proposal["decided_by"], "policy:mckee-default:1",
             "{advanced}"
@@ -9250,6 +9254,12 @@ async fn planning_advance_and_accept(
         return advanced;
     }
     assert_eq!(proposal["status"], "staged", "{advanced}");
+    if level == "chapter" || level == "scene" {
+        assert!(
+            proposal["decided_by"].is_null(),
+            "a staged detail bundle has no policy decision yet: {advanced}"
+        );
+    }
 
     let decided = planning_call(
         router,
@@ -9612,17 +9622,28 @@ async fn new_book_agent_entry_reaches_scene_one_one_ready_through_mcp_tools() {
     let session_id = begun["session"]["session_id"].as_str().unwrap().to_string();
     assert_eq!(begun["resumed"], false);
     assert_eq!(begun["session"]["next_level"], "contract");
-    // A new-book session resolves the McKee gate profile.
-    assert_eq!(begun["session"]["policy"]["policy_id"], "mckee-default");
-    assert_eq!(begun["session"]["policy"]["policy_version"], 1);
-    assert_eq!(begun["session"]["policy"]["gates"]["contract"], "human");
-    assert_eq!(
-        begun["session"]["policy"]["gates"]["chapter"],
-        "delegate_if_valid"
+    // Every session starts all-human (ADR 0004). A new-book session is a
+    // McKee *context*, but that pins its prompt version only; the gate profile
+    // is opt-in through an explicit author `planning_advance(action=set_policy)`.
+    assert!(
+        begun["session"]["policy"].get("policy_id").is_none(),
+        "{begun}"
+    );
+    assert!(
+        begun["session"]["policy"].get("policy_version").is_none(),
+        "{begun}"
     );
     assert_eq!(
-        begun["session"]["policy"]["gates"]["scene"],
-        "delegate_if_valid"
+        begun["session"]["policy"]["gates"],
+        serde_json::json!({
+            "contract": "human",
+            "cast_world": "human",
+            "series_arc": "human",
+            "book": "human",
+            "chapter": "human",
+            "scene": "human"
+        }),
+        "{begun}"
     );
     assert!(svc.list_projects().await.unwrap().projects.is_empty());
 
@@ -9954,10 +9975,10 @@ async fn new_book_agent_entry_reaches_scene_one_one_ready_through_mcp_tools() {
     );
 }
 
-/// #30: `planning_begin`/`planning_status` expose the McKee gate profile for a
-/// McKee session, and a non-McKee session's policy payload is unchanged.
+/// #30: every planning session starts all-human; the McKee gate profile is an
+/// explicit author activation through `planning_advance(action = set_policy)`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn planning_profile_is_exposed_for_mckee_sessions_and_unchanged_for_non_mckee() {
+async fn planning_profile_activation_is_explicit_for_mckee_sessions_and_unchanged_for_non_mckee() {
     use crate::tools::{ToolRouter, ToolSerializationState};
     use std::sync::Arc;
 
@@ -9978,14 +9999,14 @@ async fn planning_profile_is_exposed_for_mckee_sessions_and_unchanged_for_non_mc
     .await;
     let session_id = begun["session"]["session_id"].as_str().unwrap().to_string();
     let policy = &begun["session"]["policy"];
-    assert_eq!(policy["policy_id"], "mckee-default", "{begun}");
-    assert_eq!(policy["policy_version"], 1, "{begun}");
+    assert!(policy.get("policy_id").is_none(), "{begun}");
+    assert!(policy.get("policy_version").is_none(), "{begun}");
     assert_eq!(policy["gates"]["contract"], "human");
     assert_eq!(policy["gates"]["cast_world"], "human");
     assert_eq!(policy["gates"]["series_arc"], "human");
     assert_eq!(policy["gates"]["book"], "human");
-    assert_eq!(policy["gates"]["chapter"], "delegate_if_valid");
-    assert_eq!(policy["gates"]["scene"], "delegate_if_valid");
+    assert_eq!(policy["gates"]["chapter"], "human");
+    assert_eq!(policy["gates"]["scene"], "human");
 
     let status = planning_call(
         &router,
@@ -9996,7 +10017,42 @@ async fn planning_profile_is_exposed_for_mckee_sessions_and_unchanged_for_non_mc
     assert_eq!(status["gate"], "human", "{status}");
     assert_eq!(
         status["session"]["policy"], *policy,
-        "planning_status must expose the same profile planning_begin reported"
+        "planning_status must expose the same policy planning_begin reported"
+    );
+
+    // The explicit author activation is the only path to the profile.
+    let activated = planning_call(
+        &router,
+        "planning_advance",
+        serde_json::json!({
+            "session_id": session_id,
+            "action": "set_policy",
+            "policy": {
+                "gates": {
+                    "contract": "human",
+                    "cast_world": "human",
+                    "series_arc": "human",
+                    "book": "human",
+                    "chapter": "delegate_if_valid",
+                    "scene": "delegate_if_valid"
+                },
+                "policy_id": "mckee-default",
+                "policy_version": 1
+            },
+            "policy_actor": "author:test",
+            "policy_note": "Activate the McKee gate profile after the contract and cast gate."
+        }),
+    )
+    .await;
+    assert_eq!(activated["action"], "set_policy", "{activated}");
+    let activated_policy = &activated["session"]["policy"];
+    assert_eq!(activated_policy["policy_id"], "mckee-default");
+    assert_eq!(activated_policy["policy_version"], 1);
+    assert_eq!(activated_policy["gates"]["contract"], "human");
+    assert_eq!(activated_policy["gates"]["chapter"], "delegate_if_valid");
+    assert_eq!(
+        activated_policy["gates"]["scene"], "delegate_if_valid",
+        "{activated}"
     );
 
     // A directly created project carries no McKee marker: bound sessions keep

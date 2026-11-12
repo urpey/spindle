@@ -256,6 +256,7 @@ impl Repository {
             premise: input.premise,
             scope: input.scope,
             policy: PlanningPolicy::default(),
+            prompt_version: None,
             horizon: PlanningTargetRange::default(),
             budget: PlanningBudget::default(),
             usage: PlanningBudgetUsage::default(),
@@ -346,23 +347,23 @@ impl Repository {
                         s
                     };
                     // The McKee profile identity is reserved for McKee
-                    // contexts so a delegated decision's `policy:` actor
-                    // always describes the policy that actually applied. An
-                    // unattached new-book session is a McKee context; an
-                    // attached session follows its project's marker.
-                    if input.policy.is_mckee_default() {
-                        let mckee_context = match &s.scope {
-                            Some(scope) => project_is_mckee_in_conn(&tx, &scope.project_id)?,
-                            None => true,
-                        };
+                    // contexts at every version, so a delegated decision's
+                    // `policy:` actor can never describe a policy that was
+                    // applied outside its intended context.
+                    if input.policy.has_mckee_policy_id() {
                         anyhow::ensure!(
-                            mckee_context,
-                            "policy id '{MCKEE_POLICY_ID}' version {MCKEE_POLICY_VERSION} is reserved for McKee planning sessions; this session is attached to a project without the McKee marker"
+                            is_mckee_context_in_conn(&tx, &s.scope)?,
+                            "policy id '{MCKEE_POLICY_ID}' is reserved for McKee planning sessions; this session is attached to a project without the McKee marker"
                         );
                     }
                     if has_delegated {
+                        // Delegated detail can only be accepted once a project
+                        // exists; the apply-time guard refuses a policy actor
+                        // while unattached either way. The McKee profile may be
+                        // activated on an unattached new-book session so the
+                        // author can make the decision at the contract gate.
                         anyhow::ensure!(
-                            s.scope.is_some(),
+                            s.scope.is_some() || input.policy.is_mckee_default(),
                             "delegate_if_valid requires the planning session to be attached to an accepted project root"
                         );
                         let all = proposals(&tx, &s.id)?;
@@ -1213,25 +1214,39 @@ fn stage_in_transaction(
     Ok(p)
 }
 
+/// Whether a session's context is a McKee context at creation time.
+///
+/// An unattached session is the new-book flow: its accepted Contract creates a
+/// McKee project, so the eventual project is McKee. An attached session follows
+/// the bound project's marker. The result pins the session's prompt version and
+/// decides whether the reserved `mckee-default` policy identity is available;
+/// it never changes the session's gate policy, which always starts all-human.
+fn is_mckee_context_in_conn(
+    conn: &rusqlite::Connection,
+    scope: &Option<PlanningScope>,
+) -> Result<bool> {
+    match scope {
+        Some(scope) => Ok(project_is_mckee_in_conn(conn, &scope.project_id)?),
+        None => Ok(true),
+    }
+}
+
 fn begin_in_transaction(
     conn: &mut rusqlite::Connection,
     mut s: PlanningSession,
 ) -> Result<PlanningSession> {
     let tx = conn.transaction()?;
     check_scope(&tx, &s.scope)?;
-    // A planning session's default gate policy follows its creation context:
-    // an unattached session is the new-book flow and will create a McKee
-    // project, and an attached session follows the bound project's marker.
-    // A session never switches policy merely because it attaches later: the
-    // unattached profile already applies, and the planning CreateProject apply
-    // path is the only writer of the marker, so the eventual project is McKee.
-    let mckee_context = match &s.scope {
-        Some(scope) => project_is_mckee_in_conn(&tx, &scope.project_id)?,
-        None => true,
-    };
-    if mckee_context {
-        s.policy = PlanningPolicy::mckee_default();
-    }
+    // Every session starts all-human (ADR 0004: gates are delegated only by a
+    // separate explicit author decision). The creation context pins only the
+    // prompt version: a McKee context resolves the `_v2` family from the first
+    // level, and a non-McKee project pins `_v1`. The value is stored once and
+    // never re-derived, so an attach or a later advance cannot flip it.
+    s.prompt_version = Some(if is_mckee_context_in_conn(&tx, &s.scope)? {
+        2
+    } else {
+        1
+    });
     tx.execute("INSERT INTO planning_session(id,project_id,branch_id,data,created_at) VALUES(?1,?2,?3,?4,?5)",rusqlite::params![s.id,s.scope.as_ref().map(|x| &x.project_id),s.scope.as_ref().map(|x| &x.branch_id),serde_json::to_string(&s)?,s.created_at])?;
     tx.commit()?;
     Ok(s)
