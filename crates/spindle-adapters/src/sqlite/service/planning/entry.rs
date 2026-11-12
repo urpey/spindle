@@ -169,6 +169,82 @@ fn gate_for(session: &PlanningSession, level: PlanningLevel) -> PlanningGate {
     PlanningGatePolicy::from_gates(&session.policy.gates).gate_for(level)
 }
 
+/// Why a staged proposal under a delegated gate still needs the author.
+///
+/// The gate is a bounded permission, not a promise: the apply-time checks
+/// refuse a policy actor when the proposal has a blocking finding, unresolved
+/// author questions, a stale policy snapshot, an advisory count over the cap,
+/// or no attached project yet. Reporting that reason in the existing
+/// next-action field keeps the "delegated level returned to the human" state
+/// visible without inventing a new status field.
+fn delegated_human_review_reason(
+    session: &PlanningSession,
+    proposal: &PlanningProposal,
+) -> Option<String> {
+    if gate_for(session, proposal.artifact.level) != PlanningGate::DelegateIfValid {
+        return None;
+    }
+    let actor = session.policy.delegated_actor()?;
+    let mut reasons = Vec::new();
+    if session.scope.is_none() {
+        reasons.push("the project root is not attached yet".to_string());
+    }
+    if proposal.policy_snapshot != session.policy {
+        reasons.push("the gate policy changed after this proposal was staged".to_string());
+    }
+    if let Some(finding) = proposal
+        .findings
+        .iter()
+        .find(|finding| finding.severity == PlanningFindingSeverity::Blocking)
+    {
+        reasons.push(format!(
+            "blocking finding '{}' at {}",
+            finding.code, finding.path
+        ));
+    }
+    if let Some(question) = proposal.artifact.author_questions.first() {
+        reasons.push(format!("unresolved author question '{}'", question.id));
+    }
+    let advisory_count = proposal
+        .findings
+        .iter()
+        .filter(|finding| finding.severity == PlanningFindingSeverity::Advisory)
+        .count();
+    if let Some(max) = session.policy.max_advisory_findings
+        && advisory_count > max
+    {
+        reasons.push(format!(
+            "{advisory_count} advisory findings exceed the policy cap of {max}"
+        ));
+    }
+    if reasons.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "policy {actor} cannot accept it because {}",
+        reasons.join("; ")
+    ))
+}
+
+fn staged_review_action(session: &PlanningSession, proposal: &PlanningProposal) -> String {
+    if let Some(reason) = delegated_human_review_reason(session, proposal) {
+        return format!(
+            "The staged {} proposal needs a human decision: {reason}. Repair or replace it, then call planning_decide with its payload_hash as a human actor.",
+            proposal_level_name(proposal.artifact.level)
+        );
+    }
+    if !proposal.artifact.author_questions.is_empty() {
+        return format!(
+            "Answer the author questions on the staged {} proposal, supersede it, then call planning_advance to regenerate.",
+            proposal_level_name(proposal.artifact.level)
+        );
+    }
+    format!(
+        "Review the staged {} proposal with the author, then call planning_decide with its payload_hash.",
+        proposal_level_name(proposal.artifact.level)
+    )
+}
+
 /// The active gate belongs to a proposal awaiting a decision, not to the next
 /// unfilled level. Falling through to `next_level` would report Scene's gate
 /// while a human-gated Chapter proposal is still staged.
@@ -189,16 +265,7 @@ fn review_next_action(session: &PlanningSession, proposals: &[PlanningProposal])
         .iter()
         .find(|p| p.status == PlanningProposalStatus::Staged)
     {
-        if !staged.artifact.author_questions.is_empty() {
-            return format!(
-                "Answer the author questions on the staged {} proposal, supersede it, then call planning_advance to regenerate.",
-                proposal_level_name(staged.artifact.level)
-            );
-        }
-        return format!(
-            "Review the staged {} proposal with the author, then call planning_decide with its payload_hash.",
-            proposal_level_name(staged.artifact.level)
-        );
+        return staged_review_action(session, staged);
     }
     if session.scope.is_none() {
         return "Call planning_advance to stage the Contract proposal. It stays staged until a human decision.".to_string();
@@ -399,6 +466,8 @@ impl SqliteSpindleService {
             .any(|p| p.status == PlanningProposalStatus::Staged)
         {
             review_next_action(&session, &proposals)
+        } else if session.policy.is_mckee_default() {
+            "Call planning_advance to generate the first planning level. Root levels stay staged until a human decision; policy mckee-default:1 delegates Chapter and Scene acceptance only when no blocking finding or author question remains.".to_string()
         } else {
             "Call planning_advance to generate the first planning level. Every level stays staged until a human decision.".to_string()
         };
@@ -550,17 +619,14 @@ impl SqliteSpindleService {
                 retry_key: input.retry_key.clone(),
             })
             .await?;
+        let session = self.get_planning_session(&session.id).await?;
+        let proposals = self
+            .list_planning_proposals(&session.id, session.scope.clone())
+            .await?;
         let next_action = match report.outcome {
             PlanningSessionOutcome::Staged => match report.proposal.as_ref() {
                 Some(proposal) if proposal.status == PlanningProposalStatus::Staged => {
-                    if proposal.artifact.author_questions.is_empty() {
-                        format!(
-                            "Review the staged {} proposal with the author, then call planning_decide with its payload_hash.",
-                            proposal_level_name(proposal.artifact.level)
-                        )
-                    } else {
-                        "The proposal carries unresolved author questions. Resolve them, then stage a replacement proposal.".to_string()
-                    }
+                    staged_review_action(&session, proposal)
                 }
                 _ => "The proposal was accepted under the delegated gate. Continue with planning_advance or check planning_status.".to_string(),
             },
@@ -577,10 +643,6 @@ impl SqliteSpindleService {
                 "The planning budget is exhausted. Raise the session budget explicitly, then retry with a new retry_key.".to_string()
             }
         };
-        let session = self.get_planning_session(&session.id).await?;
-        let proposals = self
-            .list_planning_proposals(&session.id, session.scope.clone())
-            .await?;
         Ok(PlanningAdvanceOutput {
             session: session_summary(&session, &proposals),
             action: input.action,

@@ -72,21 +72,39 @@ struct PromptBundle {
     artifact_schema: serde_json::Value,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_level_prompt(
-    session: &PlanningSession,
-    level: PlanningLevel,
-    target_range: &PlanningTargetRange,
-    parents: &BTreeMap<String, String>,
-    proposals_in_session: &[PlanningProposal],
-    scope_digest: &[String],
-    budget: &PlanningBudget,
-    usage: &PlanningBudgetUsage,
-    mckee_structured: bool,
-) -> PromptBundle {
-    let prompt_id = level.prompt_id();
-    let (artifact_schema, schema_hash) = canonical_artifact_schema();
-    let system_prompt = format!(
+/// The versioned McKee guidance appended to the v1 hard-rules block.
+///
+/// The artifact schema and every hard rule above stay identical; only the
+/// structure the level must plan is added. The text names Spindle's own
+/// artifact fields and operations, so it stays host-neutral: a host model, a
+/// routed model and a fixture submission all receive the same instructions.
+const MCKEE_BLOCK_HEADING: &str = "McKee structure guidance (prompt version 2)";
+
+fn mckee_level_guidance(level: PlanningLevel) -> &'static str {
+    match level {
+        PlanningLevel::Contract => {
+            "Stage the Story Spine as contract intent: Central Question, Controlling Idea (a value plus its cause), Counter-Idea, Spine Axis and ending type (idealist, pessimist or ironic), with inciting-incident and final-climax placements. A series has one spine; a per-book sub-spine answers part of it and references the series spine. When the root artifact creates the project there is no project to attach a spine to yet: create the project only, and stage the spine in the first attached contract artifact. Themes stay secondary ideas; they never replace the spine."
+        }
+        PlanningLevel::CastWorld => {
+            "Stage a Character Design for every character this artifact introduces, using the design operation: 2–5 contradictions, the four layers of self (public, personal, private, hidden), conscious desire, unconscious desire, the pressure the character puts on the protagonist, and observable behaviour cues derived from the hidden layer and the unconscious desire. The hidden layer and the unconscious desire are secret canonical facts, not prose. Keep the cast and world minimal for the near horizon."
+        }
+        PlanningLevel::SeriesArc => {
+            "Stage the ordered Act list on the schedule: each Act names its climax scene placeholder, the Spine Axis Charge and depth it turns to, and the part of the Central Question it answers; mark only the final Act as answering the question, and never author Act breakpoints (they are derived). Stage exactly one Main Plot whose Value Axis equals the Spine Axis, and any Subplots with their own Value Axis, one structural job (contradict, resonate, set up, complicate) and Convergence Points. Place long-range Narrative Promises at this level with at least a target Act for their payoff."
+        }
+        PlanningLevel::Book => {
+            "Stage the book's Act list and coarse outline: the Acts this book covers with their climax placeholders and Spine Axis Charges, the book's sub-spine when the series spine needs one, and book-level Narrative Promises with a target Act. Keep Act breakpoints derived, not authored. The outline states the causal destination, not prose."
+        }
+        PlanningLevel::Chapter => {
+            "Group this horizon's planned Scenes into Sequences on the schedule: each Sequence belongs to exactly one plot line and ends on its strongest Scene, and Sequences may cross chapter boundaries. Every planned Scene needs a value-chain plan: one primary Value Axis plus up to two secondary axes, an opening and closing Charge per axis, opposition, a Gap (expected versus actual result), a Turning Beat, an Inaction Cost, risk 1–5, structured Beats (action, reaction, turn; tactic, said, wanted) and any Key Facts or promise placements this batch fixes. A Sequence or Act climax Scene also needs a dilemma naming the character contradiction it tests."
+        }
+        PlanningLevel::Scene => {
+            "Stage the detailed Scene manifests as value plans: each planned Scene carries its primary Value Axis, its opening and closing Charge, opposition, Gap, Turning Beat, scene question, Inaction Cost, risk, structured Beats with tactic/said/wanted, and the promise setups, reinforcements and payoffs placed in it. Bind each Key Fact to the planned Scene that must dramatise it. A Scene that turns no value, or reopens a value chain at a different Charge than the previous Scene closed, is a planning error rather than a style choice."
+        }
+    }
+}
+
+fn prompt_system_text(prompt_id: PlanningPromptId, level: PlanningLevel, mckee: bool) -> String {
+    let base = format!(
         "You are Spindle's initial-planning engine executing prompt template `{}`.\n\
          Hard system rules:\n\
          1. Preserve accepted intent and parent artifacts; never contradict ratified upstream decisions.\n\
@@ -101,6 +119,31 @@ fn build_level_prompt(
         prompt_id.as_str(),
         level
     );
+    if mckee {
+        format!(
+            "{base}\n\n{MCKEE_BLOCK_HEADING}:\n{}",
+            mckee_level_guidance(level)
+        )
+    } else {
+        base
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_level_prompt(
+    session: &PlanningSession,
+    level: PlanningLevel,
+    target_range: &PlanningTargetRange,
+    parents: &BTreeMap<String, String>,
+    proposals_in_session: &[PlanningProposal],
+    scope_digest: &[String],
+    budget: &PlanningBudget,
+    usage: &PlanningBudgetUsage,
+    mckee_structured: bool,
+) -> PromptBundle {
+    let prompt_id = level.prompt_id_for(mckee_structured);
+    let (artifact_schema, schema_hash) = canonical_artifact_schema();
+    let system_prompt = prompt_system_text(prompt_id, level, mckee_structured);
 
     let mut ancestor_ids: std::collections::BTreeSet<String> = parents.keys().cloned().collect();
     for p in proposals_in_session {
@@ -295,7 +338,7 @@ fn build_repair_prompt(
     prior_output: &str,
     findings: &[PlanningFinding],
 ) -> PromptBundle {
-    let prompt_id = PlanningPromptId::PlanningRepairV1;
+    let prompt_id = base.prompt_id.repair_prompt_id();
     let system_prompt = format!(
         "{}\n\nYou are now executing `{}` (bounded single repair attempt). Fix every JSON-pointer validation error listed below and emit ONLY the corrected `PlanningArtifactV1` JSON object.",
         base.system_prompt,
@@ -656,7 +699,8 @@ impl SqliteSpindleService {
                     {
                         let prop_id = prop.id.clone();
                         let prop_hash = prop.payload_hash.clone();
-                        if let Ok(apply_rep) = self
+                        let level_name = format!("{:?}", report.level).to_lowercase();
+                        match self
                             .apply_planning(DecidePlanningInput {
                                 session_id: report.session_id.clone(),
                                 scope: live_session.scope.clone(),
@@ -668,14 +712,33 @@ impl SqliteSpindleService {
                                 ),
                             })
                             .await
-                            && apply_rep.complete
-                            && apply_rep.error.is_none()
                         {
-                            report.proposal = apply_rep
-                                .proposals
-                                .into_iter()
-                                .find(|p| p.id == prop_id)
-                                .or(report.proposal);
+                            Ok(apply_rep) if apply_rep.complete && apply_rep.error.is_none() => {
+                                report.proposal = apply_rep
+                                    .proposals
+                                    .into_iter()
+                                    .find(|p| p.id == prop_id)
+                                    .or(report.proposal);
+                            }
+                            Ok(apply_rep) => {
+                                if let Some(updated) =
+                                    apply_rep.proposals.into_iter().find(|p| p.id == prop_id)
+                                {
+                                    report.proposal = Some(updated);
+                                }
+                                report.message = Some(format!(
+                                    "Delegated gate policy {delegated_actor} did not accept the {level_name} proposal ({}); it remains staged for a human decision.",
+                                    apply_rep
+                                        .error
+                                        .as_deref()
+                                        .unwrap_or("the apply batch did not complete")
+                                ));
+                            }
+                            Err(err) => {
+                                report.message = Some(format!(
+                                    "Delegated gate policy {delegated_actor} refused the staged {level_name} proposal: {err}. It remains staged for a human decision."
+                                ));
+                            }
                         }
                     }
                 }
@@ -740,14 +803,15 @@ impl SqliteSpindleService {
             .repository
             .describe_planning_scope_digest(session.scope.clone())
             .await?;
-        // The contract prompt may only advertise `create_story_spine` when the
-        // attached project is McKee-structured. Staging still rejects a spine on
-        // an unmarked project; this keeps the prompt honest as well.
-        let mckee_structured = match (&session.scope, level) {
-            (Some(scope), PlanningLevel::Contract) => {
-                self.repository.is_mckee_project(&scope.project_id).await?
-            }
-            _ => false,
+        // Resolve the session's McKee context once: an unattached session is
+        // the new-book flow (it will create a McKee project), and an attached
+        // session follows the bound project's marker. This drives both the
+        // versioned prompt (v2 for McKee, v1 otherwise) and the honest
+        // `allowed_operations` line; staging still rejects any operation the
+        // level does not allow.
+        let mckee_structured = match &session.scope {
+            Some(scope) => self.repository.is_mckee_project(&scope.project_id).await?,
+            None => true,
         };
         let base_prompt = build_level_prompt(
             &session,

@@ -908,7 +908,14 @@ generation across `plan` (`contract`, `cast_world`, `series_arc`) and `outline`
 (`book`, `chapter`, `scene`) routes using versioned prompt IDs
 (`planning_contract_v1`, `planning_seed_v1`, `planning_series_arc_v1`,
 `outline_book_v1`, `outline_chapters_v1`, `outline_manifest_v1`,
-`planning_repair_v1`). Built-in local stubs and `adapter_kind == "local"` are
+`planning_repair_v1`). McKee sessions resolve the parallel `_v2` family
+(`planning_contract_v2`, `planning_seed_v2`, `planning_series_arc_v2`,
+`outline_book_v2`, `outline_chapters_v2`, `outline_manifest_v2`,
+`planning_repair_v2`); the v1 family stays for existing and non-McKee sessions
+byte-identically, and the resolved ID plus prompt hash are recorded on the
+generation receipt. The v2 prompt is the same hard-rules block plus a headed,
+host-neutral McKee guidance block per level; the artifact schema is unchanged.
+Built-in local stubs and `adapter_kind == "local"` are
 rejected for creative planning; a real `review` agent is used only on explicit
 `allow_review_backend` opt-in. Call, token and optional external USD ceilings are
 checked before dispatch, with at most one repair attempt on validation failure.
@@ -963,6 +970,24 @@ defines the closed **Charge** type (sign plus four-step depth) used by later
 McKee structure work. See [GLOSSARY](../GLOSSARY.md),
 [ADR 0006](adr/0006-acts-and-sequences-are-outline-intent.md) and
 [ADR 0007](adr/0007-mckee-structure-swain-prose.md).
+
+Planning sessions created in a McKee context default to the **McKee gate
+profile** (`policy_id = "mckee-default"`, `policy_version = 1`): Contract,
+CastWorld, SeriesArc and Book stay `human`, Chapter and Scene are
+`delegate_if_valid`. An unattached session is the new-book flow and gets the
+profile; an attached session follows its project's marker, and a session never
+switches profile on attach. A policy-actor acceptance is audited as
+`policy:mckee-default:1` and requires the proposal's policy snapshot to match
+the live policy; roots are refused for a policy actor at apply time, and every
+explicit policy override rejects root-level `delegate_if_valid` before staging.
+A delegated level that carries a blocking finding or an unresolved author
+question is refused for the policy actor and stays staged; `planning_status`'s
+existing `next_action` names that human-review reason. Canon-delta and
+plan-amendment ratification are untouched: both still reject a `policy:` actor
+and remain human decisions (ADR 0001 / ADR 0003 / ADR 0004). There is no new
+table, migration or tool: the profile lives in the existing
+`planning_session.policy` JSON, and the versioned prompt selection lives in the
+existing generation receipt.
 
 Plot lines carry the same one-way vocabulary through `spindle_core::plot_line`:
 a Value Axis, a closed Subplot structural job, and the Main Plot flag

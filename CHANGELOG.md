@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- Add the **McKee gate profile** for planning sessions in a McKee context. A
+  session created for the `new-book` flow (unattached) or bound to a project
+  carrying the McKee marker now defaults to human gates at Contract, CastWorld,
+  SeriesArc and Book and `delegate_if_valid` at Chapter and Scene, under the
+  stable identity `policy_id = "mckee-default"`, `policy_version = 1`; a
+  delegated decision is audited as `policy:mckee-default:1` on the proposal and
+  its operation receipts. Root levels can never be delegated: every explicit
+  policy override (including `planning_begin`'s) rejects root-level
+  `delegate_if_valid` before staging, in addition to the apply-time policy-actor
+  check. Chapter/Scene `delegate_if_valid` remains explicitly overridable back
+  to human, and the profile identity survives the override. A delegated level
+  that carries any blocking finding or unresolved author question is refused
+  for the policy actor and stays staged for a human; `planning_status`'s
+  existing `next_action` now names that human-review state and its reason. A
+  session never switches profile on attach, a directly-created project keeps
+  today's all-human default, and the `mckee-default` identity is reserved for
+  McKee contexts. Canon-delta and plan-amendment ratification are unchanged:
+  both still require a human operator and reject `policy:` actors (ADR 0001 /
+  0003 / 0004).
+- Add **versioned `_v2` planning prompts** for McKee sessions:
+  `planning_contract_v2`, `planning_seed_v2`, `planning_series_arc_v2`,
+  `outline_book_v2`, `outline_chapters_v2`, `outline_manifest_v2` and
+  `planning_repair_v2`. McKee sessions resolve them at every level (including
+  the single repair pass) and record the resolved ID and prompt hash in the
+  existing generation receipt; existing and non-McKee sessions keep the `_v1`
+  prompts and hashes byte-identically. The v2 text is the same hard-rules block
+  plus a clearly headed, host-neutral McKee guidance block per level (Story
+  Spine, Character Designs, Acts/Subplots/long-range promises, book outline,
+  Sequences/value-chain plans, value plans/structured Beats/Key Facts). The
+  artifact schema is unchanged. There is no new tool, table or migration: the
+  profile lives in the existing session policy JSON and prompt selection in the
+  existing receipts.
+
 - Add McKee **Subplot structural checks** over planned Sequences and
   Convergence Points. A Subplot Sequence whose climax lands after every one of
   that Subplot's Convergence Points is a stage-recordable Blocking finding

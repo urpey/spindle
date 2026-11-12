@@ -9239,6 +9239,16 @@ async fn planning_advance_and_accept(
     let proposal = &advanced["advance"]["proposal"];
     assert_eq!(advanced["advance"]["outcome"], "staged", "{advanced}");
     assert_eq!(proposal["level"], level);
+    // A clean Chapter/Scene bundle on a McKee session is accepted by the
+    // delegated gate policy during the same advance call; roots (and
+    // explicitly human-gated levels) remain staged for the human decision.
+    if proposal["status"] == "applied" {
+        assert_eq!(
+            proposal["decided_by"], "policy:mckee-default:1",
+            "{advanced}"
+        );
+        return advanced;
+    }
     assert_eq!(proposal["status"], "staged", "{advanced}");
 
     let decided = planning_call(
@@ -9602,7 +9612,18 @@ async fn new_book_agent_entry_reaches_scene_one_one_ready_through_mcp_tools() {
     let session_id = begun["session"]["session_id"].as_str().unwrap().to_string();
     assert_eq!(begun["resumed"], false);
     assert_eq!(begun["session"]["next_level"], "contract");
-    assert_eq!(begun["session"]["policy"]["gates"]["chapter"], "human");
+    // A new-book session resolves the McKee gate profile.
+    assert_eq!(begun["session"]["policy"]["policy_id"], "mckee-default");
+    assert_eq!(begun["session"]["policy"]["policy_version"], 1);
+    assert_eq!(begun["session"]["policy"]["gates"]["contract"], "human");
+    assert_eq!(
+        begun["session"]["policy"]["gates"]["chapter"],
+        "delegate_if_valid"
+    );
+    assert_eq!(
+        begun["session"]["policy"]["gates"]["scene"],
+        "delegate_if_valid"
+    );
     assert!(svc.list_projects().await.unwrap().projects.is_empty());
 
     // Contract root: staged first, then explicitly accepted by a human actor.
@@ -9930,6 +9951,110 @@ async fn new_book_agent_entry_reaches_scene_one_one_ready_through_mcp_tools() {
         scenes.is_empty(),
         "planning must not save scene drafts; found {} prose scenes",
         scenes.len()
+    );
+}
+
+/// #30: `planning_begin`/`planning_status` expose the McKee gate profile for a
+/// McKee session, and a non-McKee session's policy payload is unchanged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn planning_profile_is_exposed_for_mckee_sessions_and_unchanged_for_non_mckee() {
+    use crate::tools::{ToolRouter, ToolSerializationState};
+    use std::sync::Arc;
+
+    let (_tmp, svc) = fresh_service().await;
+    let router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        Some("new-book".to_string()),
+        Arc::new(ToolSerializationState::default()),
+    );
+
+    let begun = planning_call(
+        &router,
+        "planning_begin",
+        serde_json::json!({
+            "premise": "A harbor archivist discovers the tide bell is a forged warning."
+        }),
+    )
+    .await;
+    let session_id = begun["session"]["session_id"].as_str().unwrap().to_string();
+    let policy = &begun["session"]["policy"];
+    assert_eq!(policy["policy_id"], "mckee-default", "{begun}");
+    assert_eq!(policy["policy_version"], 1, "{begun}");
+    assert_eq!(policy["gates"]["contract"], "human");
+    assert_eq!(policy["gates"]["cast_world"], "human");
+    assert_eq!(policy["gates"]["series_arc"], "human");
+    assert_eq!(policy["gates"]["book"], "human");
+    assert_eq!(policy["gates"]["chapter"], "delegate_if_valid");
+    assert_eq!(policy["gates"]["scene"], "delegate_if_valid");
+
+    let status = planning_call(
+        &router,
+        "planning_status",
+        serde_json::json!({"session_id": session_id, "include_readiness": false}),
+    )
+    .await;
+    assert_eq!(status["gate"], "human", "{status}");
+    assert_eq!(
+        status["session"]["policy"], *policy,
+        "planning_status must expose the same profile planning_begin reported"
+    );
+
+    // A directly created project carries no McKee marker: bound sessions keep
+    // today's all-human default and the policy payload has no policy identity.
+    let project = svc
+        .create_project(CreateProjectInput {
+            name: "Existing Project".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Unchanged behaviour".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    let begun_existing = planning_call(
+        &router,
+        "planning_begin",
+        serde_json::json!({
+            "premise": "Review the existing project's reader contract.",
+            "project_id": project.project_id,
+        }),
+    )
+    .await;
+    let existing_session = begun_existing["session"]["session_id"].as_str().unwrap();
+    let existing_policy = &begun_existing["session"]["policy"];
+    assert_eq!(
+        existing_policy["gates"],
+        serde_json::json!({
+            "contract": "human",
+            "cast_world": "human",
+            "series_arc": "human",
+            "book": "human",
+            "chapter": "human",
+            "scene": "human"
+        }),
+        "{begun_existing}"
+    );
+    assert!(
+        existing_policy.get("policy_id").is_none(),
+        "{begun_existing}"
+    );
+    assert!(
+        existing_policy.get("policy_version").is_none(),
+        "{begun_existing}"
+    );
+    let existing_status = planning_call(
+        &router,
+        "planning_status",
+        serde_json::json!({"session_id": existing_session, "include_readiness": false}),
+    )
+    .await;
+    assert_eq!(existing_status["gate"], "human", "{existing_status}");
+    assert_eq!(
+        existing_status["session"]["policy"], *existing_policy,
+        "{existing_status}"
     );
 }
 

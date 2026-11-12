@@ -54,6 +54,8 @@ impl PlanningLevel {
         }
     }
 
+    /// The v1 prompt for this level. Non-McKee sessions keep this version
+    /// byte-identically; a McKee session selects [`Self::prompt_id_for`].
     pub const fn prompt_id(self) -> PlanningPromptId {
         match self {
             Self::Contract => PlanningPromptId::PlanningContractV1,
@@ -62,6 +64,23 @@ impl PlanningLevel {
             Self::Book => PlanningPromptId::OutlineBookV1,
             Self::Chapter => PlanningPromptId::OutlineChaptersV1,
             Self::Scene => PlanningPromptId::OutlineManifestV1,
+        }
+    }
+
+    /// The prompt version for this level in the session's context.
+    ///
+    /// A McKee-structured session (a session that will create a McKee project,
+    /// or one attached to a project carrying the McKee marker) resolves the
+    /// `_v2` prompt for every level. Every other session keeps `_v1`.
+    pub const fn prompt_id_for(self, mckee_structured: bool) -> PlanningPromptId {
+        match (mckee_structured, self) {
+            (true, Self::Contract) => PlanningPromptId::PlanningContractV2,
+            (true, Self::CastWorld) => PlanningPromptId::PlanningSeedV2,
+            (true, Self::SeriesArc) => PlanningPromptId::PlanningSeriesArcV2,
+            (true, Self::Book) => PlanningPromptId::OutlineBookV2,
+            (true, Self::Chapter) => PlanningPromptId::OutlineChaptersV2,
+            (true, Self::Scene) => PlanningPromptId::OutlineManifestV2,
+            (false, level) => level.prompt_id(),
         }
     }
 }
@@ -83,6 +102,20 @@ pub enum PlanningPromptId {
     OutlineManifestV1,
     #[serde(rename = "planning_repair_v1")]
     PlanningRepairV1,
+    #[serde(rename = "planning_contract_v2")]
+    PlanningContractV2,
+    #[serde(rename = "planning_seed_v2")]
+    PlanningSeedV2,
+    #[serde(rename = "planning_series_arc_v2")]
+    PlanningSeriesArcV2,
+    #[serde(rename = "outline_book_v2")]
+    OutlineBookV2,
+    #[serde(rename = "outline_chapters_v2")]
+    OutlineChaptersV2,
+    #[serde(rename = "outline_manifest_v2")]
+    OutlineManifestV2,
+    #[serde(rename = "planning_repair_v2")]
+    PlanningRepairV2,
 }
 
 impl PlanningPromptId {
@@ -95,6 +128,36 @@ impl PlanningPromptId {
             Self::OutlineChaptersV1 => "outline_chapters_v1",
             Self::OutlineManifestV1 => "outline_manifest_v1",
             Self::PlanningRepairV1 => "planning_repair_v1",
+            Self::PlanningContractV2 => "planning_contract_v2",
+            Self::PlanningSeedV2 => "planning_seed_v2",
+            Self::PlanningSeriesArcV2 => "planning_series_arc_v2",
+            Self::OutlineBookV2 => "outline_book_v2",
+            Self::OutlineChaptersV2 => "outline_chapters_v2",
+            Self::OutlineManifestV2 => "outline_manifest_v2",
+            Self::PlanningRepairV2 => "planning_repair_v2",
+        }
+    }
+
+    /// Whether this prompt belongs to the McKee (`_v2`) version family.
+    pub const fn is_mckee_v2(self) -> bool {
+        matches!(
+            self,
+            Self::PlanningContractV2
+                | Self::PlanningSeedV2
+                | Self::PlanningSeriesArcV2
+                | Self::OutlineBookV2
+                | Self::OutlineChaptersV2
+                | Self::OutlineManifestV2
+                | Self::PlanningRepairV2
+        )
+    }
+
+    /// The repair prompt paired with this prompt version.
+    pub const fn repair_prompt_id(self) -> Self {
+        if self.is_mckee_v2() {
+            Self::PlanningRepairV2
+        } else {
+            Self::PlanningRepairV1
         }
     }
 }
@@ -649,6 +712,12 @@ pub struct PlanningPacingPolicy {
     pub waiver_reason: Option<String>,
 }
 
+/// Stable identity of the McKee gate profile. Delegated decisions made under
+/// the profile are audited as `policy:mckee-default:1`.
+pub const MCKEE_POLICY_ID: &str = "mckee-default";
+/// Version of the McKee gate profile (see [`MCKEE_POLICY_ID`]).
+pub const MCKEE_POLICY_VERSION: u32 = 1;
+
 /// An empty map means human gates at every level. Root levels remain human-gated;
 /// Chapter and Scene levels may opt into `delegate_if_valid` or `hold` once upstream
 /// roots are accepted and a human explicitly ratifies the policy version.
@@ -672,6 +741,44 @@ pub struct PlanningPolicy {
 impl PlanningPolicy {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+
+    /// The McKee gate profile: human at Contract, CastWorld, SeriesArc and Book;
+    /// `delegate_if_valid` at Chapter and Scene.
+    ///
+    /// This is the default policy for a McKee context only (an unattached
+    /// new-book session, or a session attached to a project carrying the McKee
+    /// marker). It carries the stable identity [`MCKEE_POLICY_ID`] /
+    /// [`MCKEE_POLICY_VERSION`], so a policy-actor acceptance is recorded as
+    /// `policy:mckee-default:1`. No advisory cap applies: a delegated level is
+    /// accepted when hard checks pass and no blocking finding or unresolved
+    /// author question remains, and the apply-time gate still refuses anything
+    /// else.
+    pub fn mckee_default() -> Self {
+        Self {
+            gates: BTreeMap::from([
+                (PlanningLevel::Contract, PlanningGate::Human),
+                (PlanningLevel::CastWorld, PlanningGate::Human),
+                (PlanningLevel::SeriesArc, PlanningGate::Human),
+                (PlanningLevel::Book, PlanningGate::Human),
+                (PlanningLevel::Chapter, PlanningGate::DelegateIfValid),
+                (PlanningLevel::Scene, PlanningGate::DelegateIfValid),
+            ]),
+            policy_id: Some(MCKEE_POLICY_ID.to_string()),
+            policy_version: Some(MCKEE_POLICY_VERSION),
+            max_advisory_findings: None,
+            pov_policy: None,
+            pacing_policy: None,
+        }
+    }
+
+    /// Whether this policy carries the McKee profile identity (id and version).
+    ///
+    /// Gate overrides do not change the identity: an author may return Chapter
+    /// or Scene to `human` and the session is still a McKee-profile session.
+    pub fn is_mckee_default(&self) -> bool {
+        self.policy_id.as_deref() == Some(MCKEE_POLICY_ID)
+            && self.policy_version == Some(MCKEE_POLICY_VERSION)
     }
 
     pub fn delegated_actor(&self) -> Option<String> {
@@ -2206,6 +2313,99 @@ mod tests {
             serde_json::from_value::<T>(value).is_err(),
             "nested unknown fields must fail closed"
         );
+    }
+
+    #[test]
+    fn prompt_versions_resolve_by_session_context_and_repair_pairs() {
+        let v1 = [
+            PlanningPromptId::PlanningContractV1,
+            PlanningPromptId::PlanningSeedV1,
+            PlanningPromptId::PlanningSeriesArcV1,
+            PlanningPromptId::OutlineBookV1,
+            PlanningPromptId::OutlineChaptersV1,
+            PlanningPromptId::OutlineManifestV1,
+        ];
+        let v2 = [
+            PlanningPromptId::PlanningContractV2,
+            PlanningPromptId::PlanningSeedV2,
+            PlanningPromptId::PlanningSeriesArcV2,
+            PlanningPromptId::OutlineBookV2,
+            PlanningPromptId::OutlineChaptersV2,
+            PlanningPromptId::OutlineManifestV2,
+        ];
+        for (level, (old, new)) in PlanningLevel::all().into_iter().zip(v1.into_iter().zip(v2)) {
+            assert_eq!(level.prompt_id(), old);
+            assert_eq!(level.prompt_id_for(false), old);
+            assert_eq!(level.prompt_id_for(true), new);
+            assert!(!old.is_mckee_v2());
+            assert!(new.is_mckee_v2());
+            assert_eq!(old.repair_prompt_id(), PlanningPromptId::PlanningRepairV1);
+            assert_eq!(new.repair_prompt_id(), PlanningPromptId::PlanningRepairV2);
+            assert!(!PlanningPromptId::PlanningRepairV1.is_mckee_v2());
+            assert!(PlanningPromptId::PlanningRepairV2.is_mckee_v2());
+        }
+        // Wire names are stable JSON-safe strings in both directions.
+        for id in [
+            PlanningPromptId::PlanningContractV1,
+            PlanningPromptId::PlanningSeedV1,
+            PlanningPromptId::PlanningSeriesArcV1,
+            PlanningPromptId::OutlineBookV1,
+            PlanningPromptId::OutlineChaptersV1,
+            PlanningPromptId::OutlineManifestV1,
+            PlanningPromptId::PlanningRepairV1,
+            PlanningPromptId::PlanningContractV2,
+            PlanningPromptId::PlanningSeedV2,
+            PlanningPromptId::PlanningSeriesArcV2,
+            PlanningPromptId::OutlineBookV2,
+            PlanningPromptId::OutlineChaptersV2,
+            PlanningPromptId::OutlineManifestV2,
+            PlanningPromptId::PlanningRepairV2,
+        ] {
+            let wire = serde_json::to_value(id).unwrap();
+            assert_eq!(wire, json!(id.as_str()));
+        }
+        assert_eq!(
+            serde_json::from_value::<PlanningPromptId>(json!("outline_manifest_v2")).unwrap(),
+            PlanningPromptId::OutlineManifestV2
+        );
+    }
+
+    #[test]
+    fn mckee_default_policy_keeps_roots_human_and_delegates_detail() {
+        let policy = PlanningPolicy::mckee_default();
+        assert!(policy.is_mckee_default());
+        assert_eq!(
+            policy.delegated_actor().as_deref(),
+            Some("policy:mckee-default:1")
+        );
+        assert_eq!(MCKEE_POLICY_ID, "mckee-default");
+        assert_eq!(MCKEE_POLICY_VERSION, 1);
+        for level in [
+            PlanningLevel::Contract,
+            PlanningLevel::CastWorld,
+            PlanningLevel::SeriesArc,
+            PlanningLevel::Book,
+        ] {
+            assert_eq!(policy.gates[&level], PlanningGate::Human, "{level:?}");
+        }
+        for level in [PlanningLevel::Chapter, PlanningLevel::Scene] {
+            assert_eq!(
+                policy.gates[&level],
+                PlanningGate::DelegateIfValid,
+                "{level:?}"
+            );
+        }
+        assert_eq!(policy.max_advisory_findings, None);
+        // The all-human default is a different policy with no delegated actor.
+        assert!(PlanningPolicy::default().gates.is_empty());
+        assert_eq!(PlanningPolicy::default().delegated_actor(), None);
+        assert!(!PlanningPolicy::default().is_mckee_default());
+        // Identity survives an author override back to human detail gates.
+        let overridden = PlanningPolicy {
+            gates: PlanningGatePolicy::default().to_gates(),
+            ..policy.clone()
+        };
+        assert!(overridden.is_mckee_default());
     }
 
     #[test]

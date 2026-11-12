@@ -64,7 +64,17 @@ async fn stage_reopen_decide_never_writes_bible() {
         })
         .await
         .unwrap();
-    assert!(s.policy.gates.is_empty());
+    // A new-book session is a McKee context, so it starts on the McKee gate
+    // profile: roots human, Chapter/Scene delegated under the audited identity.
+    assert!(s.policy.is_mckee_default());
+    assert_eq!(
+        s.policy.delegated_actor().as_deref(),
+        Some("policy:mckee-default:1")
+    );
+    assert_eq!(
+        s.policy.gates[&PlanningLevel::Chapter],
+        PlanningGate::DelegateIfValid
+    );
     let p = svc
         .stage_planning(artifact(&s, "project:root"))
         .await
@@ -2891,7 +2901,10 @@ agent = "outliner-agent"
         assert_eq!(prop.status, PlanningProposalStatus::Staged);
         let receipt = prop.generation_receipt.as_ref().expect("receipt");
         assert_eq!(receipt.source, PlanningOutputSource::Model);
-        assert_eq!(receipt.prompt_id, expected_level.prompt_id());
+        // The unattached session is the new-book flow, so every level resolves
+        // its McKee (v2) prompt and the receipt records that exact version.
+        assert_eq!(receipt.prompt_id, expected_level.prompt_id_for(true));
+        assert!(receipt.prompt_id.is_mckee_v2());
         assert_eq!(receipt.attempts_used, 1);
         assert!(!receipt.repaired);
         assert_eq!(receipt.calls.len(), 1);
@@ -2995,7 +3008,18 @@ async fn route_generation_missing_routes_and_local_stubs_report_honestly_with_ho
         }) if route_task == "plan"
     ));
     let host_req = r1.host_request.expect("host fallback request");
-    assert_eq!(host_req.prompt_id, PlanningPromptId::PlanningContractV1);
+    assert_eq!(host_req.prompt_id, PlanningPromptId::PlanningContractV2);
+    assert!(
+        host_req
+            .user_prompt
+            .contains("[SPINDLE_PROMPT_ID:planning_contract_v2]")
+    );
+    assert!(
+        host_req
+            .system_prompt
+            .contains("McKee structure guidance (prompt version 2)")
+    );
+    assert!(host_req.system_prompt.contains("Story Spine"));
     assert!(!host_req.prompt_hash.is_empty());
     assert!(!host_req.schema_hash.is_empty());
 
@@ -3446,15 +3470,15 @@ agent = "repair-test-agent"
     let seed_receipt = seed_report.generation_receipt.expect("seed receipt");
     assert_eq!(seed_receipt.attempts_used, 2);
     assert!(seed_receipt.repaired);
-    assert_eq!(seed_receipt.prompt_id, PlanningPromptId::PlanningRepairV1);
+    assert_eq!(seed_receipt.prompt_id, PlanningPromptId::PlanningRepairV2);
     assert_eq!(seed_receipt.calls.len(), 2);
     assert_eq!(
         seed_receipt.calls[0].prompt_id,
-        PlanningPromptId::PlanningSeedV1
+        PlanningPromptId::PlanningSeedV2
     );
     assert_eq!(
         seed_receipt.calls[1].prompt_id,
-        PlanningPromptId::PlanningRepairV1
+        PlanningPromptId::PlanningRepairV2
     );
 
     // Verify the repair prompt sent to the model carried the exact JSON pointer.
@@ -3462,7 +3486,8 @@ agent = "repair-test-agent"
         let reqs = captured_reqs.lock().unwrap();
         assert_eq!(reqs.len(), 2);
         assert!(
-            reqs[1].contains("planning_repair_v1")
+            reqs[1].contains("planning_repair_v2")
+                && reqs[1].contains("McKee structure guidance (prompt version 2)")
                 && reqs[1].contains("/operations/1/operation/input/character_b_id")
                 && reqs[1].contains("unresolved_proposal_ref"),
             "repair prompt must include exact RFC 6901 JSON-pointer finding: {}",
@@ -4562,7 +4587,10 @@ async fn simultaneous_advances_reserve_budget_atomically_and_simultaneous_retry_
                     }
                 }
                 let req_str = String::from_utf8_lossy(&buf[..total]);
-                let body = if req_str.contains("planning_seed_v1") {
+                // McKee sessions resolve `planning_seed_v2`; match the
+                // version-independent prefix so the fixture still routes by
+                // level rather than by prompt version.
+                let body = if req_str.contains("planning_seed_") {
                     cast_reply
                 } else {
                     contract_reply
@@ -14983,5 +15011,842 @@ async fn mckee_malformed_stored_convergence_points_fail_staging_instead_of_readi
     assert!(
         error.contains("invalid convergence_points JSON on plot line"),
         "the error names the malformed row instead of silently reading no points: {error}"
+    );
+}
+
+// ── #30: McKee gate profile and versioned planning prompts ────────────────
+
+/// A stageable artifact from a `StagePlanningInput`: the host-artifact wire
+/// shape is the same envelope without the session-bound fields.
+fn host_artifact(input: &StagePlanningInput) -> serde_json::Value {
+    let mut value = serde_json::to_value(input).unwrap();
+    let map = value.as_object_mut().unwrap();
+    for key in ["session_id", "scope", "intent_hash", "parents"] {
+        map.remove(key);
+    }
+    value
+}
+
+struct MckeeRootFixture {
+    session: PlanningSession,
+    scope: PlanningScope,
+    contract: PlanningProposal,
+    cast: PlanningProposal,
+    series: PlanningProposal,
+    book: PlanningProposal,
+}
+
+/// An unattached new-book session with all four McKee roots human-accepted.
+async fn mckee_root_fixture(svc: &SqliteSpindleService, premise: &str) -> MckeeRootFixture {
+    let s = svc
+        .begin_planning(BeginPlanningInput {
+            premise: premise.into(),
+            scope: None,
+        })
+        .await
+        .unwrap();
+    let contract = svc
+        .stage_planning(phase_d_contract_input(&s))
+        .await
+        .unwrap();
+    let cast = svc
+        .stage_planning(phase_d_cast_input(&s, &contract))
+        .await
+        .unwrap();
+    let series = svc
+        .stage_planning(phase_d_series_input(&s, &contract, &cast))
+        .await
+        .unwrap();
+    let book = svc
+        .stage_planning(phase_d_book_input(&s, &contract, &series))
+        .await
+        .unwrap();
+    let expected = BTreeMap::from([
+        (contract.id.clone(), contract.payload_hash.clone()),
+        (cast.id.clone(), cast.payload_hash.clone()),
+        (series.id.clone(), series.payload_hash.clone()),
+        (book.id.clone(), book.payload_hash.clone()),
+    ]);
+    let report = svc
+        .apply_planning(DecidePlanningInput {
+            session_id: s.id.clone(),
+            scope: None,
+            decision: PlanningDecision::Accept,
+            expected_hashes: expected,
+            actor: "author:jane".into(),
+            note: "Approve the four McKee roots".into(),
+        })
+        .await
+        .unwrap();
+    assert!(report.complete, "{:?}", report.error);
+    let session = svc.get_planning_session(&s.id).await.unwrap();
+    let scope = session.scope.clone().expect("roots attach the project");
+    MckeeRootFixture {
+        session,
+        scope,
+        contract,
+        cast,
+        series,
+        book,
+    }
+}
+
+#[tokio::test]
+async fn mckee_profile_defaults_by_creation_context_and_never_switches_on_attach() {
+    let (_tmp, svc) = fresh_service_local().await;
+
+    // An unattached session is the new-book flow, so it is a McKee context.
+    let unattached = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "A harbor archivist hears a bell only she can hear.".into(),
+            scope: None,
+        })
+        .await
+        .unwrap();
+    assert!(unattached.policy.is_mckee_default());
+    assert_eq!(
+        unattached.policy.delegated_actor().as_deref(),
+        Some("policy:mckee-default:1")
+    );
+    for level in [
+        PlanningLevel::Contract,
+        PlanningLevel::CastWorld,
+        PlanningLevel::SeriesArc,
+        PlanningLevel::Book,
+    ] {
+        assert_eq!(
+            unattached.policy.gates[&level],
+            PlanningGate::Human,
+            "{level:?} must stay human"
+        );
+    }
+    for level in [PlanningLevel::Chapter, PlanningLevel::Scene] {
+        assert_eq!(
+            unattached.policy.gates[&level],
+            PlanningGate::DelegateIfValid,
+            "{level:?} delegates"
+        );
+    }
+    assert_eq!(unattached.policy.max_advisory_findings, None);
+
+    // Contract acceptance attaches the project; the profile was already in
+    // force and must not be replaced by an attach-time switch.
+    let root = svc
+        .stage_planning(artifact(&unattached, "project:root"))
+        .await
+        .unwrap();
+    accept(&svc, &unattached, &root).await;
+    let attached = svc.get_planning_session(&unattached.id).await.unwrap();
+    assert!(attached.scope.is_some());
+    assert!(attached.policy.is_mckee_default());
+    assert_eq!(
+        attached.policy,
+        PlanningPolicy::mckee_default(),
+        "attach must not change the policy"
+    );
+
+    // A new session bound to the now-marked project also resolves the profile.
+    let reattached = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "Plan the next book of the same series.".into(),
+            scope: attached.scope.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(reattached.policy.is_mckee_default());
+
+    // A directly-created project keeps today's all-human default in every
+    // session bound to it.
+    let (non_mckee, _) = accepted_non_mckee_project(&svc).await;
+    assert!(non_mckee.policy.gates.is_empty());
+    assert!(!non_mckee.policy.is_mckee_default());
+    assert_eq!(non_mckee.policy.delegated_actor(), None);
+    let non_mckee_scope = non_mckee.scope.clone().unwrap();
+    let non_mckee_attached = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "Review the non-McKee project again.".into(),
+            scope: Some(non_mckee_scope),
+        })
+        .await
+        .unwrap();
+    assert!(non_mckee_attached.policy.is_default());
+    assert_eq!(non_mckee_attached.policy.delegated_actor(), None);
+}
+
+#[tokio::test]
+async fn mckee_profile_rejects_root_delegation_and_reserves_its_identity() {
+    use serde_json::json;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let s = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "A lost heir returns to the harbor".into(),
+            scope: None,
+        })
+        .await
+        .unwrap();
+
+    // An explicit override can never put delegate_if_valid on a root level.
+    for level in [
+        PlanningLevel::Contract,
+        PlanningLevel::CastWorld,
+        PlanningLevel::SeriesArc,
+        PlanningLevel::Book,
+    ] {
+        let error = svc
+            .set_planning_policy(SetPlanningPolicyInput {
+                session_id: s.id.clone(),
+                scope: None,
+                policy: PlanningPolicy {
+                    policy_id: Some("root-auto".into()),
+                    policy_version: Some(1),
+                    gates: BTreeMap::from([(level, PlanningGate::DelegateIfValid)]),
+                    max_advisory_findings: None,
+                    pov_policy: None,
+                    pacing_policy: None,
+                },
+                actor: "author:jane".into(),
+                note: "Attempt to delegate a root level".into(),
+            })
+            .await
+            .expect_err("root delegation must be rejected")
+            .to_string();
+        assert!(
+            error.contains("requires human review"),
+            "{level:?} override must be refused before apply: {error}"
+        );
+    }
+
+    // Chapter/Scene remain explicitly overridable back to human, and the
+    // profile identity survives the override for audit purposes.
+    let fixture = mckee_root_fixture(&svc, "A McKee project with overridden detail gates").await;
+    let overridden = svc
+        .set_planning_policy(SetPlanningPolicyInput {
+            session_id: fixture.session.id.clone(),
+            scope: Some(fixture.scope.clone()),
+            policy: PlanningPolicy {
+                gates: BTreeMap::from([
+                    (PlanningLevel::Chapter, PlanningGate::Human),
+                    (PlanningLevel::Scene, PlanningGate::Human),
+                ]),
+                ..PlanningPolicy::mckee_default()
+            },
+            actor: "author:jane".into(),
+            note: "Review chapter and scene detail by hand for this stretch".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        overridden.policy.gates[&PlanningLevel::Chapter],
+        PlanningGate::Human
+    );
+    assert_eq!(
+        overridden.policy.gates[&PlanningLevel::Scene],
+        PlanningGate::Human
+    );
+    assert!(overridden.policy.is_mckee_default());
+    assert_eq!(
+        overridden.policy.delegated_actor().as_deref(),
+        Some("policy:mckee-default:1")
+    );
+
+    // The profile identity is reserved for McKee contexts, so a non-McKee
+    // session cannot borrow the audited `policy:` identity.
+    let (non_mckee, _) = accepted_non_mckee_project(&svc).await;
+    let error = svc
+        .set_planning_policy(SetPlanningPolicyInput {
+            session_id: non_mckee.id.clone(),
+            scope: non_mckee.scope.clone(),
+            policy: PlanningPolicy::mckee_default(),
+            actor: "author:jane".into(),
+            note: "Attempt to borrow the McKee identity".into(),
+        })
+        .await
+        .expect_err("the McKee identity is reserved")
+        .to_string();
+    assert!(error.contains("reserved for McKee"), "{error}");
+
+    // And a policy actor still cannot accept a staged root proposal.
+    let mut book = artifact(&fixture.session, "outline:book:review");
+    book.level = PlanningLevel::Book;
+    book.parents = BTreeMap::from([(
+        fixture.contract.id.clone(),
+        fixture.contract.payload_hash.clone(),
+    )]);
+    book.operations = vec![planned(
+        "outline:book:review",
+        "set_book_outline",
+        json!({
+            "book_id": reference("project:root:book"),
+            "book_number": 1,
+            "content": "A book outline that only a human may approve."
+        }),
+    )];
+    let staged = svc.stage_planning(book).await.unwrap();
+    let error = svc
+        .apply_planning(DecidePlanningInput {
+            session_id: fixture.session.id.clone(),
+            scope: Some(fixture.scope.clone()),
+            decision: PlanningDecision::Accept,
+            expected_hashes: BTreeMap::from([(staged.id.clone(), staged.payload_hash.clone())]),
+            actor: "policy:mckee-default:1".into(),
+            note: "Attempt delegated acceptance of a root".into(),
+        })
+        .await
+        .expect_err("policy actors cannot accept roots")
+        .to_string();
+    assert!(error.contains("human decision actor required"), "{error}");
+    assert_eq!(
+        svc.list_planning_proposals(&fixture.session.id, Some(fixture.scope.clone()))
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == staged.id)
+            .unwrap()
+            .status,
+        PlanningProposalStatus::Staged
+    );
+}
+
+#[tokio::test]
+async fn mckee_delegated_chapter_and_scene_accept_with_audited_policy_actor() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_root_fixture(&svc, "Delegated chapter and scene acceptance").await;
+
+    let chapter_in = phase_d_chapter_input(
+        &fixture.session,
+        &fixture.contract,
+        &fixture.series,
+        &fixture.book,
+    );
+    let report = svc
+        .advance_planning(AdvancePlanningInput {
+            session_id: fixture.session.id.clone(),
+            scope: Some(fixture.scope.clone()),
+            level: Some(PlanningLevel::Chapter),
+            parents: None,
+            target_range: None,
+            allow_review_backend: None,
+            rating_ceiling: None,
+            budget: None,
+            host_submission: Some(PlanningHostSubmission {
+                source: PlanningOutputSource::Host,
+                payload: host_artifact(&chapter_in),
+            }),
+            retry_key: Some("mckee-delegated-chapter".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, PlanningSessionOutcome::Staged);
+    let chapter = report.proposal.expect("chapter proposal");
+    assert_eq!(
+        chapter.status,
+        PlanningProposalStatus::Applied,
+        "a clean Chapter bundle must auto-apply under the profile: {:?}",
+        chapter.findings
+    );
+    assert_eq!(
+        chapter.decided_by.as_deref(),
+        Some("policy:mckee-default:1")
+    );
+    assert_eq!(chapter.policy_snapshot, PlanningPolicy::mckee_default());
+    let apply_status = svc
+        .planning_apply_status(&fixture.session.id, Some(fixture.scope.clone()))
+        .await
+        .unwrap();
+    assert!(
+        apply_status.operations.iter().any(|receipt| {
+            receipt.proposal_id == chapter.id && receipt.actor == "policy:mckee-default:1"
+        }),
+        "the delegated decision must be audited on the operation receipt"
+    );
+
+    let scene_in = phase_d_scene_input(&fixture.session, &fixture.cast, &fixture.series, &chapter);
+    let report = svc
+        .advance_planning(AdvancePlanningInput {
+            session_id: fixture.session.id.clone(),
+            scope: Some(fixture.scope.clone()),
+            level: Some(PlanningLevel::Scene),
+            parents: None,
+            target_range: Some(PlanningTargetRange {
+                book_number: 1,
+                chapter_start: 1,
+                chapter_end: 1,
+                scenes_per_chapter: 2,
+            }),
+            allow_review_backend: None,
+            rating_ceiling: None,
+            budget: None,
+            host_submission: Some(PlanningHostSubmission {
+                source: PlanningOutputSource::Host,
+                payload: host_artifact(&scene_in),
+            }),
+            retry_key: Some("mckee-delegated-scene".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, PlanningSessionOutcome::Staged);
+    let scene = report.proposal.expect("scene proposal");
+    assert_eq!(
+        scene.status,
+        PlanningProposalStatus::Applied,
+        "a clean Scene bundle must auto-apply under the profile: {:?}",
+        scene.findings
+    );
+    assert_eq!(scene.decided_by.as_deref(), Some("policy:mckee-default:1"));
+}
+
+#[tokio::test]
+async fn mckee_delegated_level_returns_to_human_on_questions_and_blocking_findings() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_root_fixture(&svc, "Delegated detail returns to the author").await;
+
+    // 1. An unresolved author question keeps the delegated Chapter staged.
+    let mut questioned = phase_d_chapter_input(
+        &fixture.session,
+        &fixture.contract,
+        &fixture.series,
+        &fixture.book,
+    );
+    questioned.author_questions.push(PlanningAuthorQuestion {
+        id: "q1".into(),
+        question: "Should the second watch be a flashback?".into(),
+        choices: Vec::new(),
+        recommended: None,
+    });
+    let questioned = svc.stage_planning(questioned).await.unwrap();
+    let error = svc
+        .apply_planning(DecidePlanningInput {
+            session_id: fixture.session.id.clone(),
+            scope: Some(fixture.scope.clone()),
+            decision: PlanningDecision::Accept,
+            expected_hashes: BTreeMap::from([(
+                questioned.id.clone(),
+                questioned.payload_hash.clone(),
+            )]),
+            actor: "policy:mckee-default:1".into(),
+            note: "Attempt delegated acceptance with an open question".into(),
+        })
+        .await
+        .expect_err("an unresolved author question must return the level to the human")
+        .to_string();
+    assert!(error.contains("author_questions"), "{error}");
+
+    // The status next action names the human-review state instead of leaving
+    // a `delegate_if_valid` gate as if automation were still available.
+    let status = svc
+        .planning_status(PlanningStatusInput {
+            session_id: Some(fixture.session.id.clone()),
+            project_id: None,
+            branch_id: None,
+            target_range: None,
+            include_readiness: Some(false),
+        })
+        .await
+        .unwrap();
+    assert_eq!(status.gate, Some(PlanningGate::DelegateIfValid));
+    assert!(
+        status.next_action.contains("needs a human decision")
+            && status
+                .next_action
+                .contains("unresolved author question 'q1'"),
+        "{}",
+        status.next_action
+    );
+
+    // The author repairs the bundle: supersede it, stage a clean replacement,
+    // and delegated acceptance then applies it.
+    svc.decide_planning(DecidePlanningInput {
+        session_id: fixture.session.id.clone(),
+        scope: Some(fixture.scope.clone()),
+        decision: PlanningDecision::Supersede,
+        expected_hashes: BTreeMap::from([(questioned.id.clone(), questioned.payload_hash.clone())]),
+        actor: "author:jane".into(),
+        note: "Remove the open question and regenerate the bundle".into(),
+    })
+    .await
+    .unwrap();
+    let clean_chapter = svc
+        .stage_planning(phase_d_chapter_input(
+            &fixture.session,
+            &fixture.contract,
+            &fixture.series,
+            &fixture.book,
+        ))
+        .await
+        .unwrap();
+    let applied = svc
+        .apply_planning(DecidePlanningInput {
+            session_id: fixture.session.id.clone(),
+            scope: Some(fixture.scope.clone()),
+            decision: PlanningDecision::Accept,
+            expected_hashes: BTreeMap::from([(
+                clean_chapter.id.clone(),
+                clean_chapter.payload_hash.clone(),
+            )]),
+            actor: "policy:mckee-default:1".into(),
+            note: "Delegated acceptance after the author repaired the bundle".into(),
+        })
+        .await
+        .unwrap();
+    assert!(applied.complete, "{:?}", applied.error);
+    assert_eq!(
+        applied.proposals[0].decided_by.as_deref(),
+        Some("policy:mckee-default:1")
+    );
+
+    // 2. A recordable blocking finding also keeps the delegated level staged.
+    let mut scene_in = phase_d_scene_input(
+        &fixture.session,
+        &fixture.cast,
+        &fixture.series,
+        &clean_chapter,
+    );
+    if let PlanningOperation::PlanChapter(ref mut plan) = scene_in.operations[0].operation {
+        plan.scenes[0].inaction_cost = None;
+    } else {
+        panic!("scene fixture must plan a chapter");
+    }
+    let broken = svc.stage_planning(scene_in).await.unwrap();
+    assert!(
+        broken.findings.iter().any(|finding| {
+            finding.code == "scene_missing_inaction_cost"
+                && finding.severity == PlanningFindingSeverity::Blocking
+        }),
+        "the fixture must carry the blocking finding: {:?}",
+        broken.findings
+    );
+    let error = svc
+        .apply_planning(DecidePlanningInput {
+            session_id: fixture.session.id.clone(),
+            scope: Some(fixture.scope.clone()),
+            decision: PlanningDecision::Accept,
+            expected_hashes: BTreeMap::from([(broken.id.clone(), broken.payload_hash.clone())]),
+            actor: "policy:mckee-default:1".into(),
+            note: "Attempt delegated acceptance with a blocking finding".into(),
+        })
+        .await
+        .expect_err("a blocking finding must return the level to the human")
+        .to_string();
+    assert!(error.contains("blocking validation findings"), "{error}");
+    assert!(
+        svc.list_planning_proposals(&fixture.session.id, Some(fixture.scope.clone()))
+            .await
+            .unwrap()
+            .iter()
+            .find(|proposal| proposal.id == broken.id)
+            .unwrap()
+            .status
+            == PlanningProposalStatus::Staged
+    );
+
+    // A human cannot accept the broken bundle either; they repair it, and the
+    // replacement is delegated normally.
+    svc.decide_planning(DecidePlanningInput {
+        session_id: fixture.session.id.clone(),
+        scope: Some(fixture.scope.clone()),
+        decision: PlanningDecision::Supersede,
+        expected_hashes: BTreeMap::from([(broken.id.clone(), broken.payload_hash.clone())]),
+        actor: "author:jane".into(),
+        note: "Restore the missing Inaction Cost".into(),
+    })
+    .await
+    .unwrap();
+    let repaired_scene = svc
+        .stage_planning(phase_d_scene_input(
+            &fixture.session,
+            &fixture.cast,
+            &fixture.series,
+            &clean_chapter,
+        ))
+        .await
+        .unwrap();
+    let repaired = svc
+        .apply_planning(DecidePlanningInput {
+            session_id: fixture.session.id.clone(),
+            scope: Some(fixture.scope.clone()),
+            decision: PlanningDecision::Accept,
+            expected_hashes: BTreeMap::from([(
+                repaired_scene.id.clone(),
+                repaired_scene.payload_hash.clone(),
+            )]),
+            actor: "policy:mckee-default:1".into(),
+            note: "Delegated acceptance after the author repaired the Scene".into(),
+        })
+        .await
+        .unwrap();
+    assert!(repaired.complete, "{:?}", repaired.error);
+}
+
+#[tokio::test]
+async fn non_mckee_session_keeps_human_defaults_and_v1_prompts() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, _root) = accepted_non_mckee_project(&svc).await;
+    let scope = session.scope.clone().unwrap();
+    assert!(session.policy.is_default());
+    assert!(session.policy.gates.is_empty());
+
+    // A fresh session on the same project (no accepted contract proposal yet)
+    // parks every level for the host so the exact prompt is inspectable.
+    let fresh = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "Revisit the non-McKee project contract.".into(),
+            scope: Some(scope.clone()),
+        })
+        .await
+        .unwrap();
+    for level in PlanningLevel::all() {
+        let report = svc
+            .advance_planning(AdvancePlanningInput {
+                session_id: fresh.id.clone(),
+                scope: Some(scope.clone()),
+                level: Some(level),
+                parents: None,
+                target_range: None,
+                allow_review_backend: Some(false),
+                rating_ceiling: None,
+                budget: None,
+                host_submission: None,
+                retry_key: Some(format!("non-mckee-{level:?}")),
+            })
+            .await
+            .unwrap();
+        assert_eq!(report.outcome, PlanningSessionOutcome::NeedsRoute);
+        let request = report.host_request.expect("host request");
+        assert_eq!(request.prompt_id, level.prompt_id_for(false));
+        assert!(!request.prompt_id.is_mckee_v2());
+        assert!(
+            !request
+                .system_prompt
+                .contains("McKee structure guidance (prompt version 2)"),
+            "a non-McKee prompt must stay byte-identical to v1"
+        );
+        assert!(request.user_prompt.starts_with(&format!(
+            "[SPINDLE_PROMPT_ID:{}]",
+            level.prompt_id().as_str()
+        )));
+    }
+
+    // A staged Chapter artifact on a human-gated session stays staged (it is
+    // not auto-applied) and its receipt records the v1 prompt.
+    let chapter_payload = serde_json::json!({
+        "schema_version": 1,
+        "level": "chapter",
+        "rationale": "Add a second chapter without delegating acceptance.",
+        "operations": [{
+            "output_ref": "chapter:2",
+            "operation": {"operation": "create_chapter", "input": {
+                "book_id": null,
+                "book_number": 1,
+                "chapter_number": 2,
+                "title": "Second Chapter"
+            }}
+        }]
+    });
+    let report = svc
+        .advance_planning(AdvancePlanningInput {
+            session_id: session.id.clone(),
+            scope: Some(scope.clone()),
+            level: Some(PlanningLevel::Chapter),
+            parents: None,
+            target_range: None,
+            allow_review_backend: None,
+            rating_ceiling: None,
+            budget: None,
+            host_submission: Some(PlanningHostSubmission {
+                source: PlanningOutputSource::Host,
+                payload: chapter_payload,
+            }),
+            retry_key: Some("non-mckee-chapter".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, PlanningSessionOutcome::Staged);
+    let proposal = report.proposal.expect("staged chapter");
+    assert_eq!(proposal.status, PlanningProposalStatus::Staged);
+    let receipt = report.generation_receipt.expect("receipt");
+    assert_eq!(receipt.prompt_id, PlanningPromptId::OutlineChaptersV1);
+    assert!(!receipt.prompt_id.is_mckee_v2());
+    let applied = svc
+        .apply_planning(DecidePlanningInput {
+            session_id: session.id.clone(),
+            scope: Some(scope.clone()),
+            decision: PlanningDecision::Accept,
+            expected_hashes: BTreeMap::from([(proposal.id.clone(), proposal.payload_hash.clone())]),
+            actor: "author:jane".into(),
+            note: "Human acceptance still works on a non-McKee session".into(),
+        })
+        .await
+        .unwrap();
+    assert!(applied.complete, "{:?}", applied.error);
+}
+
+#[tokio::test]
+async fn non_mckee_repair_prompt_keeps_the_v1_version() {
+    use serde_json::json;
+
+    let bad = json!({
+        "schema_version": 1,
+        "level": "cast_world",
+        "rationale": "Cast with a broken relationship reference.",
+        "operations": [
+            {
+                "output_ref": "cast:ada",
+                "operation": {"operation": "create_character", "input": {
+                    "name": "Ada", "summary": "Seeker", "role": "lead"
+                }}
+            },
+            {
+                "output_ref": "rel:broken",
+                "operation": {"operation": "create_relationship", "input": {
+                    "character_a_id": {"kind": "proposal_ref", "value": "cast:ada"},
+                    "character_b_id": {"kind": "proposal_ref", "value": "cast:missing_partner"},
+                    "relationship_type": "ally",
+                    "initial_trust": 50,
+                    "initial_tension": 10
+                }}
+            }
+        ]
+    });
+    let repaired = json!({
+        "schema_version": 1,
+        "level": "cast_world",
+        "rationale": "Cast with a resolved relationship.",
+        "operations": [
+            {
+                "output_ref": "cast:ada",
+                "operation": {"operation": "create_character", "input": {
+                    "name": "Ada", "summary": "Seeker", "role": "lead"
+                }}
+            },
+            {
+                "output_ref": "cast:bram",
+                "operation": {"operation": "create_character", "input": {
+                    "name": "Bram", "summary": "Guide", "role": "support"
+                }}
+            },
+            {
+                "output_ref": "rel:fixed",
+                "operation": {"operation": "create_relationship", "input": {
+                    "character_a_id": {"kind": "proposal_ref", "value": "cast:ada"},
+                    "character_b_id": {"kind": "proposal_ref", "value": "cast:bram"},
+                    "relationship_type": "ally",
+                    "initial_trust": 50,
+                    "initial_tension": 10
+                }}
+            }
+        ]
+    });
+    let (endpoint, captured_reqs, handle) = spawn_planning_http_server(vec![
+        (
+            200,
+            json!({"choices": [{"message": {"content": bad.to_string()}}], "usage": {"prompt_tokens": 90, "completion_tokens": 50}}),
+        ),
+        (
+            200,
+            json!({"choices": [{"message": {"content": repaired.to_string()}}], "usage": {"prompt_tokens": 120, "completion_tokens": 60}}),
+        ),
+    ]);
+    let (_tmp, svc) = service_with_toml(&format!(
+        r#"
+[health_check]
+enabled = false
+
+[[agents]]
+id = "mckee-repair-agent"
+name = "Repair Agent"
+provider = "openai-compatible"
+endpoint = "{endpoint}"
+model = "planner-v1"
+ratings = ["general", "teen", "mature"]
+
+[[routing]]
+route = "plan"
+agent = "mckee-repair-agent"
+"#
+    ))
+    .await;
+
+    let (session, _root) = accepted_non_mckee_project(&svc).await;
+    let report = svc
+        .advance_planning(AdvancePlanningInput {
+            session_id: session.id.clone(),
+            scope: session.scope.clone(),
+            level: Some(PlanningLevel::CastWorld),
+            parents: None,
+            target_range: None,
+            allow_review_backend: None,
+            rating_ceiling: None,
+            budget: None,
+            host_submission: None,
+            retry_key: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, PlanningSessionOutcome::Staged);
+    let receipt = report.generation_receipt.expect("receipt");
+    assert_eq!(receipt.prompt_id, PlanningPromptId::PlanningRepairV1);
+    assert_eq!(receipt.calls[0].prompt_id, PlanningPromptId::PlanningSeedV1);
+    assert_eq!(
+        receipt.calls[1].prompt_id,
+        PlanningPromptId::PlanningRepairV1
+    );
+    {
+        let requests = captured_reqs.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].contains("planning_repair_v1"));
+        assert!(!requests[1].contains("McKee structure guidance"));
+    }
+    assert_eq!(handle.join().unwrap(), 2);
+}
+
+#[tokio::test]
+async fn mckee_profile_does_not_ratify_canon_deltas_or_plan_amendments() {
+    use spindle_core::models::{DecideCanonDeltasInput, DecidePlanAmendmentsInput};
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let project = svc
+        .create_project(CreateProjectInput {
+            name: "Ratification regression".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Unchanged ratification".into(),
+                style_notes: vec![],
+                boundaries: vec![],
+            },
+        })
+        .await
+        .unwrap();
+
+    // The McKee policy actor is a planning-only identity: canon deltas and
+    // living-outline amendments keep their human-only ratification (ADR 0003 /
+    // 0004) even when the project's planning profile delegates detail.
+    let canon_error = svc
+        .decide_canon_deltas(DecideCanonDeltasInput {
+            project_id: project.project_id.clone(),
+            decisions: Vec::new(),
+            decided_by: Some("policy:mckee-default:1".into()),
+        })
+        .await
+        .expect_err("policy actors cannot ratify canon deltas")
+        .to_string();
+    assert!(
+        canon_error.contains("human operator decision actor"),
+        "{canon_error}"
+    );
+
+    let amendment_error = svc
+        .decide_plan_amendments(DecidePlanAmendmentsInput {
+            project_id: project.project_id,
+            decisions: Vec::new(),
+            decided_by: Some("policy:mckee-default:1".into()),
+        })
+        .await
+        .expect_err("policy actors cannot ratify plan amendments")
+        .to_string();
+    assert!(
+        amendment_error.contains("human operator decision actor"),
+        "{amendment_error}"
     );
 }

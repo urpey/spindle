@@ -86,6 +86,18 @@ impl SqliteSpindleService {
         );
         let s = self.get_planning_session(&input.session_id).await?;
         anyhow::ensure!(s.scope == input.scope, "planning scope mismatch");
+        // A session created in a McKee context carries the McKee profile. The
+        // planning CreateProject apply path is the only writer of the marker,
+        // so an unattached session can only ever attach to a McKee project;
+        // this guard makes that invariant explicit instead of trusting it.
+        if s.policy.is_mckee_default()
+            && let Some(scope) = &s.scope
+        {
+            anyhow::ensure!(
+                self.repository.is_mckee_project(&scope.project_id).await?,
+                "planning policy '{MCKEE_POLICY_ID}' requires a McKee-structured project; the attached project does not carry the McKee marker"
+            );
+        }
         let all = self.list_planning_proposals(&s.id, s.scope.clone()).await?;
         let is_policy_actor = input.actor.trim_start().starts_with("policy:");
         if is_policy_actor {
