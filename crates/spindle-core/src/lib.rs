@@ -15,6 +15,7 @@ pub mod planning;
 pub mod plot_line;
 pub mod promise_visibility;
 pub mod provenance;
+pub mod realized;
 pub mod scene_value;
 pub mod sequences;
 pub mod serial;

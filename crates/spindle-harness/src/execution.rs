@@ -316,6 +316,7 @@ async fn draft_scene(
                 // Automated drafting does not flag on-page reveals; the reveal
                 // package is a host/interactive (authoring_save_scene_draft) flow.
                 knowledge_learned: Vec::new(),
+                realized_report: None,
             })
             .await
             .with_context(|| {

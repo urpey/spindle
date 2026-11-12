@@ -201,7 +201,8 @@ impl<'a> TryFrom<&Row<'a>> for Chapter {
 // =============================================================================
 
 pub const SCENE_COLUMNS: &str = "id, project_id, branch_id, book_id, chapter_id, book_number, chapter_number, \
-     scene_order, full_text, summary, content_rating, tone, draft_origin, created_at, updated_at, location_id";
+     scene_order, full_text, summary, content_rating, tone, draft_origin, created_at, updated_at, location_id, \
+     realized_report";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scene {
@@ -227,6 +228,11 @@ pub struct Scene {
     pub updated_at: Timestamp,
     /// Location (record id) this scene is set in, when declared. See V0021.
     pub location_id: Option<String>,
+    /// The writer's realized report for this Scene (V0061), when one was saved.
+    /// Additive: NULL for every pre-V0061 row, for every Scene saved without a
+    /// report, and for every non-McKee Scene, so those serialize unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realized_report: Option<spindle_core::realized::RealizedReport>,
 }
 
 impl<'a> TryFrom<&Row<'a>> for Scene {
@@ -250,6 +256,7 @@ impl<'a> TryFrom<&Row<'a>> for Scene {
             created_at: row::time(r, 13)?,
             updated_at: row::time(r, 14)?,
             location_id: row::opt_text(r, 15)?,
+            realized_report: row::opt_json(r, 16)?,
         })
     }
 }

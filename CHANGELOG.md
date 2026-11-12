@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+- Add **McKee realized reports and deterministic scene verify**. A written Scene
+  now reports what its prose actually did, and the plan is still the law. The
+  realized report (`spindle_core::realized`) carries the realized Value Turn per
+  planned Value Axis (opening/closing Charge, the realized Gap and the realized
+  Turning Beat), the Character Effect per present major character (`reinforce`,
+  `reveal`, `contradict`, `change`, `none`), the Narrative Promise events the
+  Scene advanced (`setup`, `reinforcement`, `payoff`, `subversion`,
+  `abandonment`) and the planned Key Facts it dramatised. It rides both
+  continuity-carrying save paths — `commit_scene`'s
+  `CommitSceneContinuityPackage.realized_report` and
+  `authoring_save_scene_draft`'s structured `realized_report` field, which also
+  counts as structured continuity content — persists in the new nullable
+  `scene.realized_report` column (V0061) and reads back through
+  `get_entity(table="scene")` and each earlier Scene's
+  `novel.realized_scenes` entry. A save replaces the stored report; an unset
+  report is skipped entirely, so a report-less Scene and every non-McKee project
+  serialize byte-identically. Four deterministic checks join the fast
+  scene-verify subset with no model calls and run only on a McKee project:
+  `realized_value_turn` (planned versus realized Charge — exact comparison —,
+  Gap presence, Turning Beat position, a missing report, or an unplanned axis),
+  `realized_key_fact` (a planned Key Fact due in the Scene that the report does
+  not list), `realized_promise_event` (a planned plant or payoff the report does
+  not report) and `character_effect` (`change` only at a planned change
+  milestone, and a planned change never downgraded to `reveal`). Findings are
+  `error`-severity in the existing consistency shape and are attributed to the
+  Scene. On a McKee project the system now writes Narrative Promise status after
+  a confirmed realized event, with the saved Scene recorded as the source scene
+  (`setup` -> `planted`, `reinforcement` -> `reinforced`, `payoff` -> `paid_off`,
+  `subversion` -> `subverted`, `abandonment` -> `abandoned`); the report is
+  pre-validated before the prose write, a re-save does not duplicate the event,
+  and the agent-facing `update_promise_status` keeps working for every other
+  flow. A McKee run must prepare with a non-zero `max_revise_attempts` (absent
+  means the run default of zero): `authoring_prepare_run` reports it as a missing
+  requirement and `authoring_start_run` refuses to start, while the internal
+  planning readiness probe and every unmarked project are unaffected.
+- Raise the **measured compatibility discovery ceilings** for the additive
+  realized-report DTOs; regenerating the legacy schema inventory does not itself
+  authorize a raise. Measured UTF-8 tools/list bytes before → after this ticket:
+  `default` and `legacy-all` 833,541 → 862,573 (input 180,181 → 191,409);
+  `authoring` 406,371 → 430,952 (input 96,813 → 108,041); `write` 538,851 →
+  563,432 (input 124,044 → 135,272); `minimal` 251,890 → 268,397 (input 30,863 →
+  38,468); `import` 248,146 → 252,597 (input unchanged); `workflow-authoring`
+  189,244 → 200,472 (input 93,915 → 105,143); `workflow-write` 119,834 →
+  127,439 (input 64,720 → 72,325). Tool names, tool counts and the canonical
+  acceptance ceilings are untouched.
 - Add **McKee writer visibility and the filled drafting packet**. For a
   McKee-structured project, `get_chapter_briefing` returns only the requested
   Scene's plan (`chapter_plan.scenes` is filtered to that Scene); the bundled

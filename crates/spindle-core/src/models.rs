@@ -1100,16 +1100,22 @@ pub struct PlannedScene {
 ///
 /// Writer visibility for McKee projects returns the current Scene's plan and
 /// the **earlier** Scenes' realized results rather than every planned Scene.
-/// For now a realized result is the written Scene's summary; the record is a
-/// dedicated type so a realized Value Turn can be added here additively when
-/// the post-draft turn report lands (no such field is invented now). It is
-/// empty for non-McKee projects, so their payloads stay unchanged.
+/// The result carries the written Scene's summary plus, once the writer has
+/// reported one, its realized Value Turn (`realized_report`). It is empty for
+/// non-McKee projects and the report is skipped when unset, so their payloads
+/// stay unchanged.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RealizedScene {
     /// Story order of the written Scene inside the chapter.
     pub scene_order: i32,
     /// The written Scene's stored summary.
     pub summary: String,
+    /// The written Scene's realized report, when one was saved with it.
+    ///
+    /// Additive and skipped when unset: a Scene saved without a report, and
+    /// every non-McKee project, keep their previous serialization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realized_report: Option<crate::realized::RealizedReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -2382,6 +2388,17 @@ pub struct CommitSceneContinuityPackage {
     /// Timeline events established in this scene.
     #[serde(default)]
     pub timeline_events: Vec<CommitSceneTimelineEventEntry>,
+    /// The scene's realized report: realized Value Turns, Character Effects,
+    /// realized promise events and the planned Key Facts it dramatised.
+    ///
+    /// Additive and skipped when unset, so a Scene with no report — and every
+    /// non-McKee project — serializes exactly as before. The report is
+    /// persisted with the Scene (V0061) and drives the deterministic McKee
+    /// scene-verify checks; it never writes canon by itself. A realized promise
+    /// event is the one exception: after the Scene commits, the system advances
+    /// that promise's status with this Scene recorded as the source scene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realized_report: Option<crate::realized::RealizedReport>,
 }
 
 impl CommitSceneContinuityPackage {
@@ -3380,6 +3397,18 @@ pub struct SaveSceneDraftInput {
     /// On-page character knowledge acquisitions recorded with this scene.
     #[serde(default)]
     pub knowledge_learned: Vec<KnowledgeLearnedEntry>,
+    /// The scene's realized report (realized Value Turns, Character Effects,
+    /// realized promise events and dramatised planned Key Facts).
+    ///
+    /// Additive and skipped when unset, so a save with no report — and every
+    /// non-McKee project — behaves exactly as before. The report is persisted
+    /// on the Scene (V0061); a save replaces the stored report, and omitting it
+    /// leaves the Scene with no report (the report describes the text just
+    /// saved, never an earlier revision). For a McKee project a confirmed
+    /// realized promise event advances that promise's status after the save,
+    /// with this Scene recorded as the source scene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realized_report: Option<crate::realized::RealizedReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -5723,6 +5752,10 @@ impl ConsistencyScopeInput {
 /// The trailing four names are Phase-4 validator **request** names (identical to
 /// their finding `check_type` strings): they trigger the deterministic
 /// `run_phase_four_validator_checks_for_scenes` fan-out under the non-deep path.
+/// The four `realized_*` / `character_effect` names are the deterministic McKee
+/// realized-report checks (`spindle_core::realized`); they read the Scene's
+/// persisted realized report and the planned Scene, issue no model calls, and
+/// run only for a McKee-structured project.
 pub const SCENE_VERIFY_CHECKS: &[&str] = &[
     // ── Deterministic, scene-attributed continuity checks ──
     "retcon_reachability",  // shared as-of character-state / retcon scanner
@@ -5736,6 +5769,13 @@ pub const SCENE_VERIFY_CHECKS: &[&str] = &[
     "content_boundary_compliance", // explicit-scene review flag, per scene
     "secret_leak",          // out-of-circle speaker leaks a secret (Tier 1)
     "canonical_fact_consistency", // conflicting active canonical-fact values
+    // ── Deterministic McKee realized-report checks (no model calls) ──
+    // A mismatch with the plan is a finding that drives the bounded revise
+    // loop; non-McKee projects never run them (`project.mckee_structured`).
+    "realized_value_turn",    // realized Value Turn vs the planned value plan
+    "realized_key_fact",      // a planned Key Fact the report does not list
+    "realized_promise_event", // a planned promise event the report does not list
+    "character_effect",       // `change` only at a planned change milestone
     // ── Phase-4 validator request names (deterministic, prose-drift) ──
     "canonical_fact_prose_drift", // prose contradicts a registered canonical fact
     "world_rule_semantic_drift",  // prose trips a world-rule scan pattern
@@ -8689,6 +8729,15 @@ pub struct AuthoringSaveSceneDraftInput {
     /// On-page character knowledge acquisitions recorded with this scene.
     #[serde(default)]
     pub knowledge_learned: Vec<KnowledgeLearnedEntry>,
+    /// The scene's realized report (realized Value Turns, Character Effects,
+    /// realized promise events and dramatised planned Key Facts).
+    ///
+    /// The McKee drafting path's structured field: it counts as structured
+    /// continuity content, so a Scene that reports its realized turn satisfies
+    /// the mandatory package without inventing a canon change. Additive and
+    /// skipped when unset, so an existing save payload is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realized_report: Option<crate::realized::RealizedReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

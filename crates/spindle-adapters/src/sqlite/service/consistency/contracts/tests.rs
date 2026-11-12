@@ -5089,6 +5089,7 @@ fn max_scene_rating_picks_strictest_across_the_batch() {
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             location_id: None,
+            realized_report: None,
         }
     }
     // Empty batch → None.
@@ -5803,6 +5804,7 @@ fn world_rule_deep_check_prompt_carries_scene_content_rating() {
         created_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
         updated_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
         location_id: None,
+        realized_report: None,
     };
     let rule = crate::sqlite::records::WorldRule {
         id: "world_rule:limits".to_string(),

@@ -4452,6 +4452,17 @@ pub fn format_realized_scenes_markdown(scenes: &[RealizedScene]) -> String {
             scene.scene_order,
             scene.summary.trim()
         ));
+        // Only a Scene whose realized report was saved gains these lines, so a
+        // report-less scene (and every non-McKee project) renders as before.
+        if let Some(report) = &scene.realized_report {
+            for turn in &report.value_turns {
+                lines.push(format!(
+                    "  - Value Turn {}: {}",
+                    turn.axis.trim(),
+                    spindle_core::realized::format_value_turn(turn.opening, turn.closing)
+                ));
+            }
+        }
     }
     lines.join("\n")
 }

@@ -451,6 +451,13 @@ impl Repository {
         let chapter_number = input.chapter_number;
         let scene_order = input.scene_order;
         let location_id = input.location_id.clone();
+        // A save REPLACES the Scene's realized report: the report describes the
+        // text just saved, and omitting it leaves the Scene with none (V0061).
+        let realized_report_json = input
+            .realized_report
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
         let receipt_claim_owned = receipt_claim;
 
         if let Some(existing) = existing {
@@ -523,8 +530,9 @@ impl Repository {
                         // COALESCE preserves the existing location when this
                         // re-save omits one, so a prose-only edit never clears it.
                         "UPDATE scene SET full_text = ?1, summary = ?2, content_rating = ?3, \
-                         tone = ?4, location_id = COALESCE(?5, location_id), updated_at = ?6 \
-                         WHERE id = ?7",
+                         tone = ?4, location_id = COALESCE(?5, location_id), updated_at = ?6, \
+                         realized_report = ?7 \
+                         WHERE id = ?8",
                         rusqlite::params![
                             &new_full_text,
                             &new_summary,
@@ -532,6 +540,7 @@ impl Repository {
                             &new_tone,
                             &location_id,
                             now,
+                            &realized_report_json,
                             &existing_id,
                         ],
                     )?;
@@ -583,8 +592,9 @@ impl Repository {
                     tx.execute(
                         "INSERT INTO scene (id, project_id, branch_id, book_id, chapter_id, \
                          book_number, chapter_number, scene_order, full_text, summary, \
-                         content_rating, tone, draft_origin, location_id, created_at, updated_at) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, ?14, ?14)",
+                         content_rating, tone, draft_origin, location_id, created_at, updated_at, \
+                         realized_report) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, ?14, ?14, ?15)",
                         rusqlite::params![
                             &scene_id,
                             &project_id_owned,
@@ -600,6 +610,7 @@ impl Repository {
                             &tone,
                             &location_id,
                             now,
+                            &realized_report_json,
                         ],
                     )?;
                     tx.commit()?;

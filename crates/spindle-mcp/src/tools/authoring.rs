@@ -424,6 +424,17 @@ impl ToolRouter {
         &self,
         input: AuthoringPrepareRunInput,
     ) -> anyhow::Result<AuthoringPrepareRunOutput> {
+        // This tool prepares a RUN, so an absent revise budget means the run's
+        // documented default of zero rather than "no run". A McKee project
+        // requires a non-zero budget at prepare time (issue #32), and making the
+        // default explicit here is also what refuses `authoring_start_run` when
+        // it threads a canonicalized `None` through this handler. The internal
+        // planning readiness probe calls the service directly with `None`, so it
+        // keeps reporting planning readiness rather than a run's budget.
+        let mut input = input;
+        if input.max_revise_attempts.is_none() {
+            input.max_revise_attempts = Some(0);
+        }
         self.service.prepare_authoring_run(input).await
     }
 

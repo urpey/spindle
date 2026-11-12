@@ -315,9 +315,10 @@ byte-identical to the pre-evolution flow:
 Verify is deterministic: it runs the scene-scoped subset
 `spindle_core::models::SCENE_VERIFY_CHECKS` (knowledge_timing, chronology,
 temporal_coherence Tier 1, quantity/currency/affordability, tone,
-content-boundary, secret_leak, canonical-fact consistency, and the prose-drift /
-world-rule / voice / style Phase-4 validators — no model calls; deep/model tiers
-stay checkpoint-scoped for cost). The loop converges or stops: the same finding
+content-boundary, secret_leak, canonical-fact consistency, the four McKee
+realized-report checks below, and the prose-drift / world-rule / voice / style
+Phase-4 validators — no model calls; deep/model tiers stay checkpoint-scoped for
+cost). The loop converges or stops: the same finding
 set is never revised twice (an unchanged re-verify parks the scene), and parked
 findings inherit to the checkpoint. Every pass records an **honest** per-scene /
 per-chapter outcome in `authoring_status` (`mine_status`, `verify_status`,
@@ -858,6 +859,8 @@ resume unchanged). The continuity and editorial-loop migrations:
 | V0057 | McKee project marker (`project.mckee_structured`, set only by planning `CreateProject`) and project-level `story_spine` (one series spine, optional per-book sub-spines) |
 | V0058 | McKee Main Plot / Subplot structure on `plot_line`: nullable `value_axis`, closed-set `subplot_job` (contradict / resonate / set_up / complicate) and the `main_plot` flag (additive: unmarked rows keep NULL / 0, but a McKee project's pre-existing plot lines must be completed through `update_entity` before the next Series-Arc/Book acceptance) |
 | V0059 | McKee Character Design: one `character_design` row per character (2–5 contradictions, public / personal / private layers, conscious desire, pressure on the protagonist, behaviour cues) with `hidden_self_fact_id` / `unconscious_desire_fact_id` pointing at secret canonical facts rather than duplicating those texts. Additive: existing projects keep no rows |
+| V0060 | McKee Narrative Promise payoff structure: `narrative_promise.planned_payoff_turning_beat` and `target_act` (both additive, nullable) |
+| V0061 | McKee realized report on `scene.realized_report`: nullable JSON holding the realized Value Turns, Character Effects, realized promise events and dramatised planned Key Facts. Additive: existing rows keep NULL and every read skips an unset report |
 
 ## Where to make changes
 
@@ -1322,6 +1325,77 @@ class cannot add Sequence membership or a value plan, so it must restage the
 Chapter planning artifact instead. `scene_replace` keeps the value-plan fields
 untouched, while `scene_drop`/`scene_reorder`/`synopsis_update` remain available
 and do not cascade into `schedule.sequences` (follow-up #34).
+
+### McKee realized reports and deterministic scene verify
+
+A written Scene reports what its prose actually did. The realized report
+(`spindle_core::realized`, V0061 `scene.realized_report`) carries four additive,
+serde-defaulted sections:
+
+- `value_turns`: one realized **Value Turn** per planned Value Axis (primary and
+  secondaries) with the realized opening and closing **Charge**, the realized
+  **Gap** (expected versus actual) and the realized **Turning Beat** (a 1-based
+  Beat position and/or a summary).
+- `character_effects`: one **Character Effect** per present major character
+  (`reinforce`, `reveal`, `contradict`, `change`, `none`).
+- `promise_events`: the Narrative Promise events the Scene advanced
+  (`setup`, `reinforcement`, `payoff`, `subversion`, `abandonment`).
+- `key_fact_ids`: the planned **Key Facts** the Scene dramatised (canonical-fact
+  ids).
+
+The report rides both continuity-carrying save paths: `commit_scene`'s
+`CommitSceneContinuityPackage.realized_report` and
+`authoring_save_scene_draft`'s structured `realized_report` field (which also
+counts as structured continuity content, so a McKee Scene that only reports its
+turn still satisfies the mandatory package). It is persisted on the Scene row
+and read back additively: `get_entity(table="scene")` carries `realized_report`
+when set, `get_scene_context`/`get_chapter_briefing` carry it on each earlier
+Scene's `novel.realized_scenes` entry, and an unset report is skipped entirely —
+so a Scene saved without a report, and every non-McKee project, serialize
+byte-identically. A save replaces the stored report (the report describes the
+text just saved); omitting it leaves the Scene with none.
+
+Four deterministic checks join the fast scene-verify subset
+(`SCENE_VERIFY_CHECKS`, no model calls) and run only for a McKee project. All
+four findings are `error`, use the existing consistency-finding shape and are
+attributed to the Scene (`entity_ids` starts with the Scene id):
+
+| `check_type` | Rule |
+| --- | --- |
+| `realized_value_turn` | A planned Value Axis with no realized turn, a realized opening/closing **Charge** that differs from the plan (exact comparison), a planned Gap the report never mentions, a realized Turning Beat position that differs from the plan, a report with no Value Turn at all for a Scene that has a planned one, or a realized axis the plan does not contain. |
+| `realized_key_fact` | A planned Key Fact due in this Scene (the same due rule the drafting packet uses) that the report does not list in `key_fact_ids`. |
+| `realized_promise_event` | A promise planned to be planted or paid off in this Scene (an exact Scene placement, not a chapter-wide one) that the report does not report as the matching event. |
+| `character_effect` | `change` reported where no planned arc milestone of kind `change` is placed, or a planned change milestone reported as anything other than `change` (including `reveal`, and including no effect at all). |
+
+Comparison tolerances are deliberate and documented on
+`spindle_core::realized`: Charge comparison is exact (a closed typed pair);
+Gap comparison is by presence, not wording (the Gap is prose the writer
+legitimately paraphrases); the Turning Beat is position-compared only when the
+report numbers one, and a summary-only reference is accepted. `get_entity` reads
+a Key Fact by the reserved predicate namespace, so an ordinary planned fact is
+never demanded.
+
+**Promise status is system-written.** After a confirmed realized promise event
+saves through either path, the system itself advances that promise's status
+through the existing promise status-history mechanism, with the saved Scene as
+`source_scene_id`: `setup` → `planted`, `reinforcement` → `reinforced`, `payoff`
+→ `paid_off`, `subversion` → `subverted`, `abandonment` → `abandoned`. The agent
+no longer calls `update_promise_status` for a McKee scene. The report is
+pre-validated before the prose write (the promise must exist, be on a branch the
+Scene inherits, and not be planted after the Scene), so an unusable event fails
+the save before it writes anything; a re-save of the same Scene with the same
+event is idempotent. Non-McKee projects never advance a status from a report, and
+the `update_promise_status` tool keeps working for every other flow.
+
+**Revise budget.** A McKee run must prepare with a non-zero
+`max_revise_attempts` (`1` or `2`): `authoring_prepare_run` reports a missing
+requirement and `ready_to_draft=false`, and `authoring_start_run` therefore
+refuses to start. A zero/absent run budget means a Scene that realized a turn
+different from its plan would have no bounded revise attempt before the
+checkpoint. The `authoring_prepare_run` tool resolves an absent budget to the
+run default of zero, so an omitted field blocks a McKee run just as an explicit
+`0` does; the internal planning readiness probe is not a run and keeps reporting
+planning readiness. Non-McKee projects are unaffected.
 
 The hidden layer and the unconscious desire are not plain columns: they are
 registered as secret canonical facts (`secret = 1`, one `knowledge_fact` row

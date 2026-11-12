@@ -1663,9 +1663,17 @@ impl SqliteSpindleService {
             earlier.sort_by_key(|scene| scene.scene_order);
             earlier
                 .into_iter()
-                .map(|scene| RealizedScene {
-                    scene_order: scene.scene_order,
-                    summary: scene.summary,
+                .map(|scene| {
+                    // The realized report travels with the earlier Scene's
+                    // result so the writer sees what the prose actually did
+                    // (Value Turn), not only what it was about. `None` for a
+                    // Scene saved without a report, so the payload is unchanged.
+                    let realized_report = scene.realized_report.clone();
+                    RealizedScene {
+                        scene_order: scene.scene_order,
+                        summary: scene.summary,
+                        realized_report,
+                    }
                 })
                 .collect()
         } else {
@@ -3798,26 +3806,20 @@ impl SqliteSpindleService {
         // Character Design secrets are excluded: they are author-only and are
         // never a drafting constraint.
         let due_key_facts = if mckee {
-            let current_index =
-                crate::format::story_index(book_number, chapter_number, scene_order);
             self.repository
                 .list_canonical_facts_by_project_and_branch(&project.id, &branch.id)
                 .await?
                 .into_iter()
-                .filter(|fact| spindle_core::key_fact::is_key_fact_predicate(&fact.predicate))
-                .filter(|fact| !crate::format::is_planning_only_secret_fact(fact))
-                .filter(|fact| fact.superseded_by.is_none())
+                // ONE due rule, shared with the deterministic verify check
+                // (`realized_key_fact`), so the packet's hard constraints and
+                // the verify findings can never disagree.
                 .filter(|fact| {
-                    fact.valid_from.as_ref().is_some_and(|from| {
-                        from.book_number == book_number
-                            && from.chapter_number == chapter_number
-                            && (from.scene_order.is_none() || from.scene_order == Some(scene_order))
-                    })
-                })
-                .filter(|fact| {
-                    fact.valid_until.as_ref().is_none_or(|until| {
-                        crate::format::story_index_from_placement(until) >= current_index
-                    })
+                    super::mckee::key_fact_is_due_in_scene(
+                        fact,
+                        book_number,
+                        chapter_number,
+                        scene_order,
+                    )
                 })
                 .collect::<Vec<_>>()
         } else {

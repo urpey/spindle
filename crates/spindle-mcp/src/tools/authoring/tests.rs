@@ -66,6 +66,7 @@ fn knowledge_learned_counts_toward_package_satisfaction() {
         beats: Vec::new(),
         continuity_notes: Vec::new(),
         knowledge_learned: Vec::new(),
+        realized_report: None,
     };
     assert_eq!(
         super::authoring_structured_update_count(&base),
@@ -640,5 +641,251 @@ async fn prepare_run_chapter_count_happy_path_computes_end_chapter() {
     assert!(
         !has_range_message(missing),
         "normal range must not report out of bounds: {missing:?}"
+    );
+}
+
+/// Create a McKee-structured project through the public planning entry tools
+/// (contract root only): `begin_planning` → stage the contract artifact →
+/// accept it as a human actor. The resulting project carries the McKee marker,
+/// which is what the revise-budget requirement is gated on.
+async fn mckee_project_via_planning(router: &ToolRouter) -> String {
+    let begun = structured_json(
+        router
+            .call_tool(
+                "planning_begin",
+                Some(
+                    serde_json::json!({"premise": "A harbor archivist hears the bell"})
+                        .as_object()
+                        .unwrap(),
+                ),
+            )
+            .await
+            .expect("planning_begin"),
+    );
+    let session_id = begun["session"]["session_id"]
+        .as_str()
+        .expect("session id")
+        .to_string();
+    let staged = structured_json(
+        router
+            .call_tool(
+                "planning_advance",
+                Some(
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "action": "stage_host_artifact",
+                        "level": "contract",
+                        "retry_key": "mckee-32-contract",
+                        "host_artifact": {
+                            "schema_version": 1,
+                            "level": "contract",
+                            "rationale": "Review the reader promise before creating the project.",
+                            "operations": [{
+                                "output_ref": "project:root",
+                                "operation": {"operation": "create_project", "input": {
+                                    "name": "The Clapperless Bell",
+                                    "project_type": "novel",
+                                    "genre": "mystery",
+                                    "reader_contract": {
+                                        "promise": "A fair-play mystery",
+                                        "style_notes": [],
+                                        "boundaries": []
+                                    }
+                                }}
+                            }]
+                        }
+                    })
+                    .as_object()
+                    .unwrap(),
+                ),
+            )
+            .await
+            .expect("planning_advance"),
+    );
+    let proposal = &staged["advance"]["proposal"];
+    assert_eq!(proposal["status"], "staged", "{staged}");
+    let decided = structured_json(
+        router
+            .call_tool(
+                "planning_decide",
+                Some(
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "action": "decide",
+                        "decision": "accept",
+                        "expected_hashes": {
+                            proposal["proposal_id"].as_str().unwrap():
+                            proposal["payload_hash"].as_str().unwrap()
+                        },
+                        "actor": "author:test",
+                        "note": "Approve the contract root."
+                    })
+                    .as_object()
+                    .unwrap(),
+                ),
+            )
+            .await
+            .expect("planning_decide"),
+    );
+    assert_eq!(decided["decided"][0]["status"], "applied", "{decided}");
+    decided["session"]["project_id"]
+        .as_str()
+        .expect("attached project id")
+        .to_string()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mcp_prepare_run_blocks_a_mckee_run_with_a_zero_revise_budget() {
+    let (router, _tmp_guard) = router().await;
+    let project_id = mckee_project_via_planning(&router).await;
+
+    // Absent budget: this tool prepares a run, so absent means the run default
+    // of zero — which is blocking for a McKee project.
+    let prepared = structured_json(
+        router
+            .call_tool(
+                "authoring_prepare_run",
+                Some(
+                    serde_json::json!({
+                        "project_id": project_id,
+                        "book_number": 1,
+                        "start_chapter": 1,
+                        "end_chapter": 1
+                    })
+                    .as_object()
+                    .unwrap(),
+                ),
+            )
+            .await
+            .expect("authoring_prepare_run"),
+    );
+    assert_eq!(prepared["ready_to_draft"], false, "{prepared}");
+    assert!(
+        prepared["missing_requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|requirement| requirement
+                .as_str()
+                .is_some_and(|text| text.contains("max_revise_attempts"))),
+        "the blocking budget requirement is reported: {prepared}"
+    );
+
+    // An explicit non-zero budget removes it again.
+    let with_budget = structured_json(
+        router
+            .call_tool(
+                "authoring_prepare_run",
+                Some(
+                    serde_json::json!({
+                        "project_id": project_id,
+                        "book_number": 1,
+                        "start_chapter": 1,
+                        "end_chapter": 1,
+                        "max_revise_attempts": 1
+                    })
+                    .as_object()
+                    .unwrap(),
+                ),
+            )
+            .await
+            .expect("authoring_prepare_run"),
+    );
+    assert!(
+        !with_budget["missing_requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|requirement| requirement
+                .as_str()
+                .is_some_and(|text| text.contains("max_revise_attempts"))),
+        "{with_budget}"
+    );
+
+    // A direct (non-McKee) project keeps today's behaviour: no budget rule.
+    let legacy_project = structured_json(
+        router
+            .call_tool(
+                "create_project",
+                Some(
+                    serde_json::to_value(CreateProjectInput {
+                        name: "Existing".into(),
+                        project_type: "novel".into(),
+                        genre: "mystery".into(),
+                        reader_contract: ReaderContract {
+                            promise: "Unchanged".into(),
+                            style_notes: vec![],
+                            boundaries: vec![],
+                        },
+                    })
+                    .unwrap()
+                    .as_object()
+                    .unwrap(),
+                ),
+            )
+            .await
+            .expect("create_project"),
+    );
+    let legacy_project_id = legacy_project["project_id"]
+        .as_str()
+        .expect("project id")
+        .to_string();
+    let legacy = structured_json(
+        router
+            .call_tool(
+                "authoring_prepare_run",
+                Some(
+                    serde_json::json!({
+                        "project_id": legacy_project_id,
+                        "book_number": 1,
+                        "start_chapter": 1,
+                        "end_chapter": 1
+                    })
+                    .as_object()
+                    .unwrap(),
+                ),
+            )
+            .await
+            .expect("authoring_prepare_run"),
+    );
+    assert!(
+        !legacy["missing_requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|requirement| requirement
+                .as_str()
+                .is_some_and(|text| text.contains("max_revise_attempts"))),
+        "{legacy}"
+    );
+}
+
+/// The realized report is a public contract field on BOTH continuity-carrying
+/// save paths, additively (the rest of each schema is unchanged; the catalog
+/// snapshot test pins the bytes).
+#[tokio::test(flavor = "current_thread")]
+async fn mcp_save_paths_expose_the_realized_report_field() {
+    let (router, _tmp_guard) = router().await;
+    let tools = router.list_tools();
+    let schema = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .map(|tool| serde_json::to_value(tool).expect("tool json"))
+            .unwrap_or_else(|| panic!("tool {name} exists"))
+    };
+    let save = schema("authoring_save_scene_draft");
+    assert!(
+        save["inputSchema"]["properties"]
+            .get("realized_report")
+            .is_some(),
+        "authoring_save_scene_draft exposes realized_report"
+    );
+    let commit = schema("commit_scene");
+    assert!(
+        commit["inputSchema"]["properties"]["continuity"]["properties"]
+            .get("realized_report")
+            .is_some(),
+        "commit_scene's continuity package exposes realized_report"
     );
 }

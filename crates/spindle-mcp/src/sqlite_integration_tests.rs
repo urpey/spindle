@@ -8818,6 +8818,7 @@ async fn host_draft_handoff_rejects_save_against_superseded_plan_revision_until_
                 research_query_pack_input: None,
                 research_context_hash: None,
                 knowledge_learned: vec![],
+                realized_report: None,
             },
             || async {
                 let staged = fx
@@ -8939,6 +8940,7 @@ async fn host_draft_handoff_rejects_save_against_superseded_plan_revision_until_
             research_query_pack_input: None,
             research_context_hash: None,
             knowledge_learned: vec![],
+            realized_report: None,
         })
         .await;
     assert!(
@@ -10720,6 +10722,9 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
         "{readiness}"
     );
 
+    // A McKee run requires a non-zero revise budget (issue #32): without it
+    // `authoring_start_run` refuses to start, because a Scene that realized a
+    // turn different from its plan would have no bounded revise attempt.
     let start = planning_call(
         &router,
         "authoring_start_run",
@@ -10730,7 +10735,8 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
             "end_chapter": 1,
             "checkpoint_interval": 1,
             "mode": "hybrid",
-            "checkpoint_policy": "manual"
+            "checkpoint_policy": "manual",
+            "max_revise_attempts": 1
         }),
     )
     .await;
@@ -10766,7 +10772,21 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
             "content_rating": "general",
             "tone": "hushed",
             "beats": [{"beat_type": "hook", "summary": "The bell rings without a ringer."}],
-            "continuity_notes": ["The bell rope is cut and salted."]
+            "continuity_notes": ["The bell rope is cut and salted."],
+            // The scene's realized report: it turns the planned primary Value
+            // Axis exactly as planned, reports the planned Gap and Turning Beat,
+            // and (there is no planned change milestone or promise here) reports
+            // no character effect or promise event. The deterministic verify
+            // must stay clean so the loop commits.
+            "realized_report": {
+                "value_turns": [{
+                    "axis": "truth",
+                    "opening": {"sign": "positive", "depth": "positive"},
+                    "closing": {"sign": "negative", "depth": "contrary"},
+                    "gap": {"expected": "The rope was cut by weather", "actual": "The cut is fresh and salted"},
+                    "turning_beat": 3
+                }]
+            }
         }),
     )
     .await;
@@ -10779,6 +10799,21 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
         "Mara hears the bell and finds the cut rope."
     );
 
+    // The opt-in verify step runs first; the realized report makes it clean, so
+    // the next step is the commit.
+    let verify = planning_call(
+        &router,
+        "authoring_execute_next",
+        serde_json::json!({"project_id": readiness["session"]["project_id"], "run_id": run_id}),
+    )
+    .await;
+    assert!(
+        verify["executed_action"]
+            .as_str()
+            .unwrap()
+            .contains("verify scene"),
+        "{verify}"
+    );
     let commit = planning_call(
         &router,
         "authoring_execute_next",

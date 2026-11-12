@@ -178,6 +178,7 @@ pub(super) fn authoring_save_scene_input(
         research_query_pack_input: input.research_query_pack_input.clone(),
         research_context_hash: input.research_context_hash.clone(),
         knowledge_learned: input.knowledge_learned.clone(),
+        realized_report: input.realized_report.clone(),
     }
 }
 
@@ -188,6 +189,15 @@ pub(super) fn authoring_structured_update_count(input: &AuthoringSaveSceneDraftI
         + input.beats.len()
         + input.continuity_notes.len()
         + input.knowledge_learned.len()
+        // A McKee realized report is structured content about the saved Scene,
+        // so it satisfies the mandatory package on its own: a Scene whose prose
+        // turns the plan without changing canon still reports what it did.
+        + usize::from(
+            input
+                .realized_report
+                .as_ref()
+                .is_some_and(|report| !report.is_empty()),
+        )
 }
 
 impl ToolRouter {
@@ -904,8 +914,9 @@ impl ToolRouter {
             anyhow::bail!(
                 "authoring_save_scene_draft requires a structured continuity package: \
                  provide character_states, canonical_facts, relationship_updates, beats, \
-                 or continuity_notes. If the scene introduces no durable canon changes, \
-                 add a continuity_notes entry saying that explicitly."
+                 continuity_notes, or (on a McKee project) a realized_report. If the scene \
+                 introduces no durable canon changes, add a continuity_notes entry saying \
+                 that explicitly."
             );
         }
 

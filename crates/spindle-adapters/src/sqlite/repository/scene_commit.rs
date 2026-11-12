@@ -130,6 +130,14 @@ impl CanonTransaction<'_> {
         let chapter_id =
             self.chapter_id_in_tx(project_id, input.book_number, input.chapter_number)?;
         let content_rating = input.content_rating.as_db_str();
+        // A save REPLACES the Scene's realized report (V0061): the report
+        // describes the text just saved, and omitting it leaves the Scene with
+        // none. Serialized once, used by both the UPDATE and INSERT paths.
+        let realized_report_json = input
+            .realized_report
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
         let now = timestamp_to_micros(chrono::Utc::now());
         let existing = self.find_scene_by_natural_key_in_tx(
             project_id,
@@ -180,7 +188,8 @@ impl CanonTransaction<'_> {
             self.conn().execute(
                 "UPDATE scene SET full_text = ?1, summary = ?2, content_rating = ?3, \
                  tone = ?4, location_id = COALESCE(?5, location_id), \
-                 draft_origin = COALESCE(?6, draft_origin), updated_at = ?7 WHERE id = ?8",
+                 draft_origin = COALESCE(?6, draft_origin), updated_at = ?7, \
+                 realized_report = ?8 WHERE id = ?9",
                 rusqlite::params![
                     &input.full_text,
                     &input.summary,
@@ -189,6 +198,7 @@ impl CanonTransaction<'_> {
                     &input.location_id,
                     draft_origin,
                     now,
+                    &realized_report_json,
                     &existing.id,
                 ],
             )?;
@@ -221,8 +231,9 @@ impl CanonTransaction<'_> {
             self.conn().execute(
                 "INSERT INTO scene (id, project_id, branch_id, book_id, chapter_id, \
                  book_number, chapter_number, scene_order, full_text, summary, \
-                 content_rating, tone, draft_origin, location_id, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
+                 content_rating, tone, draft_origin, location_id, created_at, updated_at, \
+                 realized_report) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16)",
                 rusqlite::params![
                     &scene_id,
                     project_id,
@@ -239,6 +250,7 @@ impl CanonTransaction<'_> {
                     draft_origin,
                     &input.location_id,
                     now,
+                    &realized_report_json,
                 ],
             )?;
             super::memory::invalidate_layered_memory_for_scene_in_conn(
