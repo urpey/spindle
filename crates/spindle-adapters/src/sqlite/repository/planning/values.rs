@@ -310,6 +310,19 @@ fn validate_own_sequences(input: &StagePlanningInput, findings: &mut Vec<Plannin
                 "Merge the two entries into one Sequence; a key identifies exactly one Sequence.",
             ));
         }
+        if !key.is_empty()
+            && !spindle_core::sequences::sequence_key_is_valid(&sequence.sequence_key)
+        {
+            findings.push(planning_finding(
+                "sequence_key_invalid",
+                PlanningFindingSeverity::Blocking,
+                format!("{base}/sequence_key"),
+                Vec::new(),
+                "a non-empty key of at most 128 ASCII characters from alphanumerics, '-', '_' or ':'",
+                format!("{:?}", sequence.sequence_key),
+                "Use a pointer-safe key such as 'seq:opening': it is the global merge identity and appears in finding locators, so whitespace, '/' and '~' are rejected.",
+            ));
+        }
         if sequence.plot_line_id.is_none() {
             findings.push(planning_finding(
                 "sequence_missing_plot_line",

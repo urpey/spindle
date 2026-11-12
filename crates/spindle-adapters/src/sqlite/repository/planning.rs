@@ -1038,12 +1038,20 @@ const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "act_cause_not_a_subplot",
     "act_cause_after_act_climax",
     "act_cause_after_convergence_point",
+    // Global Sequence identity (a key refines one Sequence; it cannot move its
+    // plot line, and unsafe keys cannot be locator segments).
+    "sequence_plot_line_changed",
+    "sequence_key_invalid",
 ];
 
-/// One blocking finding rendered for a caller-facing error string. The path
-/// locates the field (an artifact operation path, a set path, or
-/// `/existing_plot_lines/<record_id>`), and `related_refs` carries the record
-/// ids or output refs an author needs to find the row.
+/// One blocking finding rendered for a caller-facing error string. The path is
+/// a descriptive locator, not necessarily a pointer into the staged request: it
+/// may name an artifact field (`/schedule/...`), a merged-set entry
+/// (`/merged_sequences/<sequence_key>`), an accepted row
+/// (`/existing_plot_lines/<record_id>/<field>`, `/accepted_acts/<order>/cause`)
+/// or a staged ancestor's entry (`/staged_acts/<order>/cause`). `related_refs`
+/// carries the record ids or output refs an author needs to find the row (and
+/// is empty when the path alone identifies the repair site).
 pub(crate) fn describe_blocking_finding(finding: &PlanningFinding) -> String {
     let related = if finding.related_refs.is_empty() {
         String::new()
@@ -2137,7 +2145,9 @@ fn evaluated_plot_line_candidates_in_conn(
                     continue;
                 }
                 let stored_points: Vec<crate::sqlite::json_records::StoredStoryPlacement> =
-                    serde_json::from_str(&convergence_json).unwrap_or_default();
+                    serde_json::from_str(&convergence_json).with_context(|| {
+                        format!("invalid convergence_points JSON on plot line {id}")
+                    })?;
                 let convergence_points = stored_points
                     .into_iter()
                     .map(|point| PlanningStoryPlacement {
@@ -2286,6 +2296,12 @@ fn validate_mckee_plot_lines(
     }
 
     let candidates = evaluated_plot_line_candidates_in_conn(conn, input, scope)?;
+
+    // The missing-Convergence-Point advisory belongs where the Subplot is
+    // authored: report it over the merged plot-line set at Series-Arc/Book time
+    // instead of waiting for a later Chapter batch. It stays advisory and
+    // re-reports on later stagings so the gap stays visible.
+    subplots::validate_subplot_convergence_advisory(&candidates, findings);
 
     let main_plots: Vec<&PlotLineStructureCandidate> =
         candidates.iter().filter(|item| item.is_main_plot).collect();
@@ -5175,7 +5191,9 @@ fn validate_stage_input_in_conn_excluding(
     validate_mckee_plot_lines(conn, input, &s.scope, &mut findings)?;
     validate_mckee_character_designs(conn, input, &s.scope, &mut findings)?;
     validate_mckee_acts(conn, input, &s.scope, &mut findings)?;
-    subplots::validate_mckee_act_causes(conn, input, &s.scope, &mut findings)?;
+    if let Some(scope) = s.scope.as_ref() {
+        subplots::validate_mckee_act_causes(conn, input, scope, &mut findings)?;
+    }
     validate_mckee_act_climax_placements(conn, input, &s.scope, &mut findings)?;
     validate_mckee_pacing_curve_breakpoints(conn, input, &s.scope, &mut findings)?;
     values::validate_mckee_value_chain(conn, input, &s.scope, &mut findings)?;

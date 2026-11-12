@@ -7,30 +7,44 @@
   that Subplot's Convergence Points is a stage-recordable Blocking finding
   (`subplot_sequence_climax_after_convergence_point`); a climax at or before a
   point satisfies the rule, and a Subplot with no Convergence Point is advisory
-  instead. Four advisories never block: a Subplot with no Convergence Point, a
-  Subplot Value Axis that goes three consecutive scanned Chapters without a turn
-  (a chapter gap or a turning Chapter resets the run), a Subplot whose turns do
-  not support its declared job (`contradict` needs a turn ending negative,
-  `resonate` one ending positive; `set_up` and `complicate` impose no direction),
-  and a Subplot turning deeper than the Main Plot inside one Act (Act N covers
-  the Scenes after Act N-1's climax up to and including its own; the Main Plot
-  axis is its `value_axis`, falling back to the series Spine Axis). The findings
-  use JSON-pointer paths into `schedule.sequences` or `/merged_sequences/...`
-  and are exempt for unmarked projects. The heuristics and exact run/range
+  instead. Four advisories never block: a Subplot with no Convergence Point
+  (also reported when a Series-Arc/Book artifact authors the Subplot, over the
+  merged plot-line set), a Subplot Value Axis that goes three consecutive
+  scanned Chapters without a turn (a chapter gap, a turning Chapter or a book
+  change resets the run), a Subplot whose turns do not support its declared job
+  (`contradict` needs a turn ending negative, `resonate` one ending positive;
+  `set_up` and `complicate` impose no direction), and a Subplot turning deeper
+  than the Main Plot inside one Act (Act N covers the Scenes after Act N-1's
+  climax up to and including its own; the Main Plot axis is its `value_axis`,
+  falling back to the series Spine Axis). The depth comparison runs only when
+  the merged Acts' exact climaxes rise strictly in global story order (book,
+  chapter, scene), so a cross-book out-of-order Act list skips it instead of
+  reading one Act's turns as another's; a Subplot that legally shares the Main
+  Plot's Value Axis reads the same turns on both sides and cannot false-positive.
+  Findings use descriptive locators (`/schedule/...`,
+  `/merged_sequences/{sequence_key}/...`, `/existing_plot_lines/{id}/...`) and
+  are exempt for unmarked projects. The heuristics and exact run/range
   definitions are documented in `docs/planning-engine-design.md`.
 - Let an **Act climax cite a Subplot Sequence climax as its cause**:
   `PlannedAct` gains an optional `cause` (`{ plot_line_id, sequence_key }`,
-  additive and skipped when absent, so existing Act JSON is unchanged). At
-  Series-Arc/Book acceptance the merged Act's cause must resolve to a Subplot
-  plot line and a Sequence of that Subplot whose climax is at or before a
-  Convergence Point and at or before the Act's own climax. Failures are
-  stage-recordable Blocking findings
-  (`act_cause_unresolved_subplot_sequence`, `act_cause_not_a_subplot`,
-  `act_cause_after_act_climax`, `act_cause_after_convergence_point`), and an
-  inherited Act's cause is reported at `/merged_acts/{order}/cause/...`. A later
-  Book/Series-Arc artifact can be staged after Chapter Sequences exist, so the
-  cause resolves in practice. `planning_status` exposes the cause in the
-  proposal schedule; there is no new tool, table or migration.
+  additive and skipped when absent, so existing Act JSON is unchanged). The
+  `sequence_key` is a **global** merge identity: a refinement must keep its plot
+  line (`sequence_plot_line_changed` otherwise), and an unsafe key is rejected
+  (`sequence_key_invalid`) so it stays usable in locators. At Series-Arc/Book
+  acceptance the merged Act's cause must resolve to a Subplot plot line and a
+  Sequence of that Subplot whose climax is at or before a Convergence Point and
+  at or before the Act's own climax; Chapter/Scene staging re-checks the merged
+  accepted Acts against refined Sequences, so a later refinement cannot
+  silently invalidate an accepted cause. Failures are stage-recordable Blocking
+  findings (`act_cause_unresolved_subplot_sequence`, `act_cause_not_a_subplot`,
+  `act_cause_after_act_climax`, `act_cause_after_convergence_point`); an
+  accepted Act's cause is reported at `/accepted_acts/{order}/cause/...`, a
+  staged ancestor's at `/staged_acts/{order}/cause/...`. A later Book/Series-Arc
+  artifact can be staged after Chapter Sequences exist, so the cause resolves in
+  practice, but the forward pass usually cannot author it: the author re-stages
+  that level after the Chapter Sequences are accepted.
+  `planning_status` exposes the cause in the proposal schedule; there is no new
+  tool, table or migration.
 - Add the **Key Fact** planning operation (`create_key_fact`) to the closed
   allowlist at the Chapter and Scene levels. Its closed turning set is `death`,
   `revealed_secret`, `relationship_turn`, `item_gained`, `item_lost`,

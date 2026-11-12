@@ -12,8 +12,32 @@ use crate::planning::{PlannedSequence, PlanningStoryPlacement};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
+/// The maximum `sequence_key` length, matching proposal output refs.
+pub const SEQUENCE_KEY_MAX_LEN: usize = 128;
+
+/// Whether `key` is usable as a stable Sequence identity and a
+/// JSON-pointer-ish finding locator segment.
+///
+/// A key is non-empty, at most [`SEQUENCE_KEY_MAX_LEN`] bytes, and contains
+/// only ASCII alphanumerics plus `-`, `_` and `:` (the same shape proposal
+/// output refs use). Whitespace, `/` and `~` are rejected so the key can be
+/// embedded in a locator such as `/merged_sequences/{key}/climax_scene`.
+pub fn sequence_key_is_valid(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= SEQUENCE_KEY_MAX_LEN
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_:".contains(&byte))
+}
+
 /// Merge Sequence lists by `sequence_key`: a later entry **refines** a Sequence
 /// instead of replacing it. The result is sorted by `sequence_key`.
+///
+/// The key is **global**, not scoped to one plot line: the merged set is keyed
+/// by it alone. A later entry that reuses a key while changing `plot_line_id` is
+/// therefore a data error, reported by the planning validator as
+/// `sequence_plot_line_changed`; this pure merge still applies the overlay so
+/// the rest of the evaluation sees the proposed data and can report the defect.
 ///
 /// For the same key the overlay overrides the scalar fields (`plot_line_id`,
 /// `question`, `inciting_scene`, `climax_scene`) and **unions**
@@ -119,6 +143,28 @@ mod tests {
             climax_scene: members.last().cloned(),
             member_scenes: members,
         }
+    }
+
+    #[test]
+    fn sequence_keys_must_be_pointer_safe() {
+        for key in ["seq:opening", "seq_2", "opening", "a-b"] {
+            assert!(sequence_key_is_valid(key), "{key} should be valid");
+        }
+        for key in [
+            "",
+            "seq opening",
+            " seq:opening",
+            "seq:opening ",
+            "seq/opening",
+            "seq~opening",
+            "seq.opening",
+        ] {
+            assert!(!sequence_key_is_valid(key), "{key:?} should be invalid");
+        }
+        assert!(!sequence_key_is_valid(
+            &"a".repeat(SEQUENCE_KEY_MAX_LEN + 1)
+        ));
+        assert!(sequence_key_is_valid(&"a".repeat(SEQUENCE_KEY_MAX_LEN)));
     }
 
     #[test]

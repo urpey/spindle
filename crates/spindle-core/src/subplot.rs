@@ -21,11 +21,67 @@ use crate::charge::{Charge, ChargeSign};
 use crate::planning::{PlannedAct, PlanningStoryPlacement};
 use crate::plot_line::SubplotJob;
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
 /// How many Chapters a Subplot's Value Axis may go unturned before the planning
 /// validator warns. A reader forgets a line that stops moving (GLOSSARY:
 /// Subplot).
 pub const DORMANT_CHAPTER_RUN: usize = 3;
+
+/// One dormant window: the Chapter that opened the unturned run and the Chapter
+/// that made it reach [`DORMANT_CHAPTER_RUN`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DormantRun {
+    /// First Chapter of the run (inclusive).
+    pub start: (i32, i32),
+    /// Chapter that completed the run (inclusive).
+    pub end: (i32, i32),
+}
+
+/// The dormant windows among the Chapters the planned range carries.
+///
+/// `planned_chapters` is scanned in story order; duplicates collapse. A Chapter
+/// **resets** the run when a turn happens in it, and a Chapter gap or a book
+/// change also resets it (a run never bridges non-adjacent Chapters or books).
+/// A run of exactly [`DORMANT_CHAPTER_RUN`] or more unturned Chapters yields one
+/// window, reported at the Chapter where the run reached the threshold; a
+/// longer run does not yield a second window.
+pub fn dormant_chapter_runs(
+    planned_chapters: impl IntoIterator<Item = (i32, i32)>,
+    turned_chapters: &BTreeSet<(i32, i32)>,
+) -> Vec<DormantRun> {
+    let mut chapters: Vec<(i32, i32)> = planned_chapters.into_iter().collect();
+    chapters.sort_unstable();
+    chapters.dedup();
+
+    let mut runs = Vec::new();
+    let mut run = 0usize;
+    let mut run_start: Option<(i32, i32)> = None;
+    let mut previous: Option<(i32, i32)> = None;
+    for chapter in chapters {
+        if turned_chapters.contains(&chapter) {
+            run = 0;
+            run_start = None;
+        } else {
+            let consecutive =
+                previous.is_some_and(|previous| chapters_are_consecutive(previous, chapter));
+            if consecutive && run > 0 {
+                run += 1;
+            } else {
+                run = 1;
+                run_start = Some(chapter);
+            }
+            if run == DORMANT_CHAPTER_RUN {
+                runs.push(DormantRun {
+                    start: run_start.unwrap_or(chapter),
+                    end: chapter,
+                });
+            }
+        }
+        previous = Some(chapter);
+    }
+    runs
+}
 
 /// Whether `climax` lands at or before at least one Convergence Point.
 ///
@@ -129,6 +185,30 @@ pub fn act_story_ranges(acts: &[PlannedAct]) -> Vec<ActStoryRange> {
         previous = Some(climax.clone());
     }
     ranges
+}
+
+/// Whether the bounded Act climaxes rise strictly in global story order when
+/// the Acts are read by `order`.
+///
+/// The Act-list gate only proves the climax chapters rise **inside one book**.
+/// A later-order Act placed in an earlier book therefore passes that gate while
+/// [`act_story_ranges`] derives an empty or overlapping range for it. Callers
+/// that compare one scene range against a different Act's turns must check this
+/// first and skip the comparison when it is false.
+///
+/// Acts with no climax, or with a chapter-wide climax, create no boundary and
+/// are ignored (the Act-list gate already reports them).
+pub fn act_climaxes_strictly_increasing(acts: &[PlannedAct]) -> bool {
+    let mut ordered: Vec<&PlannedAct> = acts.iter().collect();
+    ordered.sort_by_key(|act| act.order);
+    let bounded: Vec<&PlanningStoryPlacement> = ordered
+        .into_iter()
+        .filter_map(|act| act.climax.as_ref())
+        .filter(|climax| climax.scene_order.is_some())
+        .collect();
+    bounded
+        .windows(2)
+        .all(|window| window[0].cmp_story_order(window[1]) == Ordering::Less)
 }
 
 /// The Act range that contains `scene`, if any. See [`ActStoryRange`].
@@ -310,6 +390,64 @@ mod tests {
             None,
             "a skipped Act must not extend the previous range"
         );
+    }
+
+    #[test]
+    fn dormant_runs_reset_on_a_gap_a_turn_and_a_book_change() {
+        let no_turns = BTreeSet::new();
+        // A chapter gap breaks the run: 1-2 is too short, 4-6 completes one.
+        assert_eq!(
+            dormant_chapter_runs([(1, 1), (1, 2), (1, 4), (1, 5), (1, 6)], &no_turns),
+            vec![DormantRun {
+                start: (1, 4),
+                end: (1, 6)
+            }]
+        );
+        // A turning Chapter resets the run: 1-2 does not carry into 3-5.
+        let turned = BTreeSet::from([(1, 2)]);
+        assert_eq!(
+            dormant_chapter_runs([(1, 1), (1, 2), (1, 3), (1, 4), (1, 5)], &turned),
+            vec![DormantRun {
+                start: (1, 3),
+                end: (1, 5)
+            }]
+        );
+        // Books do not bridge: chapter 2 of book 1 and chapter 1 of book 2 are
+        // not consecutive, so the second run starts at book 2 chapter 1.
+        assert_eq!(
+            dormant_chapter_runs([(1, 1), (1, 2), (2, 1), (2, 2), (2, 3)], &no_turns),
+            vec![DormantRun {
+                start: (2, 1),
+                end: (2, 3)
+            }]
+        );
+    }
+
+    #[test]
+    fn act_climaxes_must_rise_in_global_story_order() {
+        assert!(act_climaxes_strictly_increasing(&[
+            act(1, 1, 1, Some(2)),
+            act(2, 1, 2, Some(1)),
+            act(3, 2, 1, Some(1)),
+        ]));
+        // Later order in an earlier book: the in-book rule passes but the
+        // global order does not, so ranges must not be compared.
+        assert!(!act_climaxes_strictly_increasing(&[
+            act(1, 1, 2, Some(2)),
+            act(2, 2, 1, Some(1)),
+            act(3, 1, 3, Some(2)),
+        ]));
+        // Chapter-wide/missing climaxes create no boundary and are ignored.
+        let mut wide = act(2, 1, 4, None);
+        wide.climax = Some(place(1, 4, None));
+        let mut missing = act(3, 1, 5, Some(1));
+        missing.climax = None;
+        assert!(act_climaxes_strictly_increasing(&[
+            act(1, 1, 1, Some(2)),
+            wide,
+            missing,
+            act(4, 1, 6, Some(1)),
+        ]));
     }
 
     #[test]

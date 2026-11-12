@@ -84,7 +84,10 @@ findings (one blocking rule, four advisories) when it does not; an Act may also
 name the Subplot Sequence climax that causes it. Those findings exist only at
 planning stage/acceptance time: `authoring_prepare_run` and the supervisor do
 not re-read Convergence Points, Subplot jobs, Act causes or the Act-range depth
-comparison, so drafting readiness never re-litigates them. The Act list,
+comparison, so drafting readiness never re-litigates them. Chapter/Scene
+staging does re-check the merged accepted Acts' causes against refined
+Sequences, so a later refinement that moves a cited climax reports a blocking
+finding on the accepted Act rather than silently invalidating it. The Act list,
 including any cause, reads back through `planning_status` as planning intent and
 never becomes a timeline event or canonical fact.
 

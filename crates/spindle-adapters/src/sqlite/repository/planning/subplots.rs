@@ -30,13 +30,12 @@
 
 use super::values::SceneValueEntry;
 use super::*;
-use spindle_core::charge::Charge;
 use spindle_core::planning::{PlannedAct, PlannedSequence, PlanningRef, PlanningStoryPlacement};
 use spindle_core::scene_value::SceneValueAxis;
 use spindle_core::subplot::{
-    DORMANT_CHAPTER_RUN, act_range_for_scene, act_story_ranges, chapters_are_consecutive,
-    climax_within_convergence_points, closing_supports_job, deepest_charge_rank,
-    job_requires_closing_sign,
+    ActStoryRange, DORMANT_CHAPTER_RUN, act_climaxes_strictly_increasing, act_range_for_scene,
+    act_story_ranges, climax_within_convergence_points, closing_supports_job, deepest_charge_rank,
+    dormant_chapter_runs, job_requires_closing_sign,
 };
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -72,7 +71,15 @@ pub(super) fn validate_mckee_subplot_structure(
         .filter(|item| !item.is_main_plot)
         .collect();
 
-    validate_convergence_points(input, &subplots, sequences, &receipts, findings);
+    validate_sequence_identity(conn, input, scope, &candidates, &receipts, findings)?;
+    validate_convergence_points(
+        input,
+        &subplots,
+        &candidates,
+        sequences,
+        &receipts,
+        findings,
+    );
     validate_subplot_axes(conn, scope, &candidates, scenes, acts, findings)?;
     Ok(())
 }
@@ -81,14 +88,18 @@ pub(super) fn validate_mckee_subplot_structure(
 // Convergence points: the blocking rule and the missing-point advisory
 // ---------------------------------------------------------------------------
 
-fn validate_convergence_points(
-    input: &StagePlanningInput,
-    subplots: &[&PlotLineStructureCandidate],
-    sequences: &[PlannedSequence],
-    receipts: &std::collections::BTreeMap<String, String>,
+/// Advisory: a merged Subplot plans no Convergence Point.
+///
+/// Series-Arc/Book staging calls this over the merged plot-line set so a
+/// Subplot authored without a Convergence Point is visible where it is authored,
+/// not only in a later Chapter batch. Chapter/Scene staging calls it through
+/// [`validate_convergence_points`]; the advisory re-reports on later stagings
+/// because a visible advisory is the point.
+pub(super) fn validate_subplot_convergence_advisory(
+    candidates: &[PlotLineStructureCandidate],
     findings: &mut Vec<PlanningFinding>,
 ) {
-    for subplot in subplots {
+    for subplot in candidates.iter().filter(|item| !item.is_main_plot) {
         if !subplot.convergence_points.is_empty() {
             continue;
         }
@@ -102,6 +113,17 @@ fn validate_convergence_points(
             "Place a Convergence Point at the Scene where this Subplot feeds the Main Plot; without one its Sequence climaxes cannot land at or before a convergence and the line risks staying a parallel story.",
         ));
     }
+}
+
+fn validate_convergence_points(
+    input: &StagePlanningInput,
+    subplots: &[&PlotLineStructureCandidate],
+    candidates: &[PlotLineStructureCandidate],
+    sequences: &[PlannedSequence],
+    receipts: &BTreeMap<String, String>,
+    findings: &mut Vec<PlanningFinding>,
+) {
+    validate_subplot_convergence_advisory(candidates, findings);
 
     for sequence in sequences {
         let key = sequence.sequence_key.trim();
@@ -170,6 +192,79 @@ fn sequence_climax_path(input: &StagePlanningInput, key: &str) -> String {
     format!("/merged_sequences/{key}/climax_scene")
 }
 
+/// Enforce the global `sequence_key` identity across refinements.
+///
+/// A Sequence is merged by `sequence_key` alone: reusing a key means refining
+/// that Sequence, so its `plot_line_id` may not move to another plot line. The
+/// comparison resolves both references through the merged plot-line candidates,
+/// so a proposal ref and the record id it became are the same plot line. An
+/// unresolved reference is left to the generic reference validation.
+fn validate_sequence_identity(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &PlanningScope,
+    candidates: &[PlotLineStructureCandidate],
+    receipts: &BTreeMap<String, String>,
+    findings: &mut Vec<PlanningFinding>,
+) -> Result<()> {
+    if input.level != PlanningLevel::Chapter || input.schedule.sequences.is_empty() {
+        return Ok(());
+    }
+    let mut base = accepted_planning_sequences_in_conn(conn, &scope.project_id, &scope.branch_id)?;
+    for ancestor in collect_staged_ancestor_proposals_in_conn(conn, input)? {
+        if ancestor.artifact.level != PlanningLevel::Chapter {
+            continue;
+        }
+        base = spindle_core::sequences::merge_planned_sequences(
+            &base,
+            &ancestor.artifact.schedule.sequences,
+        );
+    }
+    for (index, sequence) in input.schedule.sequences.iter().enumerate() {
+        let Some(previous) = base
+            .iter()
+            .find(|previous| previous.sequence_key == sequence.sequence_key)
+        else {
+            continue;
+        };
+        let (Some(previous_ref), Some(current_ref)) = (
+            previous.plot_line_id.as_ref(),
+            sequence.plot_line_id.as_ref(),
+        ) else {
+            continue;
+        };
+        let (Some(previous_line), Some(current_line)) = (
+            resolve_plot_line(candidates, previous_ref, receipts),
+            resolve_plot_line(candidates, current_ref, receipts),
+        ) else {
+            continue;
+        };
+        if previous_line.related_ref == current_line.related_ref {
+            continue;
+        }
+        findings.push(planning_finding(
+            "sequence_plot_line_changed",
+            PlanningFindingSeverity::Blocking,
+            format!("/schedule/sequences/{index}/plot_line_id"),
+            vec![
+                sequence.sequence_key.clone(),
+                previous_line.related_ref.clone(),
+                current_line.related_ref.clone(),
+            ],
+            format!(
+                "Sequence '{}' keeps the plot line it was first staged under ('{}')",
+                sequence.sequence_key, previous_line.related_ref
+            ),
+            format!(
+                "the refinement moves it to plot line '{}'",
+                current_line.related_ref
+            ),
+            "A sequence_key is a global identity: keep plot_line_id unchanged when refining this Sequence, or give the different Subplot's Sequence a new key.",
+        ));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Axis advisories: dormancy, job support and depth against the Main Plot
 // ---------------------------------------------------------------------------
@@ -199,7 +294,24 @@ fn validate_subplot_axes(
             });
         }
     }
-    let ranges = act_story_ranges(acts);
+    // Act ranges are only meaningful when the merged Acts' exact climaxes rise
+    // in global story order. The Act-list gate proves only that they rise
+    // inside one book; a later-order Act in an earlier book would make one
+    // Act's range empty and let another Act's turns be read as its own. Skip
+    // the depth comparison rather than attribute turns to the wrong Act.
+    let ranges = if act_climaxes_strictly_increasing(acts) {
+        act_story_ranges(acts)
+    } else {
+        Vec::new()
+    };
+    // The Main Plot rank is tracked independently of the per-Subplot axis
+    // lookup: a Subplot may legally share the Main Plot's Value Axis, and then
+    // both maps read the same turns and the ranks are equal (never a false
+    // deeper-than-main finding).
+    let main_deepest_by_act = main_axis
+        .as_deref()
+        .map(|axis| deepest_rank_by_act(&turns, axis, &ranges))
+        .unwrap_or_default();
 
     for subplot in candidates.iter().filter(|item| !item.is_main_plot) {
         let Some(value_axis) = subplot
@@ -219,10 +331,42 @@ fn validate_subplot_axes(
         validate_dormancy(subplot, value_axis, scenes, &axis_turns, findings);
         validate_job_support(subplot, value_axis, &axis_turns, findings);
         if let Some(main_axis) = main_axis.as_deref() {
-            validate_depth_in_acts(subplot, value_axis, main_axis, &turns, &ranges, findings);
+            validate_depth_in_acts(
+                subplot,
+                value_axis,
+                main_axis,
+                &turns,
+                &ranges,
+                &main_deepest_by_act,
+                findings,
+            );
         }
     }
     Ok(())
+}
+
+/// The deepest closing Charge rank per Act for one axis. See
+/// [`validate_depth_in_acts`].
+fn deepest_rank_by_act(
+    turns: &[AxisTurn],
+    axis: &str,
+    ranges: &[ActStoryRange],
+) -> BTreeMap<i32, u8> {
+    let mut by_act: BTreeMap<i32, u8> = BTreeMap::new();
+    for turn in turns {
+        if turn.axis.axis.trim() != axis {
+            continue;
+        }
+        let Some(range) = act_range_for_scene(ranges, &scene_placement(turn.scene)) else {
+            continue;
+        };
+        let rank = spindle_core::acts::charge_depth_rank(turn.axis.closing.depth());
+        by_act
+            .entry(range.order)
+            .and_modify(|deepest| *deepest = (*deepest).max(rank))
+            .or_insert(rank);
+    }
+    by_act
 }
 
 /// The Main Plot's Value Axis: the merged Main Plot's `value_axis`, falling back
@@ -274,56 +418,33 @@ fn validate_dormancy(
     axis_turns: &[&AxisTurn],
     findings: &mut Vec<PlanningFinding>,
 ) {
-    let planned_chapters: Vec<(i32, i32)> = scenes
+    let planned_chapters: BTreeSet<(i32, i32)> = scenes
         .iter()
         .map(|scene| (scene.coordinates().0, scene.coordinates().1))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
         .collect();
     let turned_chapters: BTreeSet<(i32, i32)> = axis_turns
         .iter()
         .map(|turn| (turn.scene.coordinates().0, turn.scene.coordinates().1))
         .collect();
 
-    let mut run = 0usize;
-    let mut run_start: Option<(i32, i32)> = None;
-    let mut previous: Option<(i32, i32)> = None;
-    for chapter in planned_chapters {
-        if turned_chapters.contains(&chapter) {
-            run = 0;
-            run_start = None;
-        } else {
-            let consecutive =
-                previous.is_some_and(|previous| chapters_are_consecutive(previous, chapter));
-            if consecutive && run > 0 {
-                run += 1;
-            } else {
-                run = 1;
-                run_start = Some(chapter);
-            }
-            if run == DORMANT_CHAPTER_RUN {
-                let start = run_start.unwrap_or(chapter);
-                let Some(last_scene) = last_scene_of_chapter(scenes, chapter) else {
-                    previous = Some(chapter);
-                    continue;
-                };
-                findings.push(planning_finding(
-                    "subplot_axis_dormant",
-                    PlanningFindingSeverity::Advisory,
-                    last_scene.finding_path().to_string(),
-                    vec![subplot.related_ref.clone()],
-                    format!(
-                        "a turn on the Subplot Value Axis '{value_axis}' within every {DORMANT_CHAPTER_RUN} Chapters"
-                    ),
-                    format!(
-                        "axis '{value_axis}' does not turn in book {} chapters {}-{} ({} consecutive Chapters)",
-                        start.0, start.1, chapter.1, DORMANT_CHAPTER_RUN
-                    ),
-                    "Give the Subplot a Value Turn inside this run (a planned Scene on its axis with a different opening and closing Charge), or move an existing turn into the window; a Subplot that stops moving is forgotten.",
-                ));
-            }
-        }
-        previous = Some(chapter);
+    for run in dormant_chapter_runs(planned_chapters, &turned_chapters) {
+        let Some(last_scene) = last_scene_of_chapter(scenes, run.end) else {
+            continue;
+        };
+        findings.push(planning_finding(
+            "subplot_axis_dormant",
+            PlanningFindingSeverity::Advisory,
+            last_scene.finding_path().to_string(),
+            vec![subplot.related_ref.clone()],
+            format!(
+                "a turn on the Subplot Value Axis '{value_axis}' within every {DORMANT_CHAPTER_RUN} Chapters"
+            ),
+            format!(
+                "axis '{value_axis}' does not turn in book {} chapters {}-{} ({} consecutive Chapters)",
+                run.start.0, run.start.1, run.end.1, DORMANT_CHAPTER_RUN
+            ),
+            "Give the Subplot a Value Turn inside this run (a planned Scene on its axis with a different opening and closing Charge), or move an existing turn into the window; a Subplot that stops moving is forgotten.",
+        ));
     }
 }
 
@@ -392,37 +513,39 @@ fn validate_job_support(
 /// Advisory: a Subplot turns deeper than the Main Plot inside one Act.
 ///
 /// Act ranges follow [`act_story_ranges`]: Act N covers the Scenes after Act
-/// N-1's climax up to and including Act N's climax. For each Act, compare the
-/// deepest closing Charge rank on the Subplot's Value Axis with the deepest
-/// closing rank on the Main Plot's axis in the same Act. The advisory fires
-/// only when both axes turn in that Act and the Subplot is deeper; a Scene after
-/// the last Act's climax belongs to no Act and is never compared.
+/// N-1's climax up to and including Act N's climax. The caller only supplies
+/// ranges when [`act_climaxes_strictly_increasing`] holds, so turns are never
+/// attributed across a book boundary that breaks global story order. For each
+/// Act, compare the deepest closing Charge rank on the Subplot's Value Axis with
+/// the independently computed deepest rank on the Main Plot's axis in the same
+/// Act. The advisory fires only when both axes turn in that Act and the Subplot
+/// is deeper; a Scene after the last Act's climax belongs to no Act and is never
+/// compared.
+///
+/// A Subplot may legally share the Main Plot's Value Axis. Both sides then read
+/// the same turns and ranks are equal, so the advisory never produces a false
+/// positive.
 fn validate_depth_in_acts(
     subplot: &PlotLineStructureCandidate,
     value_axis: &str,
     main_axis: &str,
     turns: &[AxisTurn],
-    ranges: &[spindle_core::subplot::ActStoryRange],
+    ranges: &[ActStoryRange],
+    main_deepest_by_act: &BTreeMap<i32, u8>,
     findings: &mut Vec<PlanningFinding>,
 ) {
     if ranges.is_empty() {
         return;
     }
     let mut subplot_by_act: BTreeMap<i32, Vec<&AxisTurn>> = BTreeMap::new();
-    let mut main_by_act: BTreeMap<i32, Vec<&Charge>> = BTreeMap::new();
     for turn in turns {
-        let placement = scene_placement(turn.scene);
-        let Some(range) = act_range_for_scene(ranges, &placement) else {
+        if turn.axis.axis.trim() != value_axis {
+            continue;
+        }
+        let Some(range) = act_range_for_scene(ranges, &scene_placement(turn.scene)) else {
             continue;
         };
-        if turn.axis.axis.trim() == value_axis {
-            subplot_by_act.entry(range.order).or_default().push(turn);
-        } else if turn.axis.axis.trim() == main_axis {
-            main_by_act
-                .entry(range.order)
-                .or_default()
-                .push(&turn.axis.closing);
-        }
+        subplot_by_act.entry(range.order).or_default().push(turn);
     }
     for (order, subplot_turns) in subplot_by_act {
         let Some(subplot_deepest) =
@@ -430,10 +553,7 @@ fn validate_depth_in_acts(
         else {
             continue;
         };
-        let Some(main_deepest) = main_by_act
-            .get(&order)
-            .and_then(|charges| deepest_charge_rank(charges.iter().copied()))
-        else {
+        let Some(main_deepest) = main_deepest_by_act.get(&order).copied() else {
             continue;
         };
         if subplot_deepest <= main_deepest {
@@ -483,36 +603,36 @@ fn scene_placement(scene: &SceneValueEntry) -> PlanningStoryPlacement {
 // Act-cause reference
 // ---------------------------------------------------------------------------
 
-/// Validate the optional Act-cause reference at Series-Arc/Book acceptance.
+/// Validate the optional Act-cause reference at every staging level.
 ///
 /// An Act may cite a Subplot Sequence climax as the cause of its own climax.
 /// The reference must resolve against the merged sources:
 ///
 /// * the plot line exists and is a Subplot (never the Main Plot);
 /// * a Sequence with the cited `sequence_key` exists and belongs to that
-///   Subplot;
+///   Subplot (the key is global: a key owned by a different plot line is a data
+///   error, not an ambiguous lookup);
 /// * the cited Sequence has an exact climax placement at or before one of the
 ///   Subplot's Convergence Points;
 /// * the cited Sequence climax is at or before the Act's own climax (cause
 ///   precedes effect).
 ///
-/// Every failure is a stage-recordable Blocking finding: the proposal stages
-/// with the finding visible and acceptance is refused. Acts inherited from an
-/// accepted artifact are re-checked too, so a later Sequence refinement that
-/// moves a cited climax cannot silently invalidate an accepted cause.
+/// Series-Arc/Book staging validates the Acts it authors; Chapter/Scene staging
+/// re-validates the merged accepted Acts so a Chapter refinement that moves a
+/// cited Sequence climax cannot silently invalidate an accepted cause. Every
+/// semantic failure is a stage-recordable Blocking finding: the proposal stages
+/// with the finding visible and acceptance is refused. A reference that cannot
+/// resolve at all is already a hard staging error in the generic reference
+/// validation; the unresolved-plot-line branch here remains reachable for a row
+/// the reference check accepts but the merged candidate set excludes (an
+/// archived plot line), so it stays stage-recordable with a readable code.
 pub(super) fn validate_mckee_act_causes(
     conn: &rusqlite::Connection,
     input: &StagePlanningInput,
-    scope: &Option<PlanningScope>,
+    scope: &PlanningScope,
     findings: &mut Vec<PlanningFinding>,
 ) -> Result<()> {
-    let Some(scope) = scope else {
-        return Ok(());
-    };
     if !project_is_mckee_in_conn(conn, &scope.project_id)? {
-        return Ok(());
-    }
-    if !matches!(input.level, PlanningLevel::SeriesArc | PlanningLevel::Book) {
         return Ok(());
     }
     let acts = evaluated_mckee_acts_in_conn(conn, input, scope)?;
@@ -529,24 +649,35 @@ pub(super) fn validate_mckee_act_causes(
         .enumerate()
         .map(|(index, act)| (act.order, index))
         .collect();
+    let accepted_orders: BTreeSet<i32> =
+        accepted_planning_acts_in_conn(conn, &scope.project_id, &scope.branch_id)?
+            .iter()
+            .map(|act| act.order)
+            .collect();
+    let mut staged_orders: BTreeSet<i32> = BTreeSet::new();
+    for ancestor in collect_staged_ancestor_proposals_in_conn(conn, input)? {
+        staged_orders.extend(ancestor.artifact.schedule.acts.iter().map(|act| act.order));
+    }
 
     for act in &acts {
         let Some(cause) = act.cause.as_ref() else {
             continue;
         };
-        let base = match own_index_by_order.get(&act.order) {
-            Some(index) => format!("/schedule/acts/{index}/cause"),
-            None => format!("/merged_acts/{}/cause", act.order),
-        };
+        let base = act_cause_path(
+            act.order,
+            own_index_by_order.get(&act.order).copied(),
+            &staged_orders,
+            &accepted_orders,
+        );
         let Some(subplot) = resolve_plot_line(&candidates, &cause.plot_line_id, &receipts) else {
             findings.push(planning_finding(
                 "act_cause_unresolved_subplot_sequence",
                 PlanningFindingSeverity::Blocking,
                 format!("{base}/plot_line_id"),
                 vec![describe_ref(&cause.plot_line_id), act.order.to_string()],
-                "a visible plot line that is a Subplot",
-                "the plot line reference does not resolve",
-                "Point the cause at a plot line that exists on the session branch (an existing record id or an active parent proposal ref).",
+                "a visible, non-archived plot line that is a Subplot",
+                "the plot line reference does not resolve to a merged plot line",
+                "Point the cause at a plot line that exists on the session branch (an existing record id or an active parent proposal ref) and has not been archived.",
             ));
             continue;
         };
@@ -571,7 +702,7 @@ pub(super) fn validate_mckee_act_causes(
                 vec![subplot.related_ref.clone(), act.order.to_string()],
                 "a non-empty sequence_key naming one of the Subplot's Sequences",
                 "empty sequence_key",
-                "Name the cited Sequence's schedule-local key; without one the cause cannot resolve.",
+                "Name the cited Sequence's global merge key; without one the cause cannot resolve.",
             ));
             continue;
         }
@@ -614,14 +745,14 @@ pub(super) fn validate_mckee_act_causes(
                     format!("{base}/sequence_key"),
                     vec![key.to_string(), act.order.to_string()],
                     format!(
-                        "Sequence '{key}' belonging to Subplot '{}'",
+                        "Sequence key '{key}' to be owned by the Subplot '{}' named in plot_line_id",
                         subplot.related_ref
                     ),
                     format!(
-                        "Sequence '{key}' belongs to plot line '{}'",
+                        "the globally keyed Sequence '{key}' belongs to plot line '{}'",
                         sequence_plot_line.related_ref
                     ),
-                    "Cite a Sequence of the Subplot named by plot_line_id, or change plot_line_id to the Sequence's plot line.",
+                    "A sequence_key is globally unique: this is a data error (a key cannot name two plot lines). Cite the cited Subplot's own Sequence key, or repair the Sequence's plot_line_id; do not change plot_line_id to match a colliding key.",
                 ));
                 continue;
             }
@@ -708,12 +839,35 @@ pub(super) fn validate_mckee_act_causes(
     Ok(())
 }
 
+/// A descriptive locator for an Act's cause: the current artifact's schedule
+/// entry when it authors the Act, a staged ancestor's entry when that Act was
+/// last authored there, otherwise the accepted Act row.
+fn act_cause_path(
+    order: i32,
+    own_index: Option<usize>,
+    staged_orders: &BTreeSet<i32>,
+    accepted_orders: &BTreeSet<i32>,
+) -> String {
+    if let Some(index) = own_index {
+        return format!("/schedule/acts/{index}/cause");
+    }
+    if staged_orders.contains(&order) {
+        return format!("/staged_acts/{order}/cause");
+    }
+    if accepted_orders.contains(&order) {
+        return format!("/accepted_acts/{order}/cause");
+    }
+    // Defensive fallback: every evaluated Act comes from one of the sources
+    // above. Keep a stable locator instead of inventing a path.
+    format!("/accepted_acts/{order}/cause")
+}
+
 /// The first candidate whose record id / output ref (or receipt-resolved id)
 /// matches the reference.
 fn resolve_plot_line<'a>(
     candidates: &'a [PlotLineStructureCandidate],
     reference: &PlanningRef,
-    receipts: &std::collections::BTreeMap<String, String>,
+    receipts: &BTreeMap<String, String>,
 ) -> Option<&'a PlotLineStructureCandidate> {
     candidates
         .iter()

@@ -14553,3 +14553,435 @@ async fn non_mckee_projects_get_no_subplot_or_act_cause_findings() {
     );
     accept(&svc, &s, &book).await;
 }
+
+// ---------------------------------------------------------------------------
+// #29 review fixes: global Sequence identity, Act-cause revalidation, Act
+// ranges, same-axis depth, Series-Arc advisories and malformed stored data.
+// ---------------------------------------------------------------------------
+
+fn subplot_sub_sequence() -> PlannedSequence {
+    subplot_sequences_valid().remove(1)
+}
+
+/// Stage one later Chapter artifact that refines `seq:sub` and creates a new
+/// Chapter. The accepted Chapters 1-3 stay in place.
+async fn stage_subplot_refinement(
+    fixture: &SubplotFixture,
+    sequence: PlannedSequence,
+) -> PlanningProposal {
+    use serde_json::json;
+    bundle_with_schedule(
+        &fixture.svc,
+        &fixture.session,
+        PlanningLevel::Chapter,
+        &[&fixture.root, &fixture.series],
+        vec![planned(
+            &unique_fixture_ref("refine-chapter"),
+            "create_chapter",
+            json!({"book_id":reference("project:root:book"),"book_number":1,"chapter_number":4,"title":"Four"}),
+        )],
+        PlanningSchedule {
+            sequences: vec![sequence],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn mckee_accepted_act_cause_is_revalidated_by_a_chapter_sequence_refinement() {
+    let fixture = subplot_fixture(SubplotScenario::valid()).await;
+    let _chapters = accepted_subplot_chapters(&fixture).await;
+    let book = stage_book_act_with_cause(
+        &fixture,
+        subplot_cause("plot:sub", "seq:sub"),
+        subplot_place(1, 2, 2),
+    )
+    .await;
+    accept(&fixture.svc, &fixture.session, &book).await;
+
+    // Move the cited Sequence climax past Act 2's climax (and past the
+    // Convergence Point). Chapter staging must re-check the accepted cause.
+    let mut moved = subplot_sub_sequence();
+    moved.question = "How far can the magistrate bend the harbor?".into();
+    moved.member_scenes = vec![
+        subplot_place(1, 1, 1),
+        subplot_place(1, 2, 1),
+        subplot_place(1, 3, 2),
+    ];
+    moved.climax_scene = Some(subplot_place(1, 3, 2));
+    let refined = stage_subplot_refinement(&fixture, moved).await;
+    let finding = finding_with_code(&refined, "act_cause_after_act_climax");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+    assert!(
+        finding.path.starts_with("/accepted_acts/2/cause"),
+        "an accepted Act's cause is located on the accepted row: {}",
+        finding.path
+    );
+    reject_planning(&fixture.svc, &fixture.session, &refined).await;
+
+    // A refinement that leaves the cited climax where it is stays clean.
+    let mut valid = subplot_sub_sequence();
+    valid.question = "Who pays for the harbor's freedom?".into();
+    valid.member_scenes = vec![
+        subplot_place(1, 1, 1),
+        subplot_place(1, 1, 2),
+        subplot_place(1, 2, 1),
+    ];
+    let refined = stage_subplot_refinement(&fixture, valid).await;
+    assert!(
+        act_cause_codes(&refined).is_empty(),
+        "a refinement that keeps the cited climax must not invalidate the accepted cause: {:?}",
+        refined.findings
+    );
+    assert!(
+        !refined
+            .findings
+            .iter()
+            .any(|finding| finding.code == "sequence_plot_line_changed"),
+        "keeping the plot line is a valid refinement: {:?}",
+        refined.findings
+    );
+    assert!(
+        refined
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "{:?}",
+        refined.findings
+    );
+    accept(&fixture.svc, &fixture.session, &refined).await;
+}
+
+#[tokio::test]
+async fn mckee_sequence_refinement_cannot_move_to_another_plot_line() {
+    let fixture = subplot_fixture(SubplotScenario::valid()).await;
+    let _chapters = accepted_subplot_chapters(&fixture).await;
+
+    let mut reassigned = subplot_sub_sequence();
+    reassigned.plot_line_id = Some(PlanningRef::ProposalRef("plot:main".into()));
+    let refined = stage_subplot_refinement(&fixture, reassigned).await;
+    let finding = finding_with_code(&refined, "sequence_plot_line_changed");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+    assert!(
+        finding.path.ends_with("/schedule/sequences/0/plot_line_id"),
+        "the finding points at the refinement's plot line: {}",
+        finding.path
+    );
+    assert!(
+        finding.related_refs.iter().any(|value| value == "seq:sub"),
+        "the finding names the global Sequence key: {:?}",
+        finding.related_refs
+    );
+    reject_planning(&fixture.svc, &fixture.session, &refined).await;
+}
+
+#[tokio::test]
+async fn mckee_sequence_key_must_be_pointer_safe() {
+    let fixture = subplot_fixture(SubplotScenario::valid()).await;
+    let mut sequences = subplot_sequences_valid();
+    sequences[1].sequence_key = "seq/sub".into();
+    let chapters = stage_subplot_chapters(&fixture, sequences).await;
+    let finding = finding_with_code(&chapters, "sequence_key_invalid");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+    assert!(
+        finding.path.ends_with("/schedule/sequences/1/sequence_key"),
+        "the finding points at the unsafe key: {}",
+        finding.path
+    );
+    assert!(
+        finding.actual.contains("seq/sub"),
+        "the finding reports the offending key: {}",
+        finding.actual
+    );
+    reject_planning(&fixture.svc, &fixture.session, &chapters).await;
+}
+
+#[tokio::test]
+async fn mckee_series_arc_warns_when_a_subplot_has_no_convergence_point() {
+    use serde_json::json;
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_root(&svc).await;
+    let series = bundle_with_schedule(
+        &svc,
+        &session,
+        PlanningLevel::SeriesArc,
+        &[&root],
+        vec![
+            planned(
+                "plot:main",
+                "create_plot_line",
+                json!({
+                    "name": "The truth of the tide",
+                    "plot_type": "main",
+                    "summary": "Trace the forged ledger",
+                    "value_axis": "truth",
+                    "is_main_plot": true
+                }),
+            ),
+            planned(
+                "plot:sub",
+                "create_plot_line",
+                json!({
+                    "name": "The magistrate's price",
+                    "plot_type": "parallel",
+                    "summary": "Freedom narrows as the harbor closes",
+                    "value_axis": "freedom",
+                    "subplot_job": "contradict"
+                }),
+            ),
+        ],
+        PlanningSchedule {
+            acts: vec![planned_act(
+                1,
+                1,
+                1,
+                2,
+                ChargeSign::Negative,
+                ChargeDepth::Contrary,
+                "Ada learns the ledger was forged",
+                true,
+            )],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    let finding = finding_with_code(&series, "subplot_without_convergence_point");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Advisory);
+    assert!(
+        finding.path.ends_with("/convergence_points"),
+        "the advisory points at the plot line's convergence field: {}",
+        finding.path
+    );
+    assert!(
+        series
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "the advisory must not block Series-Arc acceptance: {:?}",
+        series.findings
+    );
+    accept(&svc, &session, &series).await;
+}
+
+fn out_of_order_act_scenes() -> Vec<(i32, Vec<PlanningPlanChapterSceneInput>)> {
+    let c = subplot_charge;
+    let states = [
+        c(ChargeSign::Positive, ChargeDepth::Positive),
+        c(ChargeSign::Negative, ChargeDepth::Contrary),
+        c(ChargeSign::Negative, ChargeDepth::Contradictory),
+        c(ChargeSign::Negative, ChargeDepth::Contrary),
+        c(ChargeSign::Negative, ChargeDepth::Contradictory),
+        c(ChargeSign::Negative, ChargeDepth::Contrary),
+        c(ChargeSign::Positive, ChargeDepth::Positive),
+    ];
+    let chain: Vec<(Charge, Charge)> = states.windows(2).map(|pair| (pair[0], pair[1])).collect();
+    let cumulatives = [1, 2, 2, 3, 4, 5];
+    let mut chapters: Vec<(i32, Vec<PlanningPlanChapterSceneInput>)> = Vec::new();
+    for (index, (opening, closing)) in chain.into_iter().enumerate() {
+        let chapter = index as i32 / 2 + 1;
+        let scene_order = index as i32 % 2 + 1;
+        let mut scene = value_scene(scene_order, opening, closing);
+        scene.risk = Some(cumulatives[index]);
+        // Sequence climaxes (1.2.1, 1.3.2) and the Act climaxes in the planned
+        // chapters (1.2.2, 1.3.2) need a dilemma.
+        if matches!(index, 2 | 3 | 5) {
+            scene.dilemma = Some(value_dilemma(if index % 2 == 0 {
+                "resolute"
+            } else {
+                "guarded"
+            }));
+        }
+        if index == 4 {
+            // 1.3.1, a Scene the bad Act-range derivation attributes to Act 2:
+            // a deep Subplot turn there would be compared with a shallow Main
+            // Plot turn in the wrong Act.
+            scene.secondary_value_axes = vec![SceneValueAxis {
+                axis: "freedom".into(),
+                opening: subplot_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                closing: subplot_charge(ChargeSign::Negative, ChargeDepth::NegationOfTheNegation),
+            }];
+        }
+        match chapters.last_mut() {
+            Some((last_chapter, scenes)) if *last_chapter == chapter => scenes.push(scene),
+            _ => chapters.push((chapter, vec![scene])),
+        }
+    }
+    chapters
+}
+
+#[tokio::test]
+async fn mckee_depth_advisory_skips_cross_book_act_ranges_that_are_not_monotonic() {
+    let mut scenario = SubplotScenario::valid();
+    scenario.acts = vec![
+        planned_act(
+            1,
+            1,
+            2,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::Contrary,
+            "Ada learns the ledger was forged",
+            false,
+        ),
+        // A later order placed in book 2, before Act 3 returns to book 1.
+        planned_act(
+            2,
+            2,
+            1,
+            1,
+            ChargeSign::Negative,
+            ChargeDepth::Contradictory,
+            "The harbor answers in book two",
+            false,
+        ),
+        planned_act(
+            3,
+            1,
+            3,
+            2,
+            ChargeSign::Negative,
+            ChargeDepth::NegationOfTheNegation,
+            "Ada answers the harbor",
+            true,
+        ),
+    ];
+    let ranges = spindle_core::subplot::act_story_ranges(&scenario.acts);
+    assert_eq!(
+        spindle_core::subplot::act_range_for_scene(&ranges, &subplot_place(1, 3, 1))
+            .map(|range| range.order),
+        Some(2),
+        "the derived ranges would read a book-1 Scene as Act 2"
+    );
+
+    let fixture = subplot_fixture(scenario.clone()).await;
+    let chapters = accepted_subplot_chapters(&fixture).await;
+    let input = value_scene_artifact(
+        &fixture.session,
+        &[&fixture.cast, &fixture.series, &chapters],
+        out_of_order_act_scenes(),
+    );
+    let scenes = fixture.svc.stage_planning(input).await.unwrap();
+    assert!(
+        scenes
+            .findings
+            .iter()
+            .all(|finding| finding.code != "subplot_deeper_than_main_plot"),
+        "non-monotonic Act climaxes must skip the depth comparison: {:?}",
+        scenes.findings
+    );
+    assert!(
+        scenes
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "{:?}",
+        scenes.findings
+    );
+    accept(&fixture.svc, &fixture.session, &scenes).await;
+}
+
+#[tokio::test]
+async fn mckee_subplot_sharing_the_main_axis_does_not_false_positive_the_depth_advisory() {
+    let mut scenario = SubplotScenario::valid();
+    scenario.value_axis = "truth";
+    // No secondary axis: the primary truth turns are the only turns on the
+    // shared axis, and both sides read the same set.
+    scenario.freedom = vec![None; 6];
+    let fixture = subplot_fixture(scenario.clone()).await;
+    let chapters = accepted_subplot_chapters(&fixture).await;
+    let scenes = stage_subplot_scenes(&fixture, &scenario, &chapters).await;
+    assert!(
+        scenes
+            .findings
+            .iter()
+            .all(|finding| finding.code != "subplot_deeper_than_main_plot"),
+        "a Subplot sharing the Main Plot's axis cannot turn deeper than itself: {:?}",
+        scenes.findings
+    );
+    assert!(
+        scenes
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "{:?}",
+        scenes.findings
+    );
+    accept(&fixture.svc, &fixture.session, &scenes).await;
+}
+
+#[tokio::test]
+async fn mckee_act_cause_citing_an_archived_plot_line_is_a_readable_finding() {
+    let fixture = subplot_fixture(SubplotScenario::valid()).await;
+    fixture
+        .svc
+        .archive_entity(spindle_core::models::ArchiveEntityInput {
+            entity_type: "plot_line".into(),
+            entity_id: fixture.subplot_id.clone(),
+        })
+        .await
+        .unwrap();
+    let book = stage_book_act_with_cause(
+        &fixture,
+        subplot_cause("plot:sub", "seq:sub"),
+        subplot_place(1, 2, 2),
+    )
+    .await;
+    let finding = finding_with_code(&book, "act_cause_unresolved_subplot_sequence");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+    assert!(
+        finding
+            .path
+            .starts_with("/schedule/acts/0/cause/plot_line_id"),
+        "the current artifact's cause is located on its schedule entry: {}",
+        finding.path
+    );
+    assert!(
+        finding.expected.contains("non-archived"),
+        "the finding explains that an archived plot line is excluded: {}",
+        finding.expected
+    );
+    reject_planning(&fixture.svc, &fixture.session, &book).await;
+}
+
+#[tokio::test]
+async fn mckee_malformed_stored_convergence_points_fail_staging_instead_of_reading_none() {
+    let fixture = subplot_fixture(SubplotScenario::valid()).await;
+    let subplot_id = fixture.subplot_id.clone();
+    fixture
+        .svc
+        .repository
+        .pool()
+        .write(move |conn| {
+            conn.execute(
+                "UPDATE plot_line SET convergence_points=?1 WHERE id=?2",
+                // Valid JSON with the wrong shape still must not read as "none".
+                rusqlite::params!["{}", &subplot_id],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let mut input = artifact(&fixture.session, "unused");
+    input.level = PlanningLevel::Chapter;
+    input.parents = BTreeMap::from([
+        (fixture.root.id.clone(), fixture.root.payload_hash.clone()),
+        (
+            fixture.series.id.clone(),
+            fixture.series.payload_hash.clone(),
+        ),
+    ]);
+    input.operations = subplot_chapter_operations();
+    input.schedule.sequences = subplot_sequences_valid();
+    let error = fixture
+        .svc
+        .stage_planning(input)
+        .await
+        .expect_err("malformed stored convergence_points must fail staging")
+        .to_string();
+    assert!(
+        error.contains("invalid convergence_points JSON on plot line"),
+        "the error names the malformed row instead of silently reading no points: {error}"
+    );
+}

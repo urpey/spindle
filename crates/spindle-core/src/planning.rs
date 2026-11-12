@@ -176,11 +176,12 @@ pub struct PlannedIntensity {
 ///
 /// The shape is deliberately narrow so it resolves deterministically: the plot
 /// line is referenced with the same [`PlanningRef`] slot Sequences use, and the
-/// Sequence is named by the schedule-local `sequence_key` (the merge identity,
-/// so a later Chapter artifact's refinement is followed). Naming the record id
-/// instead would pin the cause to one proposal's output; naming the plot line
-/// is required because a `sequence_key` is only unique within one plot line's
-/// Sequences.
+/// Sequence is named by its `sequence_key`. The key is a **global** merge
+/// identity, unique across the merged Sequences of the whole project (not just
+/// within one plot line), so a later Chapter artifact's refinement is followed
+/// deterministically and a key collision is a data error rather than an
+/// ambiguity. Naming the record id instead would pin the cause to one
+/// proposal's output.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedActCause {
@@ -188,7 +189,7 @@ pub struct PlannedActCause {
     /// named `plot_line_id` on purpose so the generic planning reference
     /// validation treats it as a `plot_line` reference.
     pub plot_line_id: PlanningRef,
-    /// The cited Sequence's schedule-local key.
+    /// The cited Sequence's global merge key.
     pub sequence_key: String,
 }
 
@@ -234,8 +235,11 @@ pub struct PlannedAct {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedSequence {
-    /// Stable schedule-local key. It is the merge identity: a later entry with
-    /// the same key refines this Sequence instead of duplicating it.
+    /// Stable **global** merge key, unique across the merged Sequences of the
+    /// project. A later entry with the same key refines this Sequence instead of
+    /// duplicating it, but may not move it to another plot line. The key is
+    /// pointer-safe: non-empty, bounded length, ASCII alphanumerics plus `-`,
+    /// `_` and `:`.
     #[serde(default)]
     pub sequence_key: String,
     /// The one plot line this Sequence belongs to.
