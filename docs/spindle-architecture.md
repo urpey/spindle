@@ -204,6 +204,34 @@ model-verified tokenizer and is not exposed through authoring runs; legacy
 generation remains unchanged. See
 `docs/drafting-and-revision-design.md` for the staged integration and release gates.
 
+### McKee writer visibility and the filled packet
+
+Writer-facing reads for a McKee project return only what the current Scene
+needs. `get_chapter_briefing` filters `chapter_plan.scenes` to the requested
+Scene; `get_scene_context` and the briefing's bundled scene context expose
+`novel.planned_scene` (the current plan), `novel.realized_scenes` (earlier
+written Scenes of the chapter, as summaries for now) and
+`novel.character_design_slice` (the tested contradiction, conscious desire and
+planner-written behaviour cues). The slice type cannot represent the Character
+Design hidden layer, the unconscious desire, their secret fact ids or
+concealment notes, and every non-planning carrier still strips those secret
+facts. Later Scenes' plans are omitted. Promise reads redact the planned payoff
+placement, payoff Turning Beat and target Act, and drop promises not yet
+planted at the cursor; the promise's nature stays visible.
+
+`prepare_scene` fills the packet's scene card from the current planned Scene
+instead of legacy placeholders: primary Value Axis, opening and closing Charge,
+opposition, Gap, the Turning Beat, structured Beats as required beats, and the
+planned closing Charge as the exit state. Additive `gap` and `turning_beat`
+fields carry the typed plan. Due Key Facts become `canon` hard constraints with
+their value, so the writer cannot omit or alter them. A promise being planted or
+reinforced appears by nature, never by payoff location. A Scene with no planned
+value plan produces an unavailable packet entry with a reason, not placeholder
+text. Both the default (read-tools) path and the critique path see the same
+data. Unmarked projects keep their previous briefing, scene context and packet
+serialization; see [planning engine](planning-engine-design.md) for the field
+rules.
+
 ## Editorial controller, host tasks, and budget ledger
 
 `spindle_core::drafting::editorial` defines the opt-in editorial controller

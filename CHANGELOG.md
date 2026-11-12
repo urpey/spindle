@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Add **McKee writer visibility and the filled drafting packet**. For a
+  McKee-structured project, `get_chapter_briefing` returns only the requested
+  Scene's plan (`chapter_plan.scenes` is filtered to that Scene); the bundled
+  scene context carries `novel.planned_scene`, earlier written Scenes of the
+  chapter as summaries (`novel.realized_scenes`, a dedicated record so a
+  realized Value Turn can be added additively later) and the current Scene's
+  Character Design slice (`novel.character_design_slice`: tested contradiction,
+  conscious desire, behaviour cues). `get_scene_context` returns the same three
+  fields. Later Scenes' plans are omitted. Promise reads redact the planned
+  payoff placement, payoff Turning Beat and target Act from
+  `narrative_promises_due`, continuity sheets, subject snapshots and
+  `get_writer_state`, and a promise not yet planted at the cursor is not listed;
+  the promise's nature stays visible. `prepare_scene`'s `drafting_packet_v1` is
+  filled from the current planned Scene instead of the legacy placeholders —
+  primary Value Axis with opening/closing Charge (readable `positive` /
+  `negative (contrary)` / `negative (contradictory)` /
+  `negative (negation of the negation)`), opposition, additive typed `gap`,
+  Turning Beat (`turning_beat` plus the `turn` line), structured Beats as
+  `required_beats`, and the planned closing Charge as `emotion.exit`. Due canon
+  facts (including Key Facts) become `canon` hard constraints with their value;
+  a Scene with no planned value plan reports an unavailable packet with a reason
+  instead of placeholder text. Both the default read-tool path and the critique
+  path see the same data, and the `scene-writer` skill tells the host to draft
+  through a packet-only subagent where the host allows it. Every new field is
+  additive, serde-defaulted and skipped when unset; jobs on non-McKee projects
+  keep byte-identical briefing, scene context and packet payloads.
 - Add the **McKee gate profile** for planning sessions. Every session still
   starts all-human (ADR 0004); the profile is an **explicit author decision**
   made with `planning_advance(action = "set_policy")` (or `planning_begin`'s

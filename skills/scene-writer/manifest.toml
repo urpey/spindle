@@ -23,7 +23,7 @@ name = "drafting-packets"
 path = "references/drafting-packets.md"
 trigger = "Load for the typed drafting-packet rollout boundary."
 profiles = ["default"]
-tools = []
+tools = ["prepare_scene"]
 
 [[references]]
 name = "offloaded-generation"

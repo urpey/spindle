@@ -488,7 +488,9 @@
           "workflow-authoring",
           "workflow-write"
         ],
-        "tools": [],
+        "tools": [
+          "prepare_scene"
+        ],
         "trigger": "Load for the typed drafting-packet rollout boundary."
       },
       {

@@ -1,13 +1,26 @@
-# Drafting packet rollout
+# Drafting packets
 
-### Packet rollout boundary
+### The McKee writing brief
 
-The typed `DraftingPacketV1` foundation is currently an internal preparation API,
-not an active authoring-run mode or a new MCP tool. Keep using the shipped
-save/commit continuity-package workflow. Future packet prose tasks will contain
-their own compact rubric; do not append this skill, standards manuals or tool
-instructions to a stateless packet completion. Do not claim `critique_v1` is
-available until the authoring integration and evaluation gates ship.
+For a McKee-structured project, `prepare_scene` returns a filled
+`drafting_packet_v1` and that packet is the whole writing brief. Its scene card
+is filled from the current planned Scene: the primary Value Axis with opening
+and closing Charge, opposition, Gap, the Turning Beat and the structured Beats
+as required beats. `hard_constraints` carry every Key Fact due in this Scene
+(kind `canon`, with the fact value). `promises_due` carries a promise's nature
+(type and description) and never its planned payoff location, target Act or
+payoff Turning Beat. `character_design_slice` carries only the tested
+contradiction, conscious desire and behaviour cues.
+
+Draft through a subagent that sees only that packet where the host allows it
+(best effort, not enforced). Do not give it the chapter plan, other Scenes'
+plans, `hidden_self`, `unconscious_desire`, their secret fact ids or any payoff
+location. Render the planned turn and the due facts exactly; never invent,
+omit or alter them. A Scene with no planned value plan yields an unavailable
+packet ("drafting_packet_v1" in `unavailable_passes`), never placeholder copy.
+
+The packet prose task contains its own compact rubric; do not append this skill,
+standards manuals or tool instructions to a stateless packet completion.
 
 PR 2 adds internal opt-in Rust packet-draft APIs and a P2 extractor consumer
 contract. It does not add an authoring tool or enable a run policy. A verified
@@ -30,3 +43,5 @@ on by default and may use a billed one-token Ollama Cloud probe. Probe usage is
 visible in the model ledger, and uncertain attempts require explicit recovery.
 See `docs/spindle-agent-config.md` for setup; never substitute an estimated token
 count or append skill content to the packet prompt.
+
+<!-- tool: prepare_scene -->

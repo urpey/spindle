@@ -35,6 +35,7 @@ pub(crate) fn fixture() -> DraftingPacketV1 {
         canon_snapshot_hash: "snapshot1".into(),
         plan_revision: "1".into(),
         source_versions: vec![source.clone()],
+        character_design_slice: vec![],
         scene_card: SceneCardV1 {
             source: source.clone(),
             pov: PacketPov {
@@ -53,6 +54,8 @@ pub(crate) fn fixture() -> DraftingPacketV1 {
                 before: "high".into(),
                 after: "low".into(),
             },
+            gap: None,
+            turning_beat: None,
             emotion: EmotionShift {
                 entry: "eager".into(),
                 exit: "afraid".into(),

@@ -112,6 +112,19 @@ impl SubjectSnapshot {
         &self.open_promises
     }
 
+    /// Writer-facing promise redaction (McKee projects): drop every planned
+    /// payoff location, payoff Turning Beat and target Act from this snapshot's
+    /// open promises. A writer may know a promise's nature, never where it is
+    /// planned to pay off. The promise rows themselves are untouched; only this
+    /// projection loses the placement.
+    pub fn redact_promise_payoffs(&mut self) {
+        for promise in &mut self.open_promises {
+            promise.planned_payoff = None;
+            promise.planned_payoff_turning_beat = None;
+            promise.target_act = None;
+        }
+    }
+
     pub fn active_arcs(&self) -> &[CharacterArcSummary] {
         &self.active_arcs
     }

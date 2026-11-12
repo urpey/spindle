@@ -402,6 +402,52 @@ fact ids, values and concealment notes never leave the planning surface. Arc mil
 both are stored in the milestone JSON, and legacy milestone JSON without the
 field keeps deserializing and serializing unchanged.
 
+### Writer visibility and the filled packet (McKee)
+
+Writer-facing reads are deliberately narrower than planning reads. For a McKee
+project, `get_chapter_briefing` returns only the requested Scene's plan: its
+`chapter_plan.scenes` list is filtered to that Scene (earlier and later planned
+Scenes stay on the planning surface). The bundled scene context carries the
+current Scene's plan in `novel.planned_scene`, earlier written Scenes of the same
+chapter as summaries in `novel.realized_scenes` (a dedicated record so a
+realized Value Turn can be added additively later), and the current Scene's
+Character Design slice in `novel.character_design_slice`. `get_scene_context`
+returns the same three fields. A slice carries the character id and name, the
+contradiction the Scene's dilemma tests when the plan names one, the conscious
+desire and the planner-written behaviour cues; it has no field for
+`hidden_self`, `unconscious_desire`, their secret fact ids or concealment notes.
+The briefing resolves the current planned Scene's location when the caller
+supplies no `location_id`, so a placement-only briefing still gets the scene
+context; unmarked projects keep the explicit-only rule.
+
+Promise visibility follows the same rule. `novel.narrative_promises_due` drops
+promises whose plant placement is after the requested Scene and redacts the
+planned payoff placement and payoff-derived notes; continuity sheets and subject
+snapshots redact `planned_payoff`, `planned_payoff_turning_beat` and
+`target_act` from open promises; `get_writer_state`'s due promises redact the
+payoff placement. A promise's nature (type, description, status) stays visible so
+a planted promise can be dramatised accurately, but its payoff location never
+does. Planning tools keep the full rows.
+
+`prepare_scene`'s `drafting_packet_v1` is filled from the current planned Scene
+for a McKee project rather than the legacy placeholders: `value_shift` carries
+the primary Value Axis with its opening and closing Charge rendered readably
+(`positive`, `negative (contrary)`, `negative (contradictory)`,
+`negative (negation of the negation)`), `opposition` and `gap` come from the
+plan, `turn` and the additive `turning_beat` come from the structured Beat of
+kind `turn`, `required_beats` are the structured Beats, and `emotion.exit`
+carries the planned closing Charge (a McKee plan has no emotion field).
+`character_design_slice` repeats the writer slice. Hard constraints of kind
+`canon` carry every canon fact whose valid-from placement is the requested Scene,
+with its value, so a due Key Fact cannot be omitted or altered. A promise planted
+or reinforced in the Scene appears by nature in `promises_due`; a payoff
+placement is never in the packet. A Scene with no planned value plan (no planned
+Scene, primary axis, opposition, Gap or Turning Beat) yields an unavailable
+packet entry with a reason, never placeholder text.
+
+Unmarked projects get none of these fields and none of this redaction: their
+briefing, scene context and packet serialize exactly as before.
+
 `PlanningSchedule.acts` (Series-Arc and Book) carries the ordered **Act list**
 as schedule metadata, not as a story record. One entry is `order` (1-based,
 unique), a `climax` scene placeholder (`book_number`, `chapter_number`,

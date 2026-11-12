@@ -218,6 +218,52 @@ impl CharacterDesignRedactedView {
     }
 }
 
+/// The Character Design slice a writer sees for the current Scene.
+///
+/// The slice is deliberately narrower than [`CharacterDesignRedactedView`]:
+/// it carries only the contradiction the Scene's dilemma tests (when the plan
+/// names one), the character's conscious desire and the planner-written
+/// behaviour cues. The hidden layer, the unconscious desire, their secret fact
+/// ids, the concealment notes and the personal/private selves are **not
+/// representable** here, so a slice cannot leak them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SceneCharacterDesignSlice {
+    /// Character this slice belongs to.
+    pub character_id: String,
+    /// Character display name, so the slice reads without an extra lookup.
+    pub character_name: String,
+    /// The contradiction the current Scene's dilemma tests, when the plan
+    /// names this character and a contradiction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tested_contradiction: Option<String>,
+    /// What the character wants on the page.
+    pub conscious_desire: String,
+    /// Observable behaviour cues the writer should dramatise instead of naming
+    /// the hidden layer or the unconscious desire.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub behavior_cues: Vec<String>,
+}
+
+impl SceneCharacterDesignSlice {
+    /// Project the writer slice for one character. The caller supplies the
+    /// tested contradiction from the current Scene plan (or `None`); nothing
+    /// author-only is reachable from this constructor.
+    pub fn from_design(
+        design: &CharacterDesignRedactedView,
+        character_name: String,
+        tested_contradiction: Option<String>,
+    ) -> Self {
+        Self {
+            character_id: design.character_id.clone(),
+            character_name,
+            tested_contradiction,
+            conscious_desire: design.conscious_desire.clone(),
+            behavior_cues: design.behavior_cues.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

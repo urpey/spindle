@@ -1032,8 +1032,12 @@ pub struct CharacterArcMilestone {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct PlannedScene {
+    /// 1-based story order of the Scene inside its chapter.
     pub scene_order: i32,
+    /// One-line summary of what happens in the Scene.
     pub summary: String,
+    /// Legacy free-text beat labels. Readable on every project, but on a McKee
+    /// project the structured `beats` list is authoritative.
     #[serde(default)]
     pub beat_structure: Vec<String>,
     /// The Scene's structured Beats in story order (McKee projects).
@@ -1046,17 +1050,24 @@ pub struct PlannedScene {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
     pub turning_beat: Option<u32>,
+    /// Character record ids present in the Scene.
     #[serde(default)]
     pub character_ids: Vec<String>,
+    /// Location record id where the Scene takes place, when planned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location_id: Option<String>,
+    /// Planned content rating for the Scene.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_rating: Option<ContentRating>,
+    /// What the Scene is for: the story job it performs.
     pub purpose: String,
+    /// Whether drafting the Scene needs a research pass.
     #[serde(default)]
     pub research_required: Option<bool>,
+    /// Tags that select research material for the Scene.
     #[serde(default)]
     pub research_tags: Vec<String>,
+    /// Optional explicit research query for the Scene.
     #[serde(default)]
     pub explicit_query: Option<String>,
     /// Primary Value Axis the Scene turns, with opening and closing Charge.
@@ -1083,6 +1094,22 @@ pub struct PlannedScene {
     /// The dilemma and the tested character contradiction, when planned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dilemma: Option<crate::scene_value::SceneDilemma>,
+}
+
+/// One earlier Scene's realized result in the chapter being drafted.
+///
+/// Writer visibility for McKee projects returns the current Scene's plan and
+/// the **earlier** Scenes' realized results rather than every planned Scene.
+/// For now a realized result is the written Scene's summary; the record is a
+/// dedicated type so a realized Value Turn can be added here additively when
+/// the post-draft turn report lands (no such field is invented now). It is
+/// empty for non-McKee projects, so their payloads stay unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RealizedScene {
+    /// Story order of the written Scene inside the chapter.
+    pub scene_order: i32,
+    /// The written Scene's stored summary.
+    pub summary: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1391,6 +1418,24 @@ pub struct SceneContextNovelLayer {
     /// preceding scene has no prose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_scene_tail: Option<PreviousSceneTail>,
+    /// The requested Scene's plan, for McKee projects only. The writer sees the
+    /// current Scene's full value plan and structured Beats and never the later
+    /// Scenes' plans. `None` for non-McKee projects, so their payloads are
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_scene: Option<PlannedScene>,
+    /// Earlier written Scenes' realized results in the requested chapter
+    /// (currently their summaries), for McKee projects only. Empty for
+    /// non-McKee projects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub realized_scenes: Vec<RealizedScene>,
+    /// The current Scene's Character Design slice (tested contradiction,
+    /// conscious desire and planner-written behaviour cues), for McKee
+    /// projects only. It never carries the hidden layer, the unconscious
+    /// desire, their secret fact ids or concealment notes, and it is empty for
+    /// non-McKee projects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub character_design_slice: Vec<crate::character_design::SceneCharacterDesignSlice>,
 }
 
 /// Closing excerpt of the scene immediately preceding the one being drafted,

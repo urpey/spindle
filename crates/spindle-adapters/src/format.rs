@@ -12,6 +12,7 @@
 
 use std::collections::BTreeSet;
 
+use spindle_core::charge::{Charge, ChargeDepth};
 use spindle_core::context_bundle::{estimate_json_tokens, estimate_text_tokens};
 use spindle_core::models::{
     ActiveThreadSummary, AgencyCheckSummary, BookOutline, BranchSummary, CanonicalFactReadModel,
@@ -19,7 +20,7 @@ use spindle_core::models::{
     CharacterStateSummary, ConsistencyScope, ContextFormat, EconomySummary, FutureKnowledgeSummary,
     GetSceneDeleteImpactOutput, GetSceneMoveImpactOutput, HardConstraint, KnowledgeBriefingItem,
     LocationSummary, NarrativePromiseDueSummary, PacingDirectiveSummary, PreviousSceneTail,
-    ReaderContract, RecentSceneSummary, RelationshipSummary, SceneContextNovelLayer,
+    ReaderContract, RealizedScene, RecentSceneSummary, RelationshipSummary, SceneContextNovelLayer,
     SceneContextOutput, SceneContextSceneLayer, SceneDeleteImpactGroup, SceneMoveImpactGroup,
     SearchBibleResultItem, SystemOverlaySummary, TimelineEventSummary, WorldStateSummary,
     WriterIntent, WriterState,
@@ -286,6 +287,24 @@ pub fn format_chapter_briefing_markdown(
     }
     if let Some(chapter_plan) = chapter_plan {
         lines.push(format_current_chapter_plan_markdown(chapter_plan));
+    }
+    // McKee writer visibility: the current Scene's full plan, earlier written
+    // Scenes' realized results and the Character Design slice. Empty for
+    // non-McKee projects, so the briefing markdown stays byte-identical.
+    if let Some(scene_context) = scene_context {
+        if let Some(planned_scene) = scene_context.novel.planned_scene.as_ref() {
+            lines.push(format_planned_scene_markdown(planned_scene));
+        }
+        let realized_scenes_markdown =
+            format_realized_scenes_markdown(&scene_context.novel.realized_scenes);
+        if !realized_scenes_markdown.is_empty() {
+            lines.push(realized_scenes_markdown);
+        }
+        let design_markdown =
+            format_character_design_slice_markdown(&scene_context.novel.character_design_slice);
+        if !design_markdown.is_empty() {
+            lines.push(design_markdown);
+        }
     }
     let active_threads_markdown = format_chapter_briefing_active_threads_markdown(active_threads);
     if !active_threads_markdown.is_empty() {
@@ -1119,6 +1138,22 @@ pub fn format_scene_context_markdown_with_packet(
     lines.push(format_scene_context_reader_contract_markdown(
         &novel.reader_contract,
     ));
+
+    // McKee writer visibility: the current Scene's plan, earlier written
+    // Scenes' realized results and the Character Design slice. All three are
+    // empty for non-McKee projects, so nothing is pushed and the markdown stays
+    // byte-identical.
+    if let Some(planned_scene) = novel.planned_scene.as_ref() {
+        lines.push(format_planned_scene_markdown(planned_scene));
+    }
+    let realized_scenes_markdown = format_realized_scenes_markdown(&novel.realized_scenes);
+    if !realized_scenes_markdown.is_empty() {
+        lines.push(realized_scenes_markdown);
+    }
+    let design_markdown = format_character_design_slice_markdown(&novel.character_design_slice);
+    if !design_markdown.is_empty() {
+        lines.push(design_markdown);
+    }
 
     if let Some(standards) = standards.map(str::trim).filter(|value| !value.is_empty()) {
         lines.push("\n## Standards".to_string());
@@ -4252,6 +4287,212 @@ fn join_names(names: &[String]) -> String {
         "(none)".to_string()
     } else {
         names.join(", ")
+    }
+}
+
+// =============================================================================
+// McKee writer-visibility rendering (current Scene plan, realized Scenes,
+// Character Design slice, planned Charge).
+// =============================================================================
+
+/// Readable rendering of a planned Charge for the drafting packet's
+/// `ValueShift.before` / `ValueShift.after` strings.
+///
+/// The typed `Charge` (sign + four-step depth) is preserved exactly in words:
+/// `positive`, `negative (contrary)`, `negative (contradictory)` or
+/// `negative (negation of the negation)`. A writer reads the same text a critic
+/// can compare with the plan; there is no numeric encoding to misread.
+pub fn charge_label(charge: &Charge) -> String {
+    match charge.depth() {
+        ChargeDepth::Positive => "positive".to_string(),
+        ChargeDepth::Contrary => format!("{} (contrary)", charge.sign()),
+        ChargeDepth::Contradictory => format!("{} (contradictory)", charge.sign()),
+        ChargeDepth::NegationOfTheNegation => {
+            format!("{} (negation of the negation)", charge.sign())
+        }
+    }
+}
+
+/// One structured Beat rendered as a required-beat line for the scene card.
+pub fn format_required_beat(beat: &spindle_core::beats::PlannedBeat) -> String {
+    let said = beat.said.trim();
+    let said_part = if said.is_empty() {
+        String::new()
+    } else {
+        format!(" says \"{said}\"")
+    };
+    format!(
+        "[{}] {}{}; wants {}; gap: {} → {}",
+        beat.kind.as_str(),
+        beat.tactic.trim(),
+        said_part,
+        beat.wanted.trim(),
+        beat.gap.expected.trim(),
+        beat.gap.actual.trim()
+    )
+}
+
+/// The Turning Beat rendered as the scene card's `turn` line.
+pub fn format_turning_beat_turn(beat: &spindle_core::beats::PlannedBeat) -> String {
+    let said = beat.said.trim();
+    let said_part = if said.is_empty() {
+        String::new()
+    } else {
+        format!(" says \"{said}\"")
+    };
+    format!(
+        "{}{}; wants {}; gap: expected {}, actual {}",
+        beat.tactic.trim(),
+        said_part,
+        beat.wanted.trim(),
+        beat.gap.expected.trim(),
+        beat.gap.actual.trim()
+    )
+}
+
+/// Render the current Scene's plan for writer-facing markdown. Returns an empty
+/// string when there is no McKee plan, so non-McKee markdown is byte-identical.
+pub fn format_planned_scene_markdown(scene: &spindle_core::models::PlannedScene) -> String {
+    let mut lines = vec!["\n## Planned scene".to_string()];
+    lines.push(format!(
+        "- Scene {}: {}",
+        scene.scene_order,
+        scene.summary.trim()
+    ));
+    if !scene.purpose.trim().is_empty() {
+        lines.push(format!("- Purpose: {}", scene.purpose.trim()));
+    }
+    if let Some(axis) = scene.primary_value_axis.as_ref() {
+        lines.push(format!(
+            "- Value axis (primary): {}: {} → {}",
+            axis.axis.trim(),
+            charge_label(&axis.opening),
+            charge_label(&axis.closing)
+        ));
+    }
+    for axis in &scene.secondary_value_axes {
+        lines.push(format!(
+            "- Value axis (secondary): {}: {} → {}",
+            axis.axis.trim(),
+            charge_label(&axis.opening),
+            charge_label(&axis.closing)
+        ));
+    }
+    if let Some(opposition) = scene
+        .opposition
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        lines.push(format!("- Opposition: {opposition}"));
+    }
+    if let Some(gap) = scene.gap.as_ref() {
+        lines.push(format!(
+            "- Gap: expected {}; actual {}",
+            gap.expected.trim(),
+            gap.actual.trim()
+        ));
+    }
+    if let Some(question) = scene
+        .scene_question
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        lines.push(format!("- Scene question: {question}"));
+    }
+    if let Some(cost) = scene
+        .inaction_cost
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        lines.push(format!("- Inaction cost: {cost}"));
+    }
+    if let Some(risk) = scene.risk {
+        lines.push(format!("- Risk: {risk}"));
+    }
+    if let Some(dilemma) = scene.dilemma.as_ref() {
+        lines.push(format!(
+            "- Dilemma: {} faces the contradiction \"{}\"",
+            dilemma.character_id.trim(),
+            dilemma.contradiction.trim()
+        ));
+    }
+    if let Some(position) = scene.turning_beat {
+        lines.push(format!("- Turning Beat: {position}"));
+    }
+    if !scene.beats.is_empty() {
+        lines.push("- Beats:".to_string());
+        for (index, beat) in scene.beats.iter().enumerate() {
+            lines.push(format!("  {}. {}", index + 1, format_required_beat(beat)));
+        }
+    }
+    lines.join("\n")
+}
+
+/// Render earlier written Scenes' realized results for writer-facing markdown.
+/// Empty when there are none, so existing payloads are unchanged.
+pub fn format_realized_scenes_markdown(scenes: &[RealizedScene]) -> String {
+    if scenes.is_empty() {
+        return String::new();
+    }
+    let mut lines = vec!["\n## Earlier scenes in this chapter".to_string()];
+    for scene in scenes {
+        lines.push(format!(
+            "- Scene {}: {}",
+            scene.scene_order,
+            scene.summary.trim()
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Render the Character Design slice the writer may see. Empty when there is
+/// none; nothing author-only is reachable from the slice type.
+pub fn format_character_design_slice_markdown(
+    slice: &[spindle_core::character_design::SceneCharacterDesignSlice],
+) -> String {
+    if slice.is_empty() {
+        return String::new();
+    }
+    let mut lines = vec!["\n## Character design (writer slice)".to_string()];
+    for item in slice {
+        let mut parts = vec![format!("- {}", item.character_name.trim())];
+        if let Some(contradiction) = item
+            .tested_contradiction
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            parts.push(format!("tested contradiction: {contradiction}"));
+        }
+        parts.push(format!(
+            "conscious desire: {}",
+            item.conscious_desire.trim()
+        ));
+        if !item.behavior_cues.is_empty() {
+            parts.push(format!(
+                "behaviour cues: {}",
+                item.behavior_cues
+                    .iter()
+                    .map(|cue| cue.trim())
+                    .filter(|cue| !cue.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+        lines.push(parts.join("; "));
+    }
+    lines.join("\n")
+}
+
+/// McKee writer-facing redaction: drop every planned payoff placement from the
+/// open promises carried by subject snapshots (continuity sheets and the
+/// scene-context subject layer). The promise rows are untouched.
+pub fn redact_snapshot_promise_payoffs(snapshots: &mut [SnapshotSubject]) {
+    for snapshot in snapshots {
+        snapshot.redact_promise_payoffs();
     }
 }
 
