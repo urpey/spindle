@@ -1,12 +1,13 @@
 # Planning engine: staged intent to draftable manifests
 
-Status: **proposed design only** (Wave 2 / P3). No runtime behavior changes in
-this PR. Baseline: `origin/main` at
+Status: **implemented design reference** (Wave 2 / P3). The staged planning
+engine, its ratification flow and structural gates are implemented; tickets
+#22–#29 extend them. Baseline evidence: `origin/main` at
 `419f40be7378d8919ac89d28139496d06b7db935` (2026-11-08).
 All source citations below are `file:line` on that commit, with pinned GitHub
 links so the concurrent adapter split cannot move the evidence underneath this
-review. Statements about the proposed engine are requirements, not claims that
-it already exists. Estimates and release thresholds are proposed budgets.
+review; statements about implemented behavior describe the current tree.
+Estimates and release thresholds remain proposed budgets.
 
 ## 1. Problem and code evidence
 
@@ -377,19 +378,27 @@ Chapter/Scene acceptance evaluates the Sequence set a decision would leave
 behind: applied Chapter proposals visible from the branch lineage, then staged
 ancestors in the approved closure, then the artifact's own list, merged by
 `sequence_key` with a later entry **refining** the same key — it overrides the
-scalar fields (plot line, question, inciting Scene, climax Scene) and **unions**
+scalar fields (question, inciting Scene, climax Scene) and **unions**
 `member_scenes` (deduped by story position, kept in strict story order), so
-members an earlier Chapter artifact listed survive. A Chapter artifact may
-therefore extend a Sequence another chapter opened. A non-empty
+members an earlier Chapter artifact listed survive. The key is a **global**
+identity across the merged set, not scoped to one plot line; the merged set is
+keyed by it alone. A refinement therefore may not change `plot_line_id`
+(`sequence_plot_line_changed`); doing so is a data error, not a new Sequence. A
+key must be non-empty, at most 128 bytes, and use only ASCII alphanumerics,
+`-`, `_` and `:` so it can be embedded in a locator such as
+`/merged_sequences/{sequence_key}/climax_scene`; whitespace, `/` and `~` are
+blocking (`sequence_key_invalid`). A Chapter artifact may therefore extend a
+Sequence another chapter opened, but only along the same plot line. A non-empty
 `schedule.sequences` on any other level (Series-Arc, Book, CastWorld, Contract)
 is the blocking `sequence_wrong_level` finding and is never merged; for a McKee
 project the artifact's own Sequence list is checked at every level, and only
 Chapter/Scene artifacts continue into the value-chain pass. Structural blocking
-findings are: a missing or duplicate key, a missing plot line or question, empty
-members, a non-positive placement, members not in strict story order, a missing
-inciting Scene, a missing climax, a climax that is not a member, a climax that
-is not the last member, and an inciting Scene after the climax. They stage with
-the proposal and refuse acceptance.
+findings are: a missing, duplicate or unsafe key, a refinement that changes the
+plot line, a missing plot line or question, empty members, a non-positive
+placement, members not in strict story order, a missing inciting Scene, a
+missing climax, a climax that is not a member, a climax that is not the last
+member, and an inciting Scene after the climax. They stage with the proposal and
+refuse acceptance.
 
 Planned Scenes gain the value-planning fields in both the planning operation
 input (`PlanningPlanChapterSceneInput`) and the stored planned Scene
@@ -525,6 +534,115 @@ Scenes at `/accepted_scenes/{book}/{chapter}/{scene_order}/...`, and
 staged-ancestor Scenes at `/staged_scenes/{book}/{chapter}/{scene_order}/...`;
 repair hints name the plan that must be restaged. Unmarked projects get no
 value-chain findings.
+
+**Subplot structure.** For McKee projects the Chapter/Scene pass evaluates
+every Subplot (a merged plot line with `is_main_plot=false`) against the merged
+Sequences, Convergence Points and planned Value Axes. One rule is blocking and
+stage-recordable: `subplot_sequence_climax_after_convergence_point`, a Sequence
+belonging to a Subplot whose climax is placed **after every one of that
+Subplot's Convergence Points**. The comparison is inclusive story order, so a
+climax at or before a point satisfies it, and a Subplot with no Convergence
+Point is not blocked by this rule (the missing point is advisory below). The
+finding points at `/schedule/sequences/{i}/climax_scene` when the current
+artifact declares or refines the Sequence, otherwise at
+`/merged_sequences/{sequence_key}/climax_scene`, and lists the Sequence key and
+the plot line record/output ref in `related_refs`. The key grammar is the
+pointer-safe one defined above, so the locator segment is unambiguous.
+
+The remaining Subplot findings are advisory and never refuse acceptance. The
+missing-Convergence-Point advisory also runs for Series-Arc/Book artifacts over
+the merged plot-line set, so a Subplot authored without one is visible where it
+is authored, not only in a later Chapter batch; it re-reports on later stagings
+so the gap stays visible.
+
+- `subplot_without_convergence_point` — the merged Subplot plans no Convergence
+  Point. Path: the plot line operation's `/convergence_points` field
+  (`/operations/{i}/operation/input/convergence_points`) or the existing row's
+  `/existing_plot_lines/{id}/convergence_points`.
+- `subplot_axis_dormant` — the Subplot's Value Axis goes three consecutive
+  scanned Chapters without a turn. Exact run definition: scan the distinct
+  `(book_number, chapter_number)` pairs the merged planned Scenes carry, in
+  story order. A Chapter **turns** the axis when any planned Scene in it carries
+  any axis entry (primary or secondary) whose name matches the Subplot's Value
+  Axis trim-exact and whose opening and closing Charge differ. A run continues
+  only while the next scanned Chapter is the immediately following Chapter in
+  the same book (`n + 1`); a chapter gap, a turning Chapter or a book change
+  resets it. The advisory fires once when a run reaches three Chapters and points
+  at the last planned Scene of the Chapter that completed the run.
+- `subplot_job_unsupported` — the Subplot turns its axis at least once but no
+  turn supports the declared job. Documented heuristic: `contradict` requires at
+  least one turn ending at a negative Charge, `resonate` requires at least one
+  ending positive, and `set_up` / `complicate` impose no direction requirement.
+  A Subplot with no turns on its axis at all is the dormancy advisory's concern,
+  not this one. Path: the plot line's `subplot_job` field.
+- `subplot_deeper_than_main_plot` — inside one Act the Subplot's deepest closing
+  Charge rank is deeper than the deepest closing rank on the Main Plot's axis.
+  Documented Act range rule: with merged Acts ordered by `order`, Act N covers
+  the Scenes **after** Act N-1's bounded climax and **at or before** Act N's own
+  climax (Act 1 has no lower bound); an Act with no climax, or with a
+  chapter-wide climax, is skipped and creates no boundary; a Scene after the
+  last bounded Act belongs to no Act and is never compared. Ranks are
+  `positive = 0 < contrary = 1 < contradictory = 2 < negation of the
+  negation = 3`. The Main Plot axis is the merged Main Plot's `value_axis`,
+  falling back to the accepted series Spine Axis, and its per-Act deepest rank is
+  computed independently of the Subplot lookup. The comparison only runs when
+  the merged Acts' exact climaxes rise strictly in **global** story order
+  (`book_number`, `chapter_number`, `scene_order`); the Act-list gate proves
+  only that they rise inside one book, so a later-order Act placed in an earlier
+  book would otherwise let one Act read another's turns. When the order is not
+  strictly increasing, the comparison is skipped. A Subplot may legally share
+  the Main Plot's Value Axis; both sides then read the same turns and the ranks
+  are equal, so no false deeper-than-main finding is produced. The advisory
+  fires only when both axes turn inside the Act, and points at the deepest
+  Subplot turn's Scene and axis entry.
+
+Non-McKee projects get no Subplot findings: the whole pass is gated on the
+McKee marker, and their Sequences and plot-line fields stay plain optional
+data.
+
+**Act causes.** `PlannedAct` gains an optional `cause` — `{ plot_line_id,
+sequence_key }`, additive and skipped when absent, so existing Act JSON is
+byte-identical. The plot line is a `PlanningRef` (a visible record id or an
+active parent proposal ref) spelled `plot_line_id` so the generic planning
+reference validation treats it as a `plot_line` reference; the Sequence is named
+by its **global** `sequence_key` because that is the merge identity, so a later
+Chapter refinement is followed and a key collision is a data error.
+
+Series-Arc/Book acceptance validates every merged Act with a cause against the
+merged Sequences and plot lines, and Chapter/Scene staging re-validates the
+merged accepted Acts the same way: a Chapter refinement that moves a cited
+Sequence climax past the Act climax or past the Convergence Point is reported
+on the accepted Act and refuses that Chapter's acceptance, so a refinement
+cannot silently invalidate an accepted cause. Every **semantic** failure is a
+stage-recordable Blocking finding:
+
+- `act_cause_unresolved_subplot_sequence` — the plot line does not resolve in
+  the merged set (for example it is archived), the key is empty, no
+  merged Sequence carries it, the globally keyed Sequence belongs to another
+  plot line (a data error), or its climax has no exact placement;
+- `act_cause_not_a_subplot` — the cited plot line is the Main Plot;
+- `act_cause_after_act_climax` — the cited Sequence climax comes after the Act's
+  own climax (a cause precedes its effect);
+- `act_cause_after_convergence_point` — the cited climax is after every
+  Convergence Point on the Subplot, including a Subplot that plans none.
+
+Reference **resolution** is a different class: the generic planning reference
+check rejects an unresolved `proposal_ref` / `existing_record_id` while the
+proposal is being staged (`unresolved_proposal_ref` and friends), so those are
+hard staging errors, not stage-recordable findings. The Act-cause findings above
+only describe references the merge can see but the structural rules reject (or
+a visible row the merged set excludes, such as an archived plot line).
+
+A cause authored by the current artifact is reported at
+`/schedule/acts/{i}/cause/...`; a cause carried by a staged ancestor's Act at
+`/staged_acts/{order}/cause/...`; an accepted Act's cause at
+`/accepted_acts/{order}/cause/...`. The flow supports a later Book/Series-Arc
+artifact after Chapter Sequences exist: Sequences are read from the applied
+Chapter proposals (not from a parent proposal), so the reference resolves, and a
+Book artifact that refines one Act need not restate the others. Workflow
+limitation: the forward plan/outline pass authors Series-Arc/Book before the
+Chapter Sequences exist, so it cannot author a resolvable cause; the author
+re-stages that level after the Chapter Sequences are accepted.
 
 Plan amendments do not carry Sequence membership. On a McKee project a
 `scene_add` amendment is refused at pre-flight with an error that names the

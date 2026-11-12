@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use spindle_core::planning::*;
 pub(super) mod apply;
 pub(super) mod promises;
+pub(super) mod subplots;
 pub(super) mod values;
 
 fn hash<T: serde::Serialize>(value: &T) -> Result<String> {
@@ -1031,12 +1032,26 @@ const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "turning_beat_information_dependent_without_promise",
     "turning_beat_promise_unknown",
     "turning_beat_promise_not_planted_earlier",
+    // Subplot structure and the Act-cause reference (ticket #29).
+    "subplot_sequence_climax_after_convergence_point",
+    "act_cause_unresolved_subplot_sequence",
+    "act_cause_not_a_subplot",
+    "act_cause_after_act_climax",
+    "act_cause_after_convergence_point",
+    // Global Sequence identity (a key refines one Sequence; it cannot move its
+    // plot line, and unsafe keys cannot be locator segments).
+    "sequence_plot_line_changed",
+    "sequence_key_invalid",
 ];
 
-/// One blocking finding rendered for a caller-facing error string. The path
-/// locates the field (an artifact operation path, a set path, or
-/// `/existing_plot_lines/<record_id>`), and `related_refs` carries the record
-/// ids or output refs an author needs to find the row.
+/// One blocking finding rendered for a caller-facing error string. The path is
+/// a descriptive locator, not necessarily a pointer into the staged request: it
+/// may name an artifact field (`/schedule/...`), a merged-set entry
+/// (`/merged_sequences/<sequence_key>`), an accepted row
+/// (`/existing_plot_lines/<record_id>/<field>`, `/accepted_acts/<order>/cause`)
+/// or a staged ancestor's entry (`/staged_acts/<order>/cause`). `related_refs`
+/// carries the record ids or output refs an author needs to find the row (and
+/// is empty when the path alone identifies the repair site).
 pub(crate) fn describe_blocking_finding(finding: &PlanningFinding) -> String {
     let related = if finding.related_refs.is_empty() {
         String::new()
@@ -2012,10 +2027,22 @@ fn compute_pov_and_pacing_metrics(
 }
 
 /// One plot line in the set a Series-Arc / Book acceptance would leave behind.
+///
+/// The same merged set feeds the Main Plot / Subplot gate and the Subplot
+/// structural checks, so both read the plot lines a decision would leave
+/// behind, never just the current artifact's operations.
 struct PlotLineStructureCandidate {
     is_main_plot: bool,
     value_axis: Option<String>,
     subplot_job: Option<spindle_core::plot_line::SubplotJob>,
+    /// Convergence Points as planned on this plot line. Empty for pre-McKee
+    /// rows and for a plot line whose author has not placed one yet.
+    convergence_points: Vec<PlanningStoryPlacement>,
+    /// Every reference spelling that resolves to this plot line: its record id
+    /// for an accepted row, the `create_plot_line` output ref for an operation,
+    /// and (for a row applied from this session) the output ref its receipt
+    /// recorded. A Sequence or Act cause may name any of them.
+    keys: std::collections::BTreeSet<String>,
     /// `/operations/<idx>/operation/input` for a plot line created by the
     /// current artifact (or by a staged ancestor proposal); `None` for an
     /// existing row, whose finding is located by its record id.
@@ -2024,12 +2051,150 @@ struct PlotLineStructureCandidate {
 }
 
 impl PlotLineStructureCandidate {
+    /// The path the Main Plot / Subplot gate uses: a field of an operation, or
+    /// the existing row itself (its finding carries the fields in `actual`).
     fn path(&self, field: &str) -> String {
         match &self.artifact_path {
             Some(base) => format!("{base}/{field}"),
             None => format!("/existing_plot_lines/{}", self.related_ref),
         }
     }
+
+    /// The path the Subplot structural checks use: always the exact field, so
+    /// an advisory on an accepted row still points at the field to repair.
+    fn field_path(&self, field: &str) -> String {
+        match &self.artifact_path {
+            Some(base) => format!("{base}/{field}"),
+            None => format!("/existing_plot_lines/{}/{}", self.related_ref, field),
+        }
+    }
+
+    fn matches(
+        &self,
+        reference: &PlanningRef,
+        receipts: &std::collections::BTreeMap<String, String>,
+    ) -> bool {
+        plot_line_reference_keys(reference, receipts)
+            .iter()
+            .any(|key| self.keys.contains(key))
+    }
+}
+
+/// The spellings a plot line reference may have: an existing record id, a
+/// proposal output ref, or a proposal output ref an applied receipt turned into
+/// a record id. Both spellings are kept so a Sequence staged before its plot
+/// line was applied and a Sequence staged afterwards resolve to one plot line.
+fn plot_line_reference_keys(
+    reference: &PlanningRef,
+    receipts: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeSet<String> {
+    let mut keys = std::collections::BTreeSet::new();
+    match reference {
+        PlanningRef::ExistingRecordId(id) => {
+            keys.insert(id.clone());
+        }
+        PlanningRef::ProposalRef(key) => {
+            keys.insert(key.clone());
+            if let Some(id) = receipts.get(key) {
+                keys.insert(id.clone());
+            }
+        }
+    }
+    keys
+}
+
+/// The merged plot-line set a decision would leave behind: the non-archived
+/// rows visible from the session branch's lineage, the artifact's plot-line
+/// operations, and the staged ancestors' plot-line operations.
+///
+/// Rows are lineage-aware like `list_branch_scoped`: a child branch's row
+/// hides a same-named parent row, and archived rows never enter the set.
+/// Applying this for every level (not only Series-Arc/Book) is what lets the
+/// Chapter/Scene Subplot checks see the plot lines accepted earlier.
+fn evaluated_plot_line_candidates_in_conn(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &PlanningScope,
+) -> Result<Vec<PlotLineStructureCandidate>> {
+    let receipts = apply::refs_in_conn(conn, &input.session_id)?;
+    let mut candidates = Vec::new();
+    {
+        let lineage =
+            resolve_branch_lineage_in_conn(conn, Some(&scope.project_id), &scope.branch_id)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, normalized_name, value_axis, subplot_job, main_plot, convergence_points \
+             FROM plot_line WHERE project_id=?1 AND branch_id=?2 AND archived_at IS NULL",
+        )?;
+        let mut overridden = std::collections::HashSet::new();
+        for branch_id in &lineage {
+            let rows = stmt
+                .query_map(rusqlite::params![&scope.project_id, branch_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (id, normalized_name, value_axis, subplot_job, main_plot, convergence_json) in rows
+            {
+                if !overridden.insert(normalized_name) {
+                    continue;
+                }
+                let stored_points: Vec<crate::sqlite::json_records::StoredStoryPlacement> =
+                    serde_json::from_str(&convergence_json).with_context(|| {
+                        format!("invalid convergence_points JSON on plot line {id}")
+                    })?;
+                let convergence_points = stored_points
+                    .into_iter()
+                    .map(|point| PlanningStoryPlacement {
+                        book_number: point.book_number,
+                        chapter_number: point.chapter_number,
+                        scene_order: point.scene_order,
+                        note: point.note,
+                    })
+                    .collect();
+                // A row applied from this session answers to the output ref its
+                // receipt recorded, so a Sequence staged against the parent
+                // proposal still resolves after the plot line became a row.
+                let mut keys = std::collections::BTreeSet::from([id.clone()]);
+                for (out_ref, record_id) in &receipts {
+                    if record_id == &id {
+                        keys.insert(out_ref.clone());
+                    }
+                }
+                candidates.push(PlotLineStructureCandidate {
+                    is_main_plot: main_plot != 0,
+                    value_axis,
+                    subplot_job: subplot_job
+                        .as_deref()
+                        .and_then(spindle_core::plot_line::SubplotJob::parse),
+                    convergence_points,
+                    keys,
+                    artifact_path: None,
+                    related_ref: id,
+                });
+            }
+        }
+    }
+    for (index, item) in input.operations.iter().enumerate() {
+        if let PlanningOperation::CreatePlotLine(plot) = &item.operation {
+            candidates.push(PlotLineStructureCandidate {
+                is_main_plot: plot.is_main_plot,
+                value_axis: plot.value_axis.clone(),
+                subplot_job: plot.subplot_job,
+                convergence_points: plot.convergence_points.clone(),
+                keys: std::collections::BTreeSet::from([item.output_ref.clone()]),
+                artifact_path: Some(format!("/operations/{index}/operation/input")),
+                related_ref: item.output_ref.clone(),
+            });
+        }
+    }
+    collect_staged_ancestor_plot_lines(conn, input, &mut candidates)?;
+    Ok(candidates)
 }
 
 /// Where a set-level finding points: a field of the artifact when any
@@ -2084,6 +2249,8 @@ fn collect_staged_ancestor_plot_lines(
                     is_main_plot: plot.is_main_plot,
                     value_axis: plot.value_axis.clone(),
                     subplot_job: plot.subplot_job,
+                    convergence_points: plot.convergence_points.clone(),
+                    keys: std::collections::BTreeSet::from([item.output_ref.clone()]),
                     artifact_path: Some(format!("/operations/{index}/operation/input")),
                     related_ref: item.output_ref.clone(),
                 });
@@ -2128,58 +2295,13 @@ fn validate_mckee_plot_lines(
         return Ok(());
     }
 
-    let mut candidates = Vec::new();
-    {
-        // Vision is lineage-aware like `list_branch_scoped`: the session
-        // branch first, then its ancestors, with a child row hiding a
-        // same-named parent row. Archived rows never enter the set.
-        let lineage =
-            resolve_branch_lineage_in_conn(conn, Some(&scope.project_id), &scope.branch_id)?;
-        let mut stmt = conn.prepare(
-            "SELECT id, normalized_name, value_axis, subplot_job, main_plot FROM plot_line \
-             WHERE project_id=?1 AND branch_id=?2 AND archived_at IS NULL",
-        )?;
-        let mut overridden = std::collections::HashSet::new();
-        for branch_id in &lineage {
-            let rows = stmt
-                .query_map(rusqlite::params![&scope.project_id, branch_id], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, i64>(4)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            for (id, normalized_name, value_axis, subplot_job, main_plot) in rows {
-                if !overridden.insert(normalized_name) {
-                    continue;
-                }
-                candidates.push(PlotLineStructureCandidate {
-                    is_main_plot: main_plot != 0,
-                    value_axis,
-                    subplot_job: subplot_job
-                        .as_deref()
-                        .and_then(spindle_core::plot_line::SubplotJob::parse),
-                    artifact_path: None,
-                    related_ref: id,
-                });
-            }
-        }
-    }
-    for (index, item) in input.operations.iter().enumerate() {
-        if let PlanningOperation::CreatePlotLine(plot) = &item.operation {
-            candidates.push(PlotLineStructureCandidate {
-                is_main_plot: plot.is_main_plot,
-                value_axis: plot.value_axis.clone(),
-                subplot_job: plot.subplot_job,
-                artifact_path: Some(format!("/operations/{index}/operation/input")),
-                related_ref: item.output_ref.clone(),
-            });
-        }
-    }
-    collect_staged_ancestor_plot_lines(conn, input, &mut candidates)?;
+    let candidates = evaluated_plot_line_candidates_in_conn(conn, input, scope)?;
+
+    // The missing-Convergence-Point advisory belongs where the Subplot is
+    // authored: report it over the merged plot-line set at Series-Arc/Book time
+    // instead of waiting for a later Chapter batch. It stays advisory and
+    // re-reports on later stagings so the gap stays visible.
+    subplots::validate_subplot_convergence_advisory(&candidates, findings);
 
     let main_plots: Vec<&PlotLineStructureCandidate> =
         candidates.iter().filter(|item| item.is_main_plot).collect();
@@ -5069,6 +5191,9 @@ fn validate_stage_input_in_conn_excluding(
     validate_mckee_plot_lines(conn, input, &s.scope, &mut findings)?;
     validate_mckee_character_designs(conn, input, &s.scope, &mut findings)?;
     validate_mckee_acts(conn, input, &s.scope, &mut findings)?;
+    if let Some(scope) = s.scope.as_ref() {
+        subplots::validate_mckee_act_causes(conn, input, scope, &mut findings)?;
+    }
     validate_mckee_act_climax_placements(conn, input, &s.scope, &mut findings)?;
     validate_mckee_pacing_curve_breakpoints(conn, input, &s.scope, &mut findings)?;
     values::validate_mckee_value_chain(conn, input, &s.scope, &mut findings)?;

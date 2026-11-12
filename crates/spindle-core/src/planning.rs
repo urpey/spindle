@@ -172,6 +172,27 @@ pub struct PlannedIntensity {
     pub note: Option<String>,
 }
 
+/// The Subplot Sequence climax an Act climax cites as its cause.
+///
+/// The shape is deliberately narrow so it resolves deterministically: the plot
+/// line is referenced with the same [`PlanningRef`] slot Sequences use, and the
+/// Sequence is named by its `sequence_key`. The key is a **global** merge
+/// identity, unique across the merged Sequences of the whole project (not just
+/// within one plot line), so a later Chapter artifact's refinement is followed
+/// deterministically and a key collision is a data error rather than an
+/// ambiguity. Naming the record id instead would pin the cause to one
+/// proposal's output.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PlannedActCause {
+    /// The Subplot whose Sequence climax causes this Act's climax. The field is
+    /// named `plot_line_id` on purpose so the generic planning reference
+    /// validation treats it as a `plot_line` reference.
+    pub plot_line_id: PlanningRef,
+    /// The cited Sequence's global merge key.
+    pub sequence_key: String,
+}
+
 /// One Act in the ordered Act list carried by a writing-level schedule.
 ///
 /// An Act is planning intent (ADR 0006), never a story record. It names the
@@ -197,6 +218,10 @@ pub struct PlannedAct {
     /// True only on the final Act, whose climax answers the Central Question.
     #[serde(default)]
     pub answers_central_question: bool,
+    /// Optional Subplot Sequence climax this Act climax cites as its cause.
+    /// Additive and skipped when absent, so existing Act JSON is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<PlannedActCause>,
 }
 
 /// One Sequence in the chapter-level Sequence list carried by a planning
@@ -210,8 +235,11 @@ pub struct PlannedAct {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedSequence {
-    /// Stable schedule-local key. It is the merge identity: a later entry with
-    /// the same key refines this Sequence instead of duplicating it.
+    /// Stable **global** merge key, unique across the merged Sequences of the
+    /// project. A later entry with the same key refines this Sequence instead of
+    /// duplicating it, but may not move it to another plot line. The key is
+    /// pointer-safe: non-empty, bounded length, ASCII alphanumerics plus `-`,
+    /// `_` and `:`.
     #[serde(default)]
     pub sequence_key: String,
     /// The one plot line this Sequence belongs to.

@@ -105,6 +105,7 @@ mod tests {
             charge: Some(Charge::new(ChargeSign::Negative, depth).unwrap()),
             central_question_part: format!("part {order}"),
             answers_central_question: answers,
+            cause: None,
         }
     }
 
@@ -165,6 +166,36 @@ mod tests {
             derive_act_breakpoints(&acts, 1),
             BTreeMap::from([("act_1".to_string(), 1.0)]),
             "an unmerged list follows the same later-wins rule as the merge"
+        );
+    }
+
+    #[test]
+    fn act_cause_is_additive_and_skipped_when_absent() {
+        let legacy = serde_json::json!({
+            "order": 1,
+            "climax": {"book_number": 1, "chapter_number": 1, "scene_order": 2, "note": null},
+            "charge": {"sign": "negative", "depth": "contrary"},
+            "central_question_part": "part 1",
+            "answers_central_question": false
+        });
+        let act: PlannedAct = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(act.cause, None);
+        assert_eq!(
+            serde_json::to_value(&act).unwrap(),
+            legacy,
+            "an Act without a cause must serialize byte-identically"
+        );
+
+        let mut with_cause = legacy;
+        with_cause["cause"] = serde_json::json!({
+            "plot_line_id": {"kind": "proposal_ref", "value": "plot:sub"},
+            "sequence_key": "seq:sub"
+        });
+        let act: PlannedAct = serde_json::from_value(with_cause.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&act).unwrap(),
+            with_cause,
+            "the cause reference round-trips"
         );
     }
 

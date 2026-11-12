@@ -987,9 +987,19 @@ parent is already in the row set and is not counted twice). Exactly one Main
 Plot, its Value Axis equal to the accepted series Spine Axis (trim then exact
 match), and exactly one structural job on every Subplot are required. Those
 blocking findings are recorded on the staged proposal (so the author sees them)
-and refuse acceptance; the acceptance error names the operation field or the
-existing row (`/existing_plot_lines/<id>` plus related refs) to repair. A McKee
-project with no accepted series spine yet skips the axis comparison. V0058 is
+and refuse acceptance; the acceptance error names a **descriptive locator** for
+the repair site. Locators are not always pointers into the staged request: the
+grammar is `/operations/{i}/operation/input/{field}` and `/schedule/...` for the
+current artifact, `/existing_plot_lines/{record_id}/{field}` for an accepted
+plot-line row, `/accepted_scenes/...` and `/staged_scenes/...` for planned
+Scenes, `/merged_sequences/{sequence_key}/{field}` for an inherited Sequence,
+`/accepted_acts/{order}/cause/...` for an accepted Act and
+`/staged_acts/{order}/cause/...` for a staged ancestor's Act. `related_refs`
+carries the record ids / output refs where the path alone does not identify the
+row; it is empty when the path is enough. The `sequence_key` segment is
+pointer-safe (non-empty, at most 128 bytes, only ASCII alphanumerics, `-`, `_`
+and `:`), so it never contains `/` or `~`. A McKee project with no accepted
+series spine yet skips the axis comparison. V0058 is
 additive, so existing projects and unmarked rows keep their previous read and
 export shape and keep NULL / 0. That is not an exemption: a McKee project's
 pre-existing plot lines must be completed through `update_entity` (`value_axis`,
@@ -1037,13 +1047,18 @@ not story records (ADR 0006). Each Sequence has a stable `sequence_key`, exactly
 one plot line reference, a `question`, an inciting Scene and a climax Scene that
 must be one of its `member_scenes` **and the last member in story order**;
 members are exact planned-Scene placements in strict story order and may cross
-chapters and books. Accepted Sequences merge by `sequence_key` with a later
-Chapter proposal **refining** the same key: it overrides the scalar fields and
-unions `member_scenes` (deduped, strict story order), so earlier members
-survive. Chapter/Scene acceptance records blocking findings for a missing or
-duplicate key, a missing plot line or question, empty or unordered members, a
-non-positive placement, a missing inciting Scene, a climax that is not a member
-or not the last member, and an inciting Scene after the climax. For a McKee
+chapters and books. The key is a **global** identity for the merged set, not
+scoped to one plot line: a later Chapter proposal reusing it **refines** that
+Sequence, overriding the scalar fields and unioning `member_scenes` (deduped,
+strict story order) so earlier members survive, but it may not change
+`plot_line_id` (`sequence_plot_line_changed`). A key is non-empty, at most 128
+bytes, and restricted to ASCII alphanumerics, `-`, `_` and `:` so it is safe in
+a locator (`sequence_key_invalid` otherwise). Chapter/Scene acceptance records
+blocking findings for a missing, duplicate or unsafe key, a refinement that
+moves the plot line, a missing plot line or question, empty or unordered
+members, a non-positive placement, a missing inciting Scene, a climax that is
+not a member or not the last member, and an inciting Scene after the climax. For
+a McKee
 project the artifact's own Sequence list is checked at every level; a non-empty
 `schedule.sequences` anywhere other than Chapter is `sequence_wrong_level` and
 is never merged (unmarked projects keep ignoring Sequence metadata).
@@ -1071,6 +1086,50 @@ findings use the existing structured shape and JSON-pointer paths:
 `/accepted_scenes/{book}/{chapter}/{scene_order}/...` for accepted plans and
 `/staged_scenes/...` for staged ancestors. Unmarked projects get no value-chain
 findings and their payloads are unchanged.
+
+Subplot structure is checked over the merged Sequences and Convergence Points in
+the same Chapter/Scene pass (`spindle_core::subplot` owns the pure rules). A
+Subplot Sequence climax placed **after every** Convergence Point of its Subplot
+is blocking (`subplot_sequence_climax_after_convergence_point`); the finding
+points at `/schedule/sequences/{i}/climax_scene` for a Sequence the artifact
+declares or refines and at `/merged_sequences/{sequence_key}/climax_scene` for an
+inherited one. Four advisories never block: a Subplot with no Convergence Point
+(also reported over the merged plot-line set when a Series-Arc/Book artifact
+authors the Subplot), a Subplot Value Axis that goes three consecutive scanned
+Chapters without a turn (a Chapter gap, a turning Chapter or a book change
+resets the run), a Subplot whose turns do not support its declared job
+(`contradict` needs a negative-ending turn, `resonate` a positive-ending one;
+`set_up` and `complicate` impose no direction), and a Subplot turning deeper than
+the Main Plot inside one Act (Act N covers Scenes after Act N-1's climax up to
+and including its own; the Main Plot axis is its `value_axis`, falling back to
+the series Spine Axis). The depth comparison runs only when the merged Acts'
+exact climaxes rise strictly in global story order, so a cross-book
+out-of-order Act list cannot read one Act's turns as another's; a Subplot that
+shares the Main Plot's Value Axis reads the same turns on both sides and cannot
+false-positive. The job and depth heuristics and the dormancy/Act-range
+definitions are documented in [planning engine](planning-engine-design.md).
+Non-McKee projects get none of these findings.
+
+An Act may name the Subplot Sequence climax that causes it:
+`PlannedAct.cause` is an optional `{ plot_line_id, sequence_key }`, additive and
+skipped when absent. The `sequence_key` is global, so a key collision is a data
+error rather than an ambiguous lookup. Series-Arc/Book acceptance resolves every
+merged Act with a cause against the merged plot lines and Sequences, and
+Chapter/Scene staging re-validates the merged accepted Acts against refined
+Sequences: the plot line must exist and be a Subplot, the Sequence must carry the
+cited key and belong to that plot line, its climax must be at or before a
+Convergence Point and at or before the Act's own climax. Semantic failures are
+stage-recordable blocking findings (`act_cause_unresolved_subplot_sequence`,
+`act_cause_not_a_subplot`, `act_cause_after_act_climax`,
+`act_cause_after_convergence_point`); an unresolved `PlanningRef` itself is
+already a hard staging error in the generic reference check. A cause authored
+here is located at `/schedule/acts/{i}/cause/...`; a staged ancestor's at
+`/staged_acts/{order}/cause/...`; an accepted Act's at
+`/accepted_acts/{order}/cause/...`. A later Book or Series-Arc artifact can be
+staged after the Chapter Sequences exist because the Sequences are read from
+applied Chapter proposals, not from a parent; the forward pass cannot author the
+cause, so the author re-stages that level after the Chapter Sequences are
+accepted.
 
 Planned Scenes also carry structured **Beats** (`spindle_core::beats`) for McKee
 projects: each Beat has a closed `kind` (`action`, `reaction`, `turn`), an

@@ -21,6 +21,7 @@ pub mod story_spine;
 pub mod style;
 pub mod subject;
 pub mod subject_snapshot;
+pub mod subplot;
 pub mod temporal;
 pub mod validators;
 pub mod voice;

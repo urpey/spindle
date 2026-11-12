@@ -77,6 +77,20 @@ broken. Supervisor-side enforcement is follow-up work (#31/#32). Sequences may
 cross chapters; the supervisor never turns them into timeline events or
 canonical facts.
 
+Subplot structure is likewise a planning-level check. A Chapter/Scene artifact
+whose Sequence belongs to a Subplot must land that Sequence's climax at or before
+one of the Subplot's Convergence Points, and planning records stage-recordable
+findings (one blocking rule, four advisories) when it does not; an Act may also
+name the Subplot Sequence climax that causes it. Those findings exist only at
+planning stage/acceptance time: `authoring_prepare_run` and the supervisor do
+not re-read Convergence Points, Subplot jobs, Act causes or the Act-range depth
+comparison, so drafting readiness never re-litigates them. Chapter/Scene
+staging does re-check the merged accepted Acts' causes against refined
+Sequences, so a later refinement that moves a cited climax reports a blocking
+finding on the accepted Act rather than silently invalidating it. The Act list,
+including any cause, reads back through `planning_status` as planning intent and
+never becomes a timeline event or canonical fact.
+
 ## MCP Tools Interface
 
 The supervisor exposes 9 MCP tools through the `spindle-mcp` server:
