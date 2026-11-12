@@ -177,3 +177,36 @@ fn static_tool_names_matches_all_tool_schemas() {
         );
     }
 }
+
+#[test]
+fn plan_chapter_scene_schema_advertises_value_plan_fields() {
+    let schemas = all_tool_schemas();
+    let tool = schemas
+        .iter()
+        .find(|tool| tool.name == "plan_chapter")
+        .expect("plan_chapter schema");
+    let value = serde_json::to_value(tool).expect("schema serializes");
+    let item = &value["inputSchema"]["properties"]["scenes"]["items"];
+    let scene = if let Some(properties) = item.get("properties") {
+        properties
+    } else {
+        let reference = item["$ref"].as_str().expect("scene item schema reference");
+        let definition = reference.rsplit('/').next().expect("definition name");
+        &value["inputSchema"]["$defs"][definition]["properties"]
+    };
+    for field in [
+        "primary_value_axis",
+        "secondary_value_axes",
+        "opposition",
+        "gap",
+        "scene_question",
+        "inaction_cost",
+        "risk",
+        "dilemma",
+    ] {
+        assert!(
+            scene.get(field).is_some(),
+            "plan_chapter scene schema is missing {field}: {value}"
+        );
+    }
+}

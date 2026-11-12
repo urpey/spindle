@@ -3,6 +3,7 @@ use crate::character_design::CharacterDesignView;
 use crate::charge::Charge;
 use crate::models::*;
 use crate::plot_line::SubplotJob;
+use crate::scene_value::{SceneGap, SceneValueAxis};
 use crate::story_spine::{ControllingIdea, StorySpine, StorySpineEnding};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -197,6 +198,39 @@ pub struct PlannedAct {
     pub answers_central_question: bool,
 }
 
+/// One Sequence in the chapter-level Sequence list carried by a planning
+/// schedule.
+///
+/// A Sequence groups planned Scenes under exactly one plot line and ends in its
+/// strongest Scene. It is planning intent (ADR 0006), never a story record, and
+/// its `member_scenes` may span chapters and books. The entries are additive
+/// schedule metadata; existing artifacts without `sequences` deserialize and
+/// serialize exactly as before.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PlannedSequence {
+    /// Stable schedule-local key. It is the merge identity: a later entry with
+    /// the same key refines this Sequence instead of duplicating it.
+    #[serde(default)]
+    pub sequence_key: String,
+    /// The one plot line this Sequence belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_line_id: Option<PlanningRef>,
+    /// The part of its plot line's question this Sequence answers.
+    #[serde(default)]
+    pub question: String,
+    /// The Scene that opens the Sequence, when a separate inciting Scene is
+    /// planned. It must not come after the climax.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inciting_scene: Option<PlanningStoryPlacement>,
+    /// The reserved climax Scene. It must be one of `member_scenes`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub climax_scene: Option<PlanningStoryPlacement>,
+    /// Member planned Scenes in strict story order.
+    #[serde(default)]
+    pub member_scenes: Vec<PlanningStoryPlacement>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PlanningSchedule {
@@ -210,6 +244,10 @@ pub struct PlanningSchedule {
     /// Empty for levels that do not shape Acts and for existing artifacts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acts: Vec<PlannedAct>,
+    /// Sequence grouping for the chapter level, when the level plans one.
+    /// Empty for other levels and for existing artifacts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sequences: Vec<PlannedSequence>,
 }
 
 impl PlanningSchedule {
@@ -218,6 +256,7 @@ impl PlanningSchedule {
             && self.pov_plan.is_empty()
             && self.intensity_targets.is_empty()
             && self.acts.is_empty()
+            && self.sequences.is_empty()
     }
 }
 
@@ -1090,6 +1129,44 @@ pub struct PlanningPlanChapterSceneInput {
     pub research_tags: Vec<String>,
     #[serde(default)]
     pub explicit_query: Option<String>,
+    /// Primary Value Axis the Scene turns, with opening and closing Charge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_value_axis: Option<SceneValueAxis>,
+    /// Up to two secondary Value Axes the Scene also turns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secondary_value_axes: Vec<SceneValueAxis>,
+    /// The opposition the Scene's action meets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opposition: Option<String>,
+    /// The Gap the Scene designs (expected versus actual result).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap: Option<SceneGap>,
+    /// The question the Scene answers for its Sequence or plot line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_question: Option<String>,
+    /// What a character loses by doing nothing in this Scene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inaction_cost: Option<String>,
+    /// Planned risk level from 1 to 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk: Option<i32>,
+    /// The dilemma and the tested character contradiction, when planned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dilemma: Option<PlanningSceneDilemma>,
+}
+
+/// A planned Scene dilemma whose tested character is a planning reference.
+///
+/// The stored scene resolves `character_id` to a record id; a planning artifact
+/// may point at an earlier `create_character` operation or an existing
+/// character visible on the session branch.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningSceneDilemma {
+    /// Character whose Character Design contradiction the dilemma tests.
+    pub character_id: PlanningRef,
+    /// The contradiction text, matched trim-exact against the design.
+    pub contradiction: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]

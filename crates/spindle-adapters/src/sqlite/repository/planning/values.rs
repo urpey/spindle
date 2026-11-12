@@ -1,0 +1,1117 @@
+//! McKee value-chain validation over the planned Scenes of a project branch.
+//!
+//! The pass runs for Chapter and Scene artifacts of McKee-structured projects.
+//! It builds the ordered planned-Scene list a decision would leave behind —
+//! accepted chapter plans visible from the branch lineage, the staged ancestors
+//! in the same approved closure, and the current artifact's `plan_chapter`
+//! operations — and evaluates the Sequence grouping and the scene value plan.
+//!
+//! **Precedence.** A later plan for the same `(book_number, chapter_number)`
+//! replaces the earlier one: accepted plans first, then staged ancestors in
+//! creation order, then the current artifact. Sequences merge by
+//! `sequence_key` instead (see [`spindle_core::sequences`]), because a later
+//! Chapter artifact may extend a Sequence that an earlier chapter opened.
+//!
+//! All blocking findings here are stage-recordable: the proposal stages with the
+//! findings visible and acceptance refuses until they are repaired.
+
+use super::*;
+use spindle_core::models::PlannedScene;
+use spindle_core::planning::{PlannedAct, PlannedSequence, PlanningRef, PlanningStoryPlacement};
+use spindle_core::scene_value::{SceneDilemma, SceneGap, SceneValueAxis, scene_value_errors};
+use spindle_core::sequences::{merge_planned_sequences, placement_is_member, same_scene_position};
+use std::collections::{BTreeMap, BTreeSet};
+
+/// One planned Scene with the value fields the chain rules read, plus the
+/// finding path and repair hint for the plan that owns it.
+#[derive(Debug, Clone)]
+struct SceneValueEntry {
+    book_number: i32,
+    chapter_number: i32,
+    scene_order: i32,
+    primary: Option<SceneValueAxis>,
+    secondary: Vec<SceneValueAxis>,
+    gap: Option<SceneGap>,
+    inaction_cost: Option<String>,
+    risk: Option<i32>,
+    dilemma: Option<SceneDilemma>,
+    path: String,
+    repair_hint: String,
+}
+
+impl SceneValueEntry {
+    fn from_planned_scene(
+        book_number: i32,
+        chapter_number: i32,
+        scene: &PlannedScene,
+        path: String,
+        repair_hint: String,
+    ) -> Self {
+        Self {
+            book_number,
+            chapter_number,
+            scene_order: scene.scene_order,
+            primary: scene.primary_value_axis.clone(),
+            secondary: scene.secondary_value_axes.clone(),
+            gap: scene.gap.clone(),
+            inaction_cost: scene.inaction_cost.clone(),
+            risk: scene.risk,
+            dilemma: scene.dilemma.clone(),
+            path,
+            repair_hint,
+        }
+    }
+
+    fn axes(&self) -> impl Iterator<Item = &SceneValueAxis> {
+        self.primary.iter().chain(self.secondary.iter())
+    }
+
+    fn has_turn(&self) -> bool {
+        self.axes().any(SceneValueAxis::turns)
+    }
+
+    fn placement(&self) -> PlanningStoryPlacement {
+        PlanningStoryPlacement {
+            book_number: self.book_number,
+            chapter_number: self.chapter_number,
+            scene_order: Some(self.scene_order),
+            note: None,
+        }
+    }
+}
+
+/// A Character Design contradiction set the value plan may test.
+struct DesignContradictions {
+    key: String,
+    contradictions: Vec<String>,
+    path: String,
+}
+
+/// Value-chain gate entry point. Records findings and never changes data.
+pub(super) fn validate_mckee_value_chain(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &Option<PlanningScope>,
+    findings: &mut Vec<PlanningFinding>,
+) -> Result<()> {
+    let Some(scope) = scope else {
+        return Ok(());
+    };
+    if !matches!(input.level, PlanningLevel::Chapter | PlanningLevel::Scene) {
+        return Ok(());
+    }
+    if !project_is_mckee_in_conn(conn, &scope.project_id)? {
+        return Ok(());
+    }
+
+    validate_own_sequences(input, findings);
+    let sequences = evaluated_sequences_in_conn(conn, input, scope)?;
+    let scenes = evaluated_scene_values_in_conn(conn, input, scope)?;
+    if scenes.is_empty() {
+        return Ok(());
+    }
+    let acts = evaluated_mckee_acts_in_conn(conn, input, scope)?;
+    let designs = evaluated_design_contradictions_in_conn(conn, input, scope)?;
+    let receipts = apply::refs_in_conn(conn, &input.session_id).unwrap_or_default();
+
+    validate_scene_value_shapes(&scenes, findings);
+    validate_non_events(&scenes, findings);
+    validate_value_chain(&scenes, findings);
+    validate_sequence_membership(&scenes, &sequences, findings);
+    validate_inaction_costs(&scenes, findings);
+    validate_climax_dilemmas(&scenes, &sequences, &acts, findings);
+    validate_dilemma_contradictions(&scenes, &designs, &receipts, findings);
+    validate_same_direction_runs(&scenes, findings);
+    validate_sequence_risk(&scenes, &sequences, findings);
+    validate_chapter_endings(&scenes, findings);
+    validate_untested_contradictions(&scenes, &designs, &receipts, findings);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Structural validation of the artifact's own Sequence list
+// ---------------------------------------------------------------------------
+
+fn validate_own_sequences(input: &StagePlanningInput, findings: &mut Vec<PlanningFinding>) {
+    if input.schedule.sequences.is_empty() {
+        return;
+    }
+    if input.level != PlanningLevel::Chapter {
+        findings.push(planning_finding(
+            "sequence_wrong_level",
+            PlanningFindingSeverity::Blocking,
+            "/schedule/sequences".to_string(),
+            Vec::new(),
+            "an empty schedule.sequences at levels other than Chapter",
+            format!(
+                "{} Sequence(s) on a {level:?} artifact",
+                input.schedule.sequences.len(),
+                level = input.level
+            ),
+            "Stage Sequences at the Chapter level; they are chapter-level schedule metadata.",
+        ));
+        return;
+    }
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    for (index, sequence) in input.schedule.sequences.iter().enumerate() {
+        let base = format!("/schedule/sequences/{index}");
+        let key = sequence.sequence_key.trim();
+        if key.is_empty() {
+            findings.push(planning_finding(
+                "sequence_key_missing",
+                PlanningFindingSeverity::Blocking,
+                format!("{base}/sequence_key"),
+                Vec::new(),
+                "a non-empty stable sequence_key",
+                "empty",
+                "Give the Sequence a stable key (for example 'seq:opening'); later plans merge by it.",
+            ));
+        } else if let Some(previous) = seen.insert(key.to_string(), index) {
+            findings.push(planning_finding(
+                "sequence_key_duplicate",
+                PlanningFindingSeverity::Blocking,
+                format!("{base}/sequence_key"),
+                Vec::new(),
+                "a sequence_key unique within the artifact",
+                format!("'{key}' is also used by sequence {previous}"),
+                "Merge the two entries into one Sequence; a key identifies exactly one Sequence.",
+            ));
+        }
+        if sequence.plot_line_id.is_none() {
+            findings.push(planning_finding(
+                "sequence_missing_plot_line",
+                PlanningFindingSeverity::Blocking,
+                format!("{base}/plot_line_id"),
+                Vec::new(),
+                "exactly one plot line reference",
+                "no plot line",
+                "Name the one plot line this Sequence belongs to.",
+            ));
+        }
+        if sequence.question.trim().is_empty() {
+            findings.push(planning_finding(
+                "sequence_missing_question",
+                PlanningFindingSeverity::Blocking,
+                format!("{base}/question"),
+                Vec::new(),
+                "the part of the plot line's question this Sequence answers",
+                "empty",
+                "State the question this Sequence answers before accepting it.",
+            ));
+        }
+        if sequence.member_scenes.is_empty() {
+            findings.push(planning_finding(
+                "sequence_members_empty",
+                PlanningFindingSeverity::Blocking,
+                format!("{base}/member_scenes"),
+                Vec::new(),
+                "at least one member planned Scene",
+                "no members",
+                "List the planned Scenes this Sequence groups, in story order.",
+            ));
+        }
+        for (member_index, member) in sequence.member_scenes.iter().enumerate() {
+            if !member.has_positive_coordinates() || member.scene_order.is_none() {
+                findings.push(planning_finding(
+                    "sequence_invalid_placement",
+                    PlanningFindingSeverity::Blocking,
+                    format!("{base}/member_scenes/{member_index}"),
+                    Vec::new(),
+                    "positive book_number, chapter_number and scene_order",
+                    format!(
+                        "book={}, chapter={}, scene_order={:?}",
+                        member.book_number, member.chapter_number, member.scene_order
+                    ),
+                    "Use 1-based positive coordinates with an exact scene_order for every member.",
+                ));
+            }
+        }
+        if !sequence.member_scenes.is_empty()
+            && !spindle_core::sequences::members_strictly_ordered(&sequence.member_scenes)
+        {
+            findings.push(planning_finding(
+                "sequence_members_unordered",
+                PlanningFindingSeverity::Blocking,
+                format!("{base}/member_scenes"),
+                Vec::new(),
+                "members in strict (book_number, chapter_number, scene_order) order",
+                format!(
+                    "{:?}",
+                    sequence
+                        .member_scenes
+                        .iter()
+                        .map(|m| (m.book_number, m.chapter_number, m.scene_order))
+                        .collect::<Vec<_>>()
+                ),
+                "Order member_scenes by story position; a Sequence may cross chapters but not reorder them.",
+            ));
+        }
+        match sequence.climax_scene.as_ref() {
+            None => findings.push(planning_finding(
+                "sequence_missing_climax",
+                PlanningFindingSeverity::Blocking,
+                format!("{base}/climax_scene"),
+                Vec::new(),
+                "the Sequence climax Scene placement",
+                "no climax",
+                "Name the strongest Scene the Sequence ends on; a dilemma is required there.",
+            )),
+            Some(climax) => {
+                if !climax.has_positive_coordinates() || climax.scene_order.is_none() {
+                    findings.push(planning_finding(
+                        "sequence_invalid_placement",
+                        PlanningFindingSeverity::Blocking,
+                        format!("{base}/climax_scene"),
+                        Vec::new(),
+                        "positive book_number, chapter_number and scene_order",
+                        format!(
+                            "book={}, chapter={}, scene_order={:?}",
+                            climax.book_number, climax.chapter_number, climax.scene_order
+                        ),
+                        "Use 1-based positive coordinates with an exact scene_order for the climax.",
+                    ));
+                }
+                if !placement_is_member(climax, &sequence.member_scenes) {
+                    findings.push(planning_finding(
+                        "sequence_climax_not_member",
+                        PlanningFindingSeverity::Blocking,
+                        format!("{base}/climax_scene"),
+                        Vec::new(),
+                        "a climax that is one of member_scenes",
+                        "the climax is not a member of this Sequence",
+                        "Add the climax to member_scenes, or move the climax to a member Scene.",
+                    ));
+                }
+            }
+        }
+        if let (Some(inciting), Some(climax)) = (
+            sequence.inciting_scene.as_ref(),
+            sequence.climax_scene.as_ref(),
+        ) && inciting.cmp_story_order(climax) == std::cmp::Ordering::Greater
+        {
+            findings.push(planning_finding(
+                "sequence_inciting_after_climax",
+                PlanningFindingSeverity::Blocking,
+                format!("{base}/inciting_scene"),
+                Vec::new(),
+                "an inciting Scene at or before the climax",
+                format!(
+                    "inciting book {} chapter {} comes after climax book {} chapter {}",
+                    inciting.book_number,
+                    inciting.chapter_number,
+                    climax.book_number,
+                    climax.chapter_number
+                ),
+                "Move the inciting Scene before the climax (or omit it).",
+            ));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Evaluated sets
+// ---------------------------------------------------------------------------
+
+/// Merge applied, staged-ancestor and current-artifact Sequences by key.
+fn evaluated_sequences_in_conn(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &PlanningScope,
+) -> Result<Vec<PlannedSequence>> {
+    let mut evaluated =
+        accepted_planning_sequences_in_conn(conn, &scope.project_id, &scope.branch_id)?;
+    for ancestor in collect_staged_ancestor_proposals_in_conn(conn, input)? {
+        if ancestor.artifact.level != PlanningLevel::Chapter {
+            continue;
+        }
+        evaluated = merge_planned_sequences(&evaluated, &ancestor.artifact.schedule.sequences);
+    }
+    if input.level == PlanningLevel::Chapter {
+        evaluated = merge_planned_sequences(&evaluated, &input.schedule.sequences);
+    }
+    Ok(evaluated)
+}
+
+/// The accepted chapter plans visible from the branch lineage. A nearer branch
+/// shadows a farther one for the same chapter.
+fn accepted_chapter_plan_scenes_in_conn(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    branch_id: &str,
+) -> Result<Vec<(i32, i32, Vec<PlannedScene>)>> {
+    let lineage = resolve_branch_lineage_in_conn(conn, Some(project_id), branch_id)?;
+    let mut by_chapter: BTreeMap<(i32, i32), Vec<PlannedScene>> = BTreeMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT book_number, chapter_number, scenes FROM chapter_plan \
+         WHERE project_id=?1 AND branch_id=?2",
+    )?;
+    for lineage_branch in lineage {
+        let rows = stmt
+            .query_map(rusqlite::params![project_id, lineage_branch], |row| {
+                Ok((
+                    row.get::<_, i32>(0)?,
+                    row.get::<_, i32>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (book_number, chapter_number, scenes_json) in rows {
+            if by_chapter.contains_key(&(book_number, chapter_number)) {
+                continue;
+            }
+            let scenes: Vec<PlannedScene> = serde_json::from_str(&scenes_json).unwrap_or_default();
+            by_chapter.insert((book_number, chapter_number), scenes);
+        }
+    }
+    Ok(by_chapter
+        .into_iter()
+        .map(|((book, chapter), scenes)| (book, chapter, scenes))
+        .collect())
+}
+
+/// Build the ordered planned-Scene list: accepted chapter plans, then staged
+/// ancestors (creation order), then the current artifact; a later plan for the
+/// same chapter replaces the earlier one.
+fn evaluated_scene_values_in_conn(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &PlanningScope,
+) -> Result<Vec<SceneValueEntry>> {
+    let mut by_chapter: BTreeMap<(i32, i32), Vec<SceneValueEntry>> = BTreeMap::new();
+    for (book_number, chapter_number, scenes) in
+        accepted_chapter_plan_scenes_in_conn(conn, &scope.project_id, &scope.branch_id)?
+    {
+        let repair_hint = accepted_repair_hint(book_number, chapter_number);
+        by_chapter.insert(
+            (book_number, chapter_number),
+            scenes
+                .iter()
+                .map(|scene| {
+                    SceneValueEntry::from_planned_scene(
+                        book_number,
+                        chapter_number,
+                        scene,
+                        format!(
+                            "/accepted_scenes/{book_number}/{chapter_number}/{}",
+                            scene.scene_order
+                        ),
+                        repair_hint.clone(),
+                    )
+                })
+                .collect(),
+        );
+    }
+    for ancestor in collect_staged_ancestor_proposals_in_conn(conn, input)? {
+        if !matches!(
+            ancestor.artifact.level,
+            PlanningLevel::Chapter | PlanningLevel::Scene
+        ) {
+            continue;
+        }
+        for item in &ancestor.artifact.operations {
+            let PlanningOperation::PlanChapter(plan) = &item.operation else {
+                continue;
+            };
+            let repair_hint = format!(
+                "Repair the staged plan for book {} chapter {} (proposal {}).",
+                plan.book_number, plan.chapter_number, ancestor.id
+            );
+            by_chapter.insert(
+                (plan.book_number, plan.chapter_number),
+                plan.scenes
+                    .iter()
+                    .map(|scene| SceneValueEntry {
+                        book_number: plan.book_number,
+                        chapter_number: plan.chapter_number,
+                        scene_order: scene.scene_order,
+                        primary: scene.primary_value_axis.clone(),
+                        secondary: scene.secondary_value_axes.clone(),
+                        gap: scene.gap.clone(),
+                        inaction_cost: scene.inaction_cost.clone(),
+                        risk: scene.risk,
+                        dilemma: scene.dilemma.as_ref().map(|dilemma| SceneDilemma {
+                            character_id: normalized_ref(&dilemma.character_id),
+                            contradiction: dilemma.contradiction.clone(),
+                        }),
+                        path: format!(
+                            "/staged_scenes/{}/{}/{}",
+                            plan.book_number, plan.chapter_number, scene.scene_order
+                        ),
+                        repair_hint: repair_hint.clone(),
+                    })
+                    .collect(),
+            );
+        }
+    }
+    for (index, item) in input.operations.iter().enumerate() {
+        let PlanningOperation::PlanChapter(plan) = &item.operation else {
+            continue;
+        };
+        by_chapter.insert(
+            (plan.book_number, plan.chapter_number),
+            plan.scenes
+                .iter()
+                .enumerate()
+                .map(|(scene_index, scene)| SceneValueEntry {
+                    book_number: plan.book_number,
+                    chapter_number: plan.chapter_number,
+                    scene_order: scene.scene_order,
+                    primary: scene.primary_value_axis.clone(),
+                    secondary: scene.secondary_value_axes.clone(),
+                    gap: scene.gap.clone(),
+                    inaction_cost: scene.inaction_cost.clone(),
+                    risk: scene.risk,
+                    dilemma: scene.dilemma.as_ref().map(|dilemma| SceneDilemma {
+                        character_id: normalized_ref(&dilemma.character_id),
+                        contradiction: dilemma.contradiction.clone(),
+                    }),
+                    path: format!("/operations/{index}/operation/input/scenes/{scene_index}"),
+                    repair_hint: "Repair this scene batch.".to_string(),
+                })
+                .collect(),
+        );
+    }
+    let mut scenes: Vec<SceneValueEntry> = by_chapter.into_values().flatten().collect();
+    scenes.sort_by(|left, right| {
+        (left.book_number, left.chapter_number, left.scene_order).cmp(&(
+            right.book_number,
+            right.chapter_number,
+            right.scene_order,
+        ))
+    });
+    Ok(scenes)
+}
+
+fn accepted_repair_hint(book_number: i32, chapter_number: i32) -> String {
+    format!(
+        "Stage a replacement Chapter or Scene plan for book {book_number} chapter {chapter_number}; \
+         the accepted chapter plan is the plan to repair."
+    )
+}
+
+/// The Character Design contradictions the planned range may test: accepted
+/// rows plus designs declared by staged CastWorld ancestors (a batch acceptance
+/// must be able to reference the design it is about to create).
+fn evaluated_design_contradictions_in_conn(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &PlanningScope,
+) -> Result<Vec<DesignContradictions>> {
+    let mut designs: BTreeMap<String, DesignContradictions> = BTreeMap::new();
+    let mut stmt = conn
+        .prepare("SELECT character_id, contradictions FROM character_design WHERE project_id=?1")?;
+    let rows = stmt
+        .query_map([&scope.project_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (character_id, contradictions_json) in rows {
+        let contradictions: Vec<String> =
+            serde_json::from_str(&contradictions_json).unwrap_or_default();
+        designs.insert(
+            character_id.clone(),
+            DesignContradictions {
+                path: format!("/character_designs/{character_id}"),
+                key: character_id,
+                contradictions,
+            },
+        );
+    }
+    for ancestor in collect_staged_ancestor_proposals_in_conn(conn, input)? {
+        if ancestor.artifact.level != PlanningLevel::CastWorld {
+            continue;
+        }
+        for (index, item) in ancestor.artifact.operations.iter().enumerate() {
+            let PlanningOperation::CreateCharacterDesign(design) = &item.operation else {
+                continue;
+            };
+            let key = match &design.character_id {
+                PlanningRef::ProposalRef(reference) => format!("proposal:{reference}"),
+                PlanningRef::ExistingRecordId(id) => id.clone(),
+            };
+            designs.insert(
+                key.clone(),
+                DesignContradictions {
+                    key,
+                    contradictions: design.contradictions.clone(),
+                    path: format!("/staged_character_designs/{}/{}", ancestor.id, index),
+                },
+            );
+        }
+    }
+    Ok(designs.into_values().collect())
+}
+
+/// Normalize a planning reference to the key used by the design lookup.
+fn normalized_ref(reference: &PlanningRef) -> String {
+    match reference {
+        PlanningRef::ExistingRecordId(id) => id.clone(),
+        PlanningRef::ProposalRef(key) => format!("proposal:{key}"),
+    }
+}
+
+/// Resolve a scene dilemma's character key: an applied character reference is
+/// rewritten to the record id via the session receipts, so accepted designs
+/// (keyed by record id) and staged designs (keyed by proposal reference) are
+/// both findable.
+fn resolved_dilemma_key(dilemma: &SceneDilemma, receipts: &BTreeMap<String, String>) -> String {
+    if let Some(reference) = dilemma.character_id.strip_prefix("proposal:")
+        && let Some(record_id) = receipts.get(reference)
+    {
+        return record_id.clone();
+    }
+    dilemma.character_id.clone()
+}
+
+/// JSON-pointer path suffix for one axis of a Scene.
+fn axis_suffix(primary: bool, secondary_index: usize) -> String {
+    if primary {
+        "primary_value_axis".to_string()
+    } else {
+        format!("secondary_value_axes/{secondary_index}")
+    }
+}
+
+/// All axes of a Scene with their path suffix, primary first.
+fn scene_axes(scene: &SceneValueEntry) -> Vec<(String, &SceneValueAxis)> {
+    let mut axes = Vec::new();
+    if let Some(primary) = scene.primary.as_ref() {
+        axes.push((axis_suffix(true, 0), primary));
+    }
+    for (index, secondary) in scene.secondary.iter().enumerate() {
+        axes.push((axis_suffix(false, index), secondary));
+    }
+    axes
+}
+
+// ---------------------------------------------------------------------------
+// Blocking rules
+// ---------------------------------------------------------------------------
+
+fn validate_scene_value_shapes(scenes: &[SceneValueEntry], findings: &mut Vec<PlanningFinding>) {
+    for scene in scenes {
+        if scene.primary.is_none() {
+            findings.push(planning_finding(
+                "scene_missing_primary_value_axis",
+                PlanningFindingSeverity::Blocking,
+                format!("{}/primary_value_axis", scene.path),
+                Vec::new(),
+                "one primary Value Axis with an opening and closing Charge",
+                "no primary Value Axis",
+                format!(
+                    "{} Give the Scene a primary Value Axis; a Scene with no axis cannot turn anything.",
+                    scene.repair_hint
+                ),
+            ));
+        }
+        if scene.secondary.len() > spindle_core::scene_value::MAX_SECONDARY_VALUE_AXES {
+            findings.push(planning_finding(
+                "scene_too_many_secondary_axes",
+                PlanningFindingSeverity::Blocking,
+                format!("{}/secondary_value_axes", scene.path),
+                Vec::new(),
+                format!(
+                    "at most {} secondary Value Axes",
+                    spindle_core::scene_value::MAX_SECONDARY_VALUE_AXES
+                ),
+                format!("{} secondary axes", scene.secondary.len()),
+                format!(
+                    "{} Keep at most two secondary axes; fold the rest into the primary axis.",
+                    scene.repair_hint
+                ),
+            ));
+        }
+        let dilemma_text = scene.dilemma.as_ref().map(|dilemma| {
+            (
+                dilemma.character_id.as_str(),
+                dilemma.contradiction.as_str(),
+            )
+        });
+        for error in scene_value_errors(
+            scene.primary.as_ref(),
+            &scene.secondary,
+            scene.risk,
+            scene.gap.as_ref(),
+            dilemma_text,
+        ) {
+            use spindle_core::scene_value::SceneValueError;
+            let (code, path, expected) = match &error {
+                SceneValueError::TooManySecondaryAxes { .. } => {
+                    // Reported above with the real count.
+                    continue;
+                }
+                SceneValueError::EmptyValueAxisName { secondary_index } => (
+                    "scene_empty_value_axis_name",
+                    format!(
+                        "{}/{}/axis",
+                        scene.path,
+                        axis_suffix(secondary_index.is_none(), secondary_index.unwrap_or(0))
+                    ),
+                    "a non-empty Value Axis name",
+                ),
+                SceneValueError::DuplicateValueAxisName {
+                    secondary_index, ..
+                } => (
+                    "scene_duplicate_value_axis",
+                    format!(
+                        "{}/{}/axis",
+                        scene.path,
+                        axis_suffix(secondary_index.is_none(), secondary_index.unwrap_or(0))
+                    ),
+                    "unique Value Axis names within the Scene",
+                ),
+                SceneValueError::RiskOutOfRange { .. } => (
+                    "scene_invalid_risk",
+                    format!("{}/risk", scene.path),
+                    "risk in 1..=5",
+                ),
+                SceneValueError::BlankGap => (
+                    "scene_invalid_gap",
+                    format!("{}/gap", scene.path),
+                    "a Gap with non-blank expected and actual text",
+                ),
+                SceneValueError::BlankDilemma => (
+                    "scene_invalid_dilemma",
+                    format!("{}/dilemma", scene.path),
+                    "a dilemma with a character and a contradiction",
+                ),
+            };
+            findings.push(planning_finding(
+                code,
+                PlanningFindingSeverity::Blocking,
+                path,
+                Vec::new(),
+                expected.to_string(),
+                error.to_string(),
+                format!("{} {error}.", scene.repair_hint),
+            ));
+        }
+    }
+}
+
+fn validate_non_events(scenes: &[SceneValueEntry], findings: &mut Vec<PlanningFinding>) {
+    for scene in scenes {
+        let Some(primary) = scene.primary.as_ref() else {
+            continue;
+        };
+        if primary.turns() {
+            continue;
+        }
+        findings.push(planning_finding(
+            "scene_non_event",
+            PlanningFindingSeverity::Blocking,
+            format!("{}/primary_value_axis", scene.path),
+            Vec::new(),
+            "a primary axis whose opening and closing Charge differ",
+            format!(
+                "the primary axis '{}' opens and closes at {} / {}",
+                primary.axis,
+                primary.opening.sign(),
+                primary.opening.depth()
+            ),
+            format!(
+                "{} Turn the primary Value Axis: a Scene that changes nothing is a non-event.",
+                scene.repair_hint
+            ),
+        ));
+    }
+}
+
+fn validate_value_chain(scenes: &[SceneValueEntry], findings: &mut Vec<PlanningFinding>) {
+    // axis name -> (closing Charge left by the preceding occurrence, scene index)
+    let mut last_closing: BTreeMap<String, (spindle_core::charge::Charge, usize)> = BTreeMap::new();
+    for (index, scene) in scenes.iter().enumerate() {
+        for (suffix, axis) in scene_axes(scene) {
+            let name = axis.axis.trim().to_string();
+            if name.is_empty() {
+                continue;
+            }
+            if let Some((expected, previous_index)) = last_closing.get(&name)
+                && *expected != axis.opening
+            {
+                let previous = &scenes[*previous_index];
+                findings.push(planning_finding(
+                    "value_chain_broken",
+                    PlanningFindingSeverity::Blocking,
+                    format!("{}/{suffix}/opening", scene.path),
+                    Vec::new(),
+                    format!(
+                        "opening Charge {} / {} — the closing Charge left on axis '{name}' by book {} chapter {} scene {}",
+                        expected.sign(),
+                        expected.depth(),
+                        previous.book_number,
+                        previous.chapter_number,
+                        previous.scene_order
+                    ),
+                    format!(
+                        "opening Charge {} / {}",
+                        axis.opening.sign(),
+                        axis.opening.depth()
+                    ),
+                    format!(
+                        "{} Continue axis '{name}' from its last closing Charge, or change that earlier closing Charge first.",
+                        scene.repair_hint
+                    ),
+                ));
+            }
+            last_closing.insert(name, (axis.closing, index));
+        }
+    }
+}
+
+fn validate_sequence_membership(
+    scenes: &[SceneValueEntry],
+    sequences: &[PlannedSequence],
+    findings: &mut Vec<PlanningFinding>,
+) {
+    let members: Vec<&PlanningStoryPlacement> = sequences
+        .iter()
+        .flat_map(|sequence| sequence.member_scenes.iter())
+        .collect();
+    for scene in scenes {
+        let placement = scene.placement();
+        if members
+            .iter()
+            .any(|member| same_scene_position(member, &placement))
+        {
+            continue;
+        }
+        findings.push(planning_finding(
+            "scene_no_sequence",
+            PlanningFindingSeverity::Blocking,
+            format!("{}/scene_order", scene.path),
+            Vec::new(),
+            "membership in one Sequence's member_scenes",
+            "no Sequence lists this planned Scene",
+            format!(
+                "{} Add the Scene to a Sequence (a Chapter-level schedule.sequences entry) so every Scene sits in the structure.",
+                scene.repair_hint
+            ),
+        ));
+    }
+}
+
+fn validate_inaction_costs(scenes: &[SceneValueEntry], findings: &mut Vec<PlanningFinding>) {
+    for scene in scenes {
+        if scene
+            .inaction_cost
+            .as_deref()
+            .is_some_and(|cost| !cost.trim().is_empty())
+        {
+            continue;
+        }
+        findings.push(planning_finding(
+            "scene_missing_inaction_cost",
+            PlanningFindingSeverity::Blocking,
+            format!("{}/inaction_cost", scene.path),
+            Vec::new(),
+            "what a character loses by doing nothing in this Scene",
+            "empty or missing Inaction Cost",
+            format!(
+                "{} State the Inaction Cost; a Scene a character could survive by doing nothing has too little pressure.",
+                scene.repair_hint
+            ),
+        ));
+    }
+}
+
+fn validate_climax_dilemmas(
+    scenes: &[SceneValueEntry],
+    sequences: &[PlannedSequence],
+    acts: &[PlannedAct],
+    findings: &mut Vec<PlanningFinding>,
+) {
+    let sequence_climaxes: BTreeSet<(i32, i32, i32)> = sequences
+        .iter()
+        .filter_map(|sequence| sequence.climax_scene.as_ref())
+        .filter_map(|climax| {
+            climax
+                .scene_order
+                .map(|order| (climax.book_number, climax.chapter_number, order))
+        })
+        .collect();
+    let act_climaxes: BTreeSet<(i32, i32, i32)> = acts
+        .iter()
+        .filter_map(|act| act.climax.as_ref())
+        .filter_map(|climax| {
+            climax
+                .scene_order
+                .map(|order| (climax.book_number, climax.chapter_number, order))
+        })
+        .collect();
+    for scene in scenes {
+        let position = (scene.book_number, scene.chapter_number, scene.scene_order);
+        let mut reasons = Vec::new();
+        if sequence_climaxes.contains(&position) {
+            reasons.push("Sequence climax");
+        }
+        if act_climaxes.contains(&position) {
+            reasons.push("Act climax");
+        }
+        if reasons.is_empty() || scene.dilemma.is_some() {
+            continue;
+        }
+        let reason = reasons.join(" and ");
+        findings.push(planning_finding(
+            "scene_climax_missing_dilemma",
+            PlanningFindingSeverity::Blocking,
+            format!("{}/dilemma", scene.path),
+            Vec::new(),
+            format!("a dilemma on this {reason} Scene"),
+            "no dilemma",
+            format!(
+                "{} Add a dilemma naming the tested character and contradiction on the {reason} Scene.",
+                scene.repair_hint
+            ),
+        ));
+    }
+}
+
+fn validate_dilemma_contradictions(
+    scenes: &[SceneValueEntry],
+    designs: &[DesignContradictions],
+    receipts: &BTreeMap<String, String>,
+    findings: &mut Vec<PlanningFinding>,
+) {
+    let by_key: BTreeMap<&str, &DesignContradictions> = designs
+        .iter()
+        .map(|design| (design.key.as_str(), design))
+        .collect();
+    for scene in scenes {
+        let Some(dilemma) = scene.dilemma.as_ref() else {
+            continue;
+        };
+        let contradiction = dilemma.contradiction.trim();
+        if contradiction.is_empty() {
+            continue;
+        }
+        let key = resolved_dilemma_key(dilemma, receipts);
+        let Some(design) = by_key.get(key.as_str()) else {
+            findings.push(planning_finding(
+                "scene_dilemma_unknown_contradiction",
+                PlanningFindingSeverity::Blocking,
+                format!("{}/dilemma/contradiction", scene.path),
+                vec![key.clone()],
+                "a Character Design for the tested character",
+                format!("no accepted Character Design for '{key}'"),
+                format!(
+                    "{} Name a character with an accepted Character Design and one of its contradictions.",
+                    scene.repair_hint
+                ),
+            ));
+            continue;
+        };
+        let matches = design
+            .contradictions
+            .iter()
+            .any(|candidate| candidate.trim() == contradiction);
+        if matches {
+            continue;
+        }
+        findings.push(planning_finding(
+            "scene_dilemma_unknown_contradiction",
+            PlanningFindingSeverity::Blocking,
+            format!("{}/dilemma/contradiction", scene.path),
+            vec![key.clone()],
+            format!(
+                "one of the contradictions designed for '{key}': {}",
+                design
+                    .contradictions
+                    .iter()
+                    .map(|c| format!("'{c}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            format!("'{contradiction}'"),
+            format!(
+                "{} Use a contradiction that exists in that Character Design (trim-exact match).",
+                scene.repair_hint
+            ),
+        ));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Advisory rules
+// ---------------------------------------------------------------------------
+
+fn validate_same_direction_runs(scenes: &[SceneValueEntry], findings: &mut Vec<PlanningFinding>) {
+    let mut runs: BTreeMap<String, (spindle_core::scene_value::ValueTurnDirection, usize)> =
+        BTreeMap::new();
+    for scene in scenes {
+        let mut present: BTreeSet<String> = BTreeSet::new();
+        for (suffix, axis) in scene_axes(scene) {
+            let name = axis.axis.trim().to_string();
+            if name.is_empty() {
+                continue;
+            }
+            present.insert(name.clone());
+            let Some(direction) = axis.turn_direction() else {
+                runs.remove(&name);
+                continue;
+            };
+            let entry = runs.entry(name.clone()).or_insert((direction, 0));
+            if entry.0 == direction {
+                entry.1 += 1;
+            } else {
+                *entry = (direction, 1);
+            }
+            if entry.1 == 3 {
+                findings.push(planning_finding(
+                    "value_axis_same_direction_run",
+                    PlanningFindingSeverity::Advisory,
+                    format!("{}/{suffix}", scene.path),
+                    Vec::new(),
+                    "a direction change before the third consecutive same-direction turn",
+                    format!("axis '{name}' turns {direction} in 3 consecutive planned Scenes"),
+                    format!(
+                        "{} Vary the direction or depth of axis '{name}' before diminishing returns; this is advisory.",
+                        scene.repair_hint
+                    ),
+                ));
+            }
+        }
+        runs.retain(|name, _| present.contains(name));
+    }
+}
+
+fn validate_sequence_risk(
+    scenes: &[SceneValueEntry],
+    sequences: &[PlannedSequence],
+    findings: &mut Vec<PlanningFinding>,
+) {
+    let by_position: BTreeMap<(i32, i32, i32), &SceneValueEntry> = scenes
+        .iter()
+        .map(|scene| {
+            (
+                (scene.book_number, scene.chapter_number, scene.scene_order),
+                scene,
+            )
+        })
+        .collect();
+    for sequence in sequences {
+        let mut ordered: Vec<&SceneValueEntry> = sequence
+            .member_scenes
+            .iter()
+            .filter_map(|member| {
+                member.scene_order.and_then(|order| {
+                    by_position
+                        .get(&(member.book_number, member.chapter_number, order))
+                        .copied()
+                })
+            })
+            .collect();
+        ordered.sort_by(|left, right| {
+            (left.book_number, left.chapter_number, left.scene_order).cmp(&(
+                right.book_number,
+                right.chapter_number,
+                right.scene_order,
+            ))
+        });
+        let mut previous: Option<&SceneValueEntry> = None;
+        for scene in ordered {
+            if let (Some(previous_scene), Some(previous_risk), Some(risk)) =
+                (previous, previous.and_then(|entry| entry.risk), scene.risk)
+                && risk < previous_risk
+            {
+                findings.push(planning_finding(
+                    "sequence_risk_drop",
+                    PlanningFindingSeverity::Advisory,
+                    format!("{}/risk", scene.path),
+                    vec![sequence.sequence_key.clone()],
+                    format!(
+                        "risk at or above {} from the previous Scene in Sequence '{}'",
+                        previous_risk, sequence.sequence_key
+                    ),
+                    format!(
+                        "risk {risk} after risk {previous_risk} (book {} chapter {} scene {})",
+                        previous_scene.book_number,
+                        previous_scene.chapter_number,
+                        previous_scene.scene_order
+                    ),
+                    format!(
+                        "{} Raise the risk or reorder the Sequence so it escalates; this is advisory.",
+                        scene.repair_hint
+                    ),
+                ));
+            }
+            previous = Some(scene);
+        }
+    }
+}
+
+fn validate_chapter_endings(scenes: &[SceneValueEntry], findings: &mut Vec<PlanningFinding>) {
+    let mut last_by_chapter: BTreeMap<(i32, i32), &SceneValueEntry> = BTreeMap::new();
+    for scene in scenes {
+        let key = (scene.book_number, scene.chapter_number);
+        match last_by_chapter.get(&key) {
+            Some(previous) if previous.scene_order >= scene.scene_order => {}
+            _ => {
+                last_by_chapter.insert(key, scene);
+            }
+        }
+    }
+    for ((book_number, chapter_number), scene) in last_by_chapter {
+        if scene.has_turn() {
+            continue;
+        }
+        findings.push(planning_finding(
+            "chapter_ending_no_value_turn",
+            PlanningFindingSeverity::Advisory,
+            format!("{}/primary_value_axis", scene.path),
+            Vec::new(),
+            "the chapter's last Scene turns at least one Value Axis",
+            format!(
+                "book {book_number} chapter {chapter_number} scene {} turns no axis",
+                scene.scene_order
+            ),
+            format!(
+                "{} End the chapter on a Value Turn so the ending pulls the reader on; this is advisory.",
+                scene.repair_hint
+            ),
+        ));
+    }
+}
+
+fn validate_untested_contradictions(
+    scenes: &[SceneValueEntry],
+    designs: &[DesignContradictions],
+    receipts: &BTreeMap<String, String>,
+    findings: &mut Vec<PlanningFinding>,
+) {
+    let matches_design = |dilemma: &SceneDilemma, design_key: &str| -> bool {
+        if dilemma.character_id == design_key {
+            return true;
+        }
+        dilemma
+            .character_id
+            .strip_prefix("proposal:")
+            .and_then(|reference| receipts.get(reference))
+            .is_some_and(|record_id| record_id == design_key)
+    };
+    for design in designs {
+        for (index, contradiction) in design.contradictions.iter().enumerate() {
+            let text = contradiction.trim();
+            if text.is_empty() {
+                continue;
+            }
+            let tested = scenes.iter().any(|scene| {
+                scene.dilemma.as_ref().is_some_and(|dilemma| {
+                    matches_design(dilemma, &design.key) && dilemma.contradiction.trim() == text
+                })
+            });
+            if tested {
+                continue;
+            }
+            findings.push(planning_finding(
+                "character_contradiction_untested",
+                PlanningFindingSeverity::Advisory,
+                format!("{}/contradictions/{index}", design.path),
+                vec![design.key.clone()],
+                "a planned dilemma that tests this character contradiction",
+                format!("'{text}' is never named by a dilemma in the planned range"),
+                "Name this contradiction in a planned Scene dilemma, or accept that the design's depth stays unused; this is advisory.",
+            ));
+        }
+    }
+}

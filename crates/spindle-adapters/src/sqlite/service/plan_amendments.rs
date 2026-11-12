@@ -574,6 +574,14 @@ impl SqliteSpindleService {
                         research_required: s.research_required,
                         research_tags: s.research_tags.clone(),
                         explicit_query: s.explicit_query.clone(),
+                        primary_value_axis: s.primary_value_axis.clone(),
+                        secondary_value_axes: s.secondary_value_axes.clone(),
+                        opposition: s.opposition.clone(),
+                        gap: s.gap.clone(),
+                        scene_question: s.scene_question.clone(),
+                        inaction_cost: s.inaction_cost.clone(),
+                        risk: s.risk,
+                        dilemma: s.dilemma.clone(),
                     },
                 )
             })
@@ -660,6 +668,8 @@ impl SqliteSpindleService {
                     research_required: None,
                     research_tags: Vec::new(),
                     explicit_query: None,
+
+                    ..Default::default()
                 };
                 scenes.insert(idx, (None, new_scene));
             }

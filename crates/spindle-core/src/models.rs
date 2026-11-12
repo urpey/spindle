@@ -1049,6 +1049,30 @@ pub struct PlannedScene {
     pub research_tags: Vec<String>,
     #[serde(default)]
     pub explicit_query: Option<String>,
+    /// Primary Value Axis the Scene turns, with opening and closing Charge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_value_axis: Option<crate::scene_value::SceneValueAxis>,
+    /// Up to two secondary Value Axes the Scene also turns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secondary_value_axes: Vec<crate::scene_value::SceneValueAxis>,
+    /// The opposition the Scene's action meets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opposition: Option<String>,
+    /// The Gap the Scene designs (expected versus actual result).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap: Option<crate::scene_value::SceneGap>,
+    /// The question the Scene answers for its Sequence or plot line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_question: Option<String>,
+    /// What a character loses by doing nothing in this Scene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inaction_cost: Option<String>,
+    /// Planned risk level from 1 to 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk: Option<i32>,
+    /// The dilemma and the tested character contradiction, when planned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dilemma: Option<crate::scene_value::SceneDilemma>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -5272,6 +5296,30 @@ pub struct PlanChapterSceneInput {
     pub research_tags: Vec<String>,
     #[serde(default)]
     pub explicit_query: Option<String>,
+    /// Primary Value Axis the Scene turns, with opening and closing Charge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_value_axis: Option<crate::scene_value::SceneValueAxis>,
+    /// Up to two secondary Value Axes the Scene also turns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secondary_value_axes: Vec<crate::scene_value::SceneValueAxis>,
+    /// The opposition the Scene's action meets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opposition: Option<String>,
+    /// The Gap the Scene designs (expected versus actual result).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap: Option<crate::scene_value::SceneGap>,
+    /// The question the Scene answers for its Sequence or plot line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_question: Option<String>,
+    /// What a character loses by doing nothing in this Scene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inaction_cost: Option<String>,
+    /// Planned risk level from 1 to 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk: Option<i32>,
+    /// The dilemma and the tested character contradiction, when planned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dilemma: Option<crate::scene_value::SceneDilemma>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

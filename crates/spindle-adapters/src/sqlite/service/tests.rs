@@ -806,6 +806,8 @@ async fn explicit_neighbor_tail_for_planned_scene_two(
                     research_required: None,
                     research_tags: Vec::new(),
                     explicit_query: None,
+
+                    ..Default::default()
                 },
                 PlanChapterSceneInput {
                     scene_order: 2,
@@ -818,6 +820,8 @@ async fn explicit_neighbor_tail_for_planned_scene_two(
                     research_required: None,
                     research_tags: Vec::new(),
                     explicit_query: None,
+
+                    ..Default::default()
                 },
             ],
         })
@@ -1837,6 +1841,8 @@ async fn project_with_target_plan(
             research_required: None,
             research_tags: Vec::new(),
             explicit_query: None,
+
+            ..Default::default()
         }],
     })
     .await

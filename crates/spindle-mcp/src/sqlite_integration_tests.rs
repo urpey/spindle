@@ -9263,6 +9263,85 @@ async fn planning_advance_and_accept(
 // Scenario brief used by the new-book entry flow: a harbor mystery with one
 // POV character, one location, one world rule, a planted promise, and a
 // two-chapter / four-scene near horizon.
+/// Phase F's scene submission: two chapter plans whose value chain continues
+/// across chapters and whose climax Scene names Mara's other contradiction.
+fn phase_f_scene_submission(session_id: &str, range: &serde_json::Value) -> serde_json::Value {
+    let chapter_one = serde_json::json!([{
+        "scene_order": 1,
+        "summary": "Mara hears the bronze bell and finds fresh salt on the cut rope.",
+        "purpose": "Force Mara to choose between the archive and the harbor warning.",
+        "beat_structure": ["hook", "turn"],
+        "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
+        "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
+        "content_rating": "general",
+        "primary_value_axis": {"axis": "truth", "opening": {"sign": "positive", "depth": "positive"}, "closing": {"sign": "negative", "depth": "contrary"}},
+        "opposition": "The harbor's silence",
+        "gap": {"expected": "The rope was cut by weather", "actual": "The cut is fresh and salted"},
+        "scene_question": "Who cut the promise rope?",
+        "inaction_cost": "The next bell finds no warning",
+        "risk": 1,
+        "dilemma": {"character_id": {"kind": "proposal_ref", "value": "cast:mara"}, "contradiction": "loyal to the archive"}
+    }]);
+    let chapter_two = serde_json::json!([{
+        "scene_order": 1,
+        "summary": "Mara burns the archive log to keep the promise bell silent.",
+        "purpose": "Pay the price of the contradiction she chose.",
+        "beat_structure": ["decision", "cost"],
+        "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
+        "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
+        "content_rating": "general",
+        "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contrary"}, "closing": {"sign": "negative", "depth": "contradictory"}},
+        "opposition": "The archive's own fire code",
+        "gap": {"expected": "Burning the log hides the proof", "actual": "The smoke signals the harbor"},
+        "scene_question": "What does Mara lose by burning the log?",
+        "inaction_cost": "The archive survives and the harbor burns",
+        "risk": 2,
+        "dilemma": {"character_id": {"kind": "proposal_ref", "value": "cast:mara"}, "contradiction": "willing to burn it"}
+    }]);
+    let operations = serde_json::json!([
+        {
+            "output_ref": "plan:ch1",
+            "operation": {"operation": "plan_chapter", "input": {
+                "book_number": 1,
+                "chapter_number": 1,
+                "pov_character_id": {"kind": "proposal_ref", "value": "cast:mara"},
+                "synopsis": "Mara hears the broken-promise bell and finds the cut rope.",
+                "target_theme_ids": [{"kind": "proposal_ref", "value": "theme:truth"}],
+                "target_conflict_ids": [{"kind": "proposal_ref", "value": "conflict:bell"}],
+                "target_plot_line_ids": [{"kind": "proposal_ref", "value": "plot:bell"}],
+                "scenes": chapter_one
+            }}
+        },
+        {
+            "output_ref": "plan:ch2",
+            "operation": {"operation": "plan_chapter", "input": {
+                "book_number": 1,
+                "chapter_number": 2,
+                "pov_character_id": {"kind": "proposal_ref", "value": "cast:mara"},
+                "synopsis": "Mara follows the cut rope into the flooded archive.",
+                "target_theme_ids": [{"kind": "proposal_ref", "value": "theme:truth"}],
+                "target_conflict_ids": [{"kind": "proposal_ref", "value": "conflict:bell"}],
+                "target_plot_line_ids": [{"kind": "proposal_ref", "value": "plot:bell"}],
+                "scenes": chapter_two
+            }}
+        }
+    ]);
+    serde_json::json!({
+        "session_id": session_id,
+        "action": "stage_host_artifact",
+        "level": "scene",
+        "host_artifact": {
+            "schema_version": 1,
+            "level": "scene",
+            "rationale": "A complete opening scene packet.",
+            "target_range": range,
+            "operations": operations
+        },
+        "retry_key": "phase-f-scene",
+        "target_range": range
+    })
+}
+
 fn planning_entry_series_artifact() -> serde_json::Value {
     serde_json::json!({
         "schema_version": 1,
@@ -9335,20 +9414,64 @@ fn planning_entry_series_artifact() -> serde_json::Value {
     })
 }
 
+/// Two scene plans carrying a continuous value chain: chapter 1 opens the bell
+/// mystery and chapter 2 continues the same truth axis. Each chapter's second
+/// scene is its Act climax and names one of Mara's design contradictions.
+fn entry_value_scenes(chapter: i32) -> Vec<serde_json::Value> {
+    let dilemma = if chapter == 1 {
+        "keeps every chart"
+    } else {
+        "cannot read her own heart"
+    };
+    vec![
+        serde_json::json!({
+            "scene_order": 1,
+            "summary": "Mara hears the bronze bell.",
+            "beat_structure": ["hook", "turn"],
+            "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
+            "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
+            "content_rating": "general",
+            "purpose": "Plant the impossible bell mystery",
+            "primary_value_axis": {"axis": "truth", "opening": {"sign": "positive", "depth": "positive"}, "closing": {"sign": "negative", "depth": "contrary"}},
+            "secondary_value_axes": [{"axis": "trust", "opening": {"sign": "positive", "depth": "positive"}, "closing": {"sign": "positive", "depth": "positive"}}],
+            "opposition": "The silent bell tower",
+            "gap": {"expected": "The bell stays silent", "actual": "It rings a warning only Mara hears"},
+            "scene_question": "Who rang the clapperless bell?",
+            "inaction_cost": "The harbor misses the warning",
+            "risk": chapter
+        }),
+        serde_json::json!({
+            "scene_order": 2,
+            "summary": "Mara climbs to the lantern room.",
+            "beat_structure": ["escalation", "decision"],
+            "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
+            "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
+            "content_rating": "general",
+            "purpose": "Confirm the bell clapper is missing",
+            "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contrary"}, "closing": {"sign": "positive", "depth": "positive"}},
+            "secondary_value_axes": [{"axis": "trust", "opening": {"sign": "positive", "depth": "positive"}, "closing": {"sign": "positive", "depth": "positive"}}],
+            "opposition": "The fog on the stair",
+            "gap": {"expected": "The clapper was stolen", "actual": "The clapper was never fitted"},
+            "scene_question": "Will Mara trust the impossible sound?",
+            "inaction_cost": "The warning dies with the fog",
+            "risk": chapter + 1,
+            "dilemma": {"character_id": {"kind": "proposal_ref", "value": "cast:mara"}, "contradiction": dilemma}
+        }),
+    ]
+}
+
 fn planning_entry_scene_artifact() -> serde_json::Value {
-    let scenes = serde_json::json!([
-        {"scene_order": 1, "summary": "Mara hears the bronze bell.", "beat_structure": ["hook", "turn"], "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}], "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"}, "content_rating": "general", "purpose": "Plant the impossible bell mystery"},
-        {"scene_order": 2, "summary": "Mara climbs to the lantern room.", "beat_structure": ["escalation", "decision"], "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}], "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"}, "content_rating": "general", "purpose": "Confirm the bell clapper is missing"}
-    ]);
+    let scenes = entry_value_scenes(1);
     let mut plans = Vec::new();
     for chapter in 1..=2 {
-        let mut chapter_scenes = scenes.clone();
+        let mut chapter_scenes = entry_value_scenes(chapter);
         chapter_scenes[0]["summary"] = serde_json::Value::String(format!(
             "Mara investigates the watchtower clue in chapter {chapter}."
         ));
         chapter_scenes[1]["summary"] = serde_json::Value::String(format!(
             "Mara makes a costly trust decision in chapter {chapter}."
         ));
+        let _ = &scenes;
         plans.push(serde_json::json!({
             "output_ref": format!("plan:ch{chapter}"),
             "operation": {"operation": "plan_chapter", "input": {
@@ -9580,7 +9703,22 @@ async fn new_book_agent_entry_reaches_scene_one_one_ready_through_mcp_tools() {
                         "content": "Mara decodes the bell's logbook.",
                         "beats": [{"order": 1, "summary": "Decode the logbook", "status": "planned"}]
                     }}}
-                ]
+                ],
+                "schedule": {
+                    "sequences": [{
+                        "sequence_key": "seq:entry-bell",
+                        "plot_line_id": {"kind": "proposal_ref", "value": "plot:main"},
+                        "question": "Who rang the clapperless bell?",
+                        "inciting_scene": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                        "climax_scene": {"book_number": 1, "chapter_number": 2, "scene_order": 2},
+                        "member_scenes": [
+                            {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                            {"book_number": 1, "chapter_number": 1, "scene_order": 2},
+                            {"book_number": 1, "chapter_number": 2, "scene_order": 1},
+                            {"book_number": 1, "chapter_number": 2, "scene_order": 2}
+                        ]
+                    }]
+                }
             },
             "retry_key": "entry-chapter",
             "target_range": range
@@ -9647,6 +9785,24 @@ async fn new_book_agent_entry_reaches_scene_one_one_ready_through_mcp_tools() {
     .await;
     assert_eq!(status["session"]["session_id"], session_id);
     assert_eq!(status["session"]["project_id"], project_id);
+    let applied_chapter = status["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|proposal| proposal["level"] == "chapter" && proposal["status"] == "applied")
+        .expect("applied chapter proposal");
+    assert_eq!(
+        applied_chapter["schedule"]["sequences"][0]["sequence_key"], "seq:entry-bell",
+        "accepted Sequences read back on the proposal schedule: {status}"
+    );
+    assert_eq!(
+        applied_chapter["schedule"]["sequences"][0]["member_scenes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4,
+        "{status}"
+    );
     assert_eq!(status["readiness"]["ready_to_draft"], true, "{status}");
     assert_eq!(status["readiness"]["planner_checks_passed"], true);
     assert_eq!(status["readiness"]["stale_projection"], false);
@@ -10243,7 +10399,20 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
                         "content": "Mara hears the bell and finds the cut rope.",
                         "beats": [{"order": 1, "summary": "Hear the bell", "status": "planned"}]
                     }}}
-                ]
+                ],
+                "schedule": {
+                    "sequences": [{
+                        "sequence_key": "seq:promise-bell",
+                        "plot_line_id": {"kind": "proposal_ref", "value": "plot:bell"},
+                        "question": "Who broke the promise bell?",
+                        "inciting_scene": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                        "climax_scene": {"book_number": 1, "chapter_number": 2, "scene_order": 1},
+                        "member_scenes": [
+                            {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                            {"book_number": 1, "chapter_number": 2, "scene_order": 1}
+                        ]
+                    }]
+                }
             },
             "retry_key": "phase-f-chapter",
             "target_range": range
@@ -10262,40 +10431,7 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
     let scene = planning_call(
         &router,
         "planning_advance",
-        serde_json::json!({
-            "session_id": session_id,
-            "action": "stage_host_artifact",
-            "level": "scene",
-            "host_artifact": {
-                "schema_version": 1,
-                "level": "scene",
-                "rationale": "A complete opening scene packet.",
-                "target_range": range,
-                "operations": [{
-                    "output_ref": "plan:ch1",
-                    "operation": {"operation": "plan_chapter", "input": {
-                        "book_number": 1,
-                        "chapter_number": 1,
-                        "pov_character_id": {"kind": "proposal_ref", "value": "cast:mara"},
-                        "synopsis": "Mara hears the broken-promise bell and finds the cut rope.",
-                        "target_theme_ids": [{"kind": "proposal_ref", "value": "theme:truth"}],
-                        "target_conflict_ids": [{"kind": "proposal_ref", "value": "conflict:bell"}],
-                        "target_plot_line_ids": [{"kind": "proposal_ref", "value": "plot:bell"}],
-                        "scenes": [{
-                            "scene_order": 1,
-                            "summary": "Mara hears the bronze bell and finds fresh salt on the cut rope.",
-                            "purpose": "Force Mara to choose between the archive and the harbor warning.",
-                            "beat_structure": ["hook", "turn"],
-                            "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
-                            "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
-                            "content_rating": "general"
-                        }]
-                    }}
-                }]
-            },
-            "retry_key": "phase-f-scene",
-            "target_range": range
-        }),
+        phase_f_scene_submission(&session_id, &range),
     )
     .await;
     assert_eq!(
@@ -11387,4 +11523,130 @@ async fn mckee_character_design_is_full_in_planning_status_and_redacted_in_other
         !direct_snapshot_json.contains("character_design"),
         "a character with no design must keep its existing snapshot shape: {direct_snapshot_json}"
     );
+}
+
+/// Regression: an existing (non-McKee) project plans a chapter through the
+/// public `plan_chapter` tool and reads it back through the public
+/// `get_chapter_briefing` tool. The new value-plan fields are absent from both
+/// the request and the response, so the payload shape is unchanged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_mckee_project_plan_chapter_payloads_keep_the_legacy_scene_shape() {
+    use crate::tools::{ToolRouter, ToolSerializationState};
+    use std::sync::Arc;
+
+    let (_tmp, svc) = fresh_service().await;
+    let project = svc
+        .create_project(CreateProjectInput {
+            name: "Direct legacy".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "An unchanged mystery".into(),
+                style_notes: vec![],
+                boundaries: vec![],
+            },
+        })
+        .await
+        .unwrap();
+    let character = svc
+        .create_character(CreateCharacterInput {
+            project_id: project.project_id.clone(),
+            name: "Nell".into(),
+            summary: "Siege engineer".into(),
+            role: "lead".into(),
+            realm: None,
+            aliases: vec![],
+            voice_profile: Default::default(),
+            emotional_profile: Default::default(),
+            initial_state: None,
+        })
+        .await
+        .unwrap();
+    let location = svc
+        .create_location(CreateLocationInput {
+            project_id: project.project_id.clone(),
+            name: "The Gate".into(),
+            kind: "fortification".into(),
+            realm: None,
+            summary: "The last gate".into(),
+            initial_state: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    let router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        None,
+        Arc::new(ToolSerializationState::default()),
+    );
+    let planned = router
+        .call_tool(
+            "plan_chapter",
+            Some(
+                serde_json::json!({
+                    "project_id": project.project_id,
+                    "book_number": 1,
+                    "chapter_number": 1,
+                    "synopsis": "Nell holds the gate.",
+                    "scenes": [
+                        {
+                            "scene_order": 1,
+                            "summary": "Nell counts the arrows.",
+                            "purpose": "Establish the siege",
+                            "character_ids": [character.character_id],
+                            "location_id": location.location_id,
+                            "content_rating": "general"
+                        },
+                        {
+                            "scene_order": 2,
+                            "summary": "Nell opens the gate at dawn.",
+                            "purpose": "Force the gate decision",
+                            "character_ids": [character.character_id],
+                            "location_id": location.location_id,
+                            "content_rating": "general"
+                        }
+                    ]
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_ne!(planned.is_error, Some(true), "{planned:?}");
+
+    let briefing = router
+        .call_tool(
+            "get_chapter_briefing",
+            Some(
+                serde_json::json!({
+                    "project_id": project.project_id,
+                    "book_number": 1,
+                    "chapter_number": 1,
+                    "recent_chapter_limit": 0
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_ne!(briefing.is_error, Some(true), "{briefing:?}");
+    let structured = briefing.structured_content.expect("briefing content");
+    let scene = &structured["chapter_plan"]["scenes"][0];
+    for field in [
+        "primary_value_axis",
+        "secondary_value_axes",
+        "opposition",
+        "gap",
+        "scene_question",
+        "inaction_cost",
+        "risk",
+        "dilemma",
+    ] {
+        assert!(
+            scene.get(field).is_none(),
+            "legacy scene payload must not grow {field}: {structured}"
+        );
+    }
 }

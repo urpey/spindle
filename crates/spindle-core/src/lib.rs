@@ -12,6 +12,8 @@ pub mod models;
 pub mod planning;
 pub mod plot_line;
 pub mod provenance;
+pub mod scene_value;
+pub mod sequences;
 pub mod serial;
 pub mod story_spine;
 pub mod style;

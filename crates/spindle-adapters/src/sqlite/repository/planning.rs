@@ -3,6 +3,7 @@ use super::*;
 use sha2::{Digest, Sha256};
 use spindle_core::planning::*;
 pub(super) mod apply;
+pub(super) mod values;
 
 fn hash<T: serde::Serialize>(value: &T) -> Result<String> {
     Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(value)?)))
@@ -44,14 +45,25 @@ pub(crate) fn accepted_planning_acts_in_conn(
     project_id: &str,
     branch_id: &str,
 ) -> Result<Vec<PlannedAct>> {
-    merge_applied_act_rows(applied_act_rows_in_conn(conn, project_id, branch_id)?)
+    merge_applied_act_rows(applied_proposal_rows_in_conn(conn, project_id, branch_id)?)
 }
 
-/// Raw applied-proposal payloads that may carry Acts, tagged with their branch
-/// rank in the lineage (0 = farthest ancestor, increasing toward the session
-/// branch). The tag is what makes the merge order above deterministic without
-/// relying on decision timestamps across branches.
-fn applied_act_rows_in_conn(
+/// The Sequences accepted on one project branch (see
+/// [`merge_applied_sequence_rows`] for the precedence rule). In-connection twin
+/// of [`Repository::accepted_planning_sequences`], used by the value-chain pass.
+pub(crate) fn accepted_planning_sequences_in_conn(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    branch_id: &str,
+) -> Result<Vec<PlannedSequence>> {
+    merge_applied_sequence_rows(applied_proposal_rows_in_conn(conn, project_id, branch_id)?)
+}
+
+/// Raw applied-proposal payloads that may carry schedule metadata, tagged with
+/// their branch rank in the lineage (0 = farthest ancestor, increasing toward
+/// the session branch). The tag is what makes the merge order above
+/// deterministic without relying on decision timestamps across branches.
+fn applied_proposal_rows_in_conn(
     conn: &rusqlite::Connection,
     project_id: &str,
     branch_id: &str,
@@ -110,8 +122,43 @@ fn merge_applied_act_rows(rows: Vec<(usize, String)>) -> Result<Vec<PlannedAct>>
     Ok(acts)
 }
 
+/// Merge applied proposal payloads in lineage order, then decision order
+/// within a branch, keeping only Chapter-level Sequences. See
+/// [`accepted_planning_sequences`].
+fn merge_applied_sequence_rows(rows: Vec<(usize, String)>) -> Result<Vec<PlannedSequence>> {
+    let mut decided: Vec<(usize, i64, String, Vec<PlannedSequence>)> = Vec::new();
+    for (branch_rank, data) in rows {
+        let proposal: PlanningProposal = serde_json::from_str(&data)?;
+        if proposal.artifact.level != PlanningLevel::Chapter {
+            continue;
+        }
+        if proposal.artifact.schedule.sequences.is_empty() {
+            continue;
+        }
+        decided.push((
+            branch_rank,
+            proposal.decided_at.unwrap_or(proposal.created_at),
+            proposal.id,
+            proposal.artifact.schedule.sequences,
+        ));
+    }
+    decided.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    let mut sequences = Vec::new();
+    for (_, _, _, proposal_sequences) in decided {
+        sequences =
+            spindle_core::sequences::merge_planned_sequences(&sequences, &proposal_sequences);
+    }
+    Ok(sequences)
+}
+
 /// Staged ancestor proposals of `input`, nearest-first insertion order but
-/// returned in creation order, so merging their Act lists is deterministic.
+/// returned in creation order, so merging their Act and Sequence lists is
+/// deterministic.
 fn collect_staged_ancestor_proposals_in_conn(
     conn: &rusqlite::Connection,
     input: &StagePlanningInput,
@@ -549,9 +596,30 @@ impl Repository {
         let branch_id = branch_id.to_owned();
         let rows = self
             .pool()
-            .read(move |conn| applied_act_rows_in_conn(conn, &project_id, &branch_id))
+            .read(move |conn| applied_proposal_rows_in_conn(conn, &project_id, &branch_id))
             .await?;
         merge_applied_act_rows(rows)
+    }
+
+    /// The Sequences accepted on one project branch, merged by `sequence_key`
+    /// (a later decision overrides the same key; see
+    /// [`merge_applied_sequence_rows`]).
+    ///
+    /// Only applied Chapter proposals contribute: Sequences are chapter-level
+    /// schedule metadata, and a lower- or higher-level artifact that somehow
+    /// carries `schedule.sequences` must never leak into the accepted list.
+    pub async fn accepted_planning_sequences(
+        &self,
+        project_id: &str,
+        branch_id: &str,
+    ) -> Result<Vec<PlannedSequence>> {
+        let project_id = project_id.to_owned();
+        let branch_id = branch_id.to_owned();
+        let rows = self
+            .pool()
+            .read(move |conn| applied_proposal_rows_in_conn(conn, &project_id, &branch_id))
+            .await?;
+        merge_applied_sequence_rows(rows)
     }
 
     pub async fn stage_planning(&self, input: StagePlanningInput) -> Result<PlanningProposal> {
@@ -825,7 +893,7 @@ fn check_refs(
                     "location_id" => Some("location"),
                     "connected_theme_ids" | "target_theme_ids" | "theme_ids" => Some("theme"),
                     "connected_conflict_ids" | "target_conflict_ids" => Some("conflict"),
-                    "target_plot_line_ids" => Some("plot_line"),
+                    "target_plot_line_ids" | "plot_line_id" => Some("plot_line"),
                     "promise_ref" => Some("narrative_promise"),
                     "character_arc_id" => Some("character_arc"),
                     "book_id" => Some("book"),
@@ -911,6 +979,30 @@ const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "act_schedule_wrong_level",
     "act_climax_scene_missing",
     "act_breakpoints_authored_for_mckee",
+    "sequence_key_missing",
+    "sequence_key_duplicate",
+    "sequence_missing_plot_line",
+    "sequence_missing_question",
+    "sequence_members_empty",
+    "sequence_invalid_placement",
+    "sequence_members_unordered",
+    "sequence_missing_climax",
+    "sequence_climax_not_member",
+    "sequence_inciting_after_climax",
+    "sequence_wrong_level",
+    "scene_missing_primary_value_axis",
+    "scene_too_many_secondary_axes",
+    "scene_empty_value_axis_name",
+    "scene_duplicate_value_axis",
+    "scene_invalid_risk",
+    "scene_invalid_gap",
+    "scene_invalid_dilemma",
+    "scene_non_event",
+    "value_chain_broken",
+    "scene_no_sequence",
+    "scene_missing_inaction_cost",
+    "scene_climax_missing_dilemma",
+    "scene_dilemma_unknown_contradiction",
 ];
 
 /// One blocking finding rendered for a caller-facing error string. The path
@@ -1168,7 +1260,7 @@ fn collect_ref_findings(
                     "location_id" => Some("location"),
                     "connected_theme_ids" | "target_theme_ids" | "theme_ids" => Some("theme"),
                     "connected_conflict_ids" | "target_conflict_ids" => Some("conflict"),
-                    "target_plot_line_ids" => Some("plot_line"),
+                    "target_plot_line_ids" | "plot_line_id" => Some("plot_line"),
                     "promise_ref" => Some("narrative_promise"),
                     "character_arc_id" => Some("character_arc"),
                     "book_id" => Some("book"),
@@ -4533,6 +4625,7 @@ fn validate_stage_input_in_conn_excluding(
                             research_required: sc.research_required,
                             research_tags: sc.research_tags.clone(),
                             explicit_query: sc.explicit_query.clone(),
+                            ..Default::default()
                         })
                         .collect();
                     for warning in
@@ -4926,6 +5019,7 @@ fn validate_stage_input_in_conn_excluding(
     validate_mckee_acts(conn, input, &s.scope, &mut findings)?;
     validate_mckee_act_climax_placements(conn, input, &s.scope, &mut findings)?;
     validate_mckee_pacing_curve_breakpoints(conn, input, &s.scope, &mut findings)?;
+    values::validate_mckee_value_chain(conn, input, &s.scope, &mut findings)?;
 
     Ok(findings)
 }
@@ -5517,6 +5611,19 @@ impl Repository {
                                         research_required: sc.research_required,
                                         research_tags: sc.research_tags,
                                         explicit_query: sc.explicit_query,
+                                        primary_value_axis: sc.primary_value_axis,
+                                        secondary_value_axes: sc.secondary_value_axes,
+                                        opposition: sc.opposition,
+                                        gap: sc.gap,
+                                        scene_question: sc.scene_question,
+                                        inaction_cost: sc.inaction_cost,
+                                        risk: sc.risk,
+                                        dilemma: sc.dilemma.map(|dilemma| PlanningSceneDilemma {
+                                            character_id: PlanningRef::ExistingRecordId(
+                                                dilemma.character_id,
+                                            ),
+                                            contradiction: dilemma.contradiction,
+                                        }),
                                     })
                                     .collect();
                                 let out_ref = format!(

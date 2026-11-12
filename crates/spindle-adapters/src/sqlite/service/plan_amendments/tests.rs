@@ -468,6 +468,7 @@ mod plan_ratify {
             research_required: None,
             research_tags: Vec::new(),
             explicit_query: None,
+            ..Default::default()
         }
     }
 
@@ -1251,6 +1252,7 @@ mod plan_ratify {
                     research_required: None,
                     research_tags: Vec::new(),
                     explicit_query: None,
+                    ..Default::default()
                 },
                 PlanChapterSceneInput {
                     scene_order: 2,
@@ -1263,6 +1265,7 @@ mod plan_ratify {
                     research_required: None,
                     research_tags: Vec::new(),
                     explicit_query: None,
+                    ..Default::default()
                 },
             ],
             Vec::new(),

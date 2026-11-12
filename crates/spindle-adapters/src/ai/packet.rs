@@ -4041,6 +4041,7 @@ max_tokens = 500
                         research_required: Some(false),
                         research_tags: vec![],
                         explicit_query: None,
+                        ..Default::default()
                     }],
                 })
                 .await
