@@ -47,16 +47,21 @@ sign 與 depth 必須成對：`positive` 只配 positive sign；其餘三階都�
 
 Value chain 的連續性：同一條軸上，這一場的 opening Charge 應該等於該軸上一次 closing Charge。若中間跳過一場、或 opening 與上一場 closing 不同，就是 value chain 斷裂。若同一條軸連續三場往同一個方向轉，通常會出現邊際效用遞減；這是 advisory，不是硬規則。
 
-章節結尾：一章的最後一場若沒有落在 Value Turn 上，讀者沒有理由翻下一章。這是 advisory；真正要修的是最後一場的 closing Charge，而不是在章末加一句鉤子。
+章節結尾：一章要算「落在 Value Turn 上」，得讓 primary axis 相對於**本章第一場的 opening Charge** 真的轉過去。若最後一場的 closing Charge 等於第一場的 opening Charge（整章 net-zero），或最後一場的 primary axis 根本沒轉，都是 advisory。真正要修的是最後一場的 closing Charge，而不是在章末加一句鉤子。
 
 ## Sequence 層的轉折邏輯
 
 Sequence 是一組 Scene，它自己回答 Act 問題的一部分。判斷重點：
 
-- 最後一場必須比 Sequence 內任何一場更有衝擊；若最後一場反而最弱，Sequence 沒有收束。
+- Sequence 以最強的一場收束：`climax_scene` 必須是 `member_scenes` 的**最後一場**（story order）。若最後一場反而最弱，或高潮不是最後一個 member，Sequence 沒有收束。
+- `inciting_scene` 不是選填：它必須存在，而且排在 climax 之前或同一場。
 - 整個 Sequence 只屬於一條 plot line。不要讓一組 Scene 同時服務兩條主線而兩邊都沒推進。
 - Subplot 的 Sequence 高潮應該落在或早於它的 Convergence Point；晚於匯流點，代表副線沒有把力量交給主線。
-- Sequence 的 climax 若同時是 Act climax，才需要 dilemma（角色矛盾被測試）；一般 Sequence 不強迫。
+- Sequence 的 `climax_scene` 一定要有 dilemma（角色矛盾被測試）。它**不是**只有同時成為 Act climax 才需要：規劃閘門對任何 Sequence climax 都會擋下缺少 dilemma 的提案。
+
+**Blocking（拒絕接受）**：缺 `sequence_key` 或 key 在同一 artifact 內重複；缺 plot line 或 question；`member_scenes` 為空、placement 座標不完整、或不是嚴格 story order；缺 `climax_scene`；climax 不是 member 或不是最後一個 member；缺 `inciting_scene` 或 inciting 晚於 climax；把 `sequences` 放在 Chapter 以外的層級（Series-Arc／Book／CastWorld／Contract 一律拒絕）。
+
+**Advisory（只警告）**：Sequence 內連續兩場的 risk 下降。這是節奏提醒，不阻擋接受。
 
 ## Act 層的轉折邏輯
 

@@ -362,6 +362,98 @@ session branch's lineage supply the Acts even when the curve is accepted in the
 same batch as the Act list. Non-McKee projects keep authored breakpoints byte
 for byte.
 
+`PlanningSchedule.sequences` (Chapter level) carries the **Sequence** grouping
+as schedule metadata. One entry is a stable `sequence_key`, exactly one
+`plot_line_id` reference, the `question` the Sequence answers, the
+`inciting_scene` and the `climax_scene`, and `member_scenes` — exact planned
+Scene placements in strict `(book_number, chapter_number, scene_order)` order.
+Members may span chapters and books; the climax must be one of them and the
+**last member in story order**, and the inciting Scene is required and may not
+come after the climax. The field is additive and serde-defaulted: existing
+artifacts without `sequences` serialize exactly as before, and there is no new
+table or migration because the schedule stays inside the planning proposal.
+
+Chapter/Scene acceptance evaluates the Sequence set a decision would leave
+behind: applied Chapter proposals visible from the branch lineage, then staged
+ancestors in the approved closure, then the artifact's own list, merged by
+`sequence_key` with a later entry **refining** the same key — it overrides the
+scalar fields (plot line, question, inciting Scene, climax Scene) and **unions**
+`member_scenes` (deduped by story position, kept in strict story order), so
+members an earlier Chapter artifact listed survive. A Chapter artifact may
+therefore extend a Sequence another chapter opened. A non-empty
+`schedule.sequences` on any other level (Series-Arc, Book, CastWorld, Contract)
+is the blocking `sequence_wrong_level` finding and is never merged; for a McKee
+project the artifact's own Sequence list is checked at every level, and only
+Chapter/Scene artifacts continue into the value-chain pass. Structural blocking
+findings are: a missing or duplicate key, a missing plot line or question, empty
+members, a non-positive placement, members not in strict story order, a missing
+inciting Scene, a missing climax, a climax that is not a member, a climax that
+is not the last member, and an inciting Scene after the climax. They stage with
+the proposal and refuse acceptance.
+
+Planned Scenes gain the value-planning fields in both the planning operation
+input (`PlanningPlanChapterSceneInput`) and the stored planned Scene
+(`PlanChapterSceneInput` / `PlannedScene`): `primary_value_axis` (one
+`SceneValueAxis` with an `axis` name and opening/closing `Charge`),
+`secondary_value_axes` (at most two), `opposition`, `gap` (expected versus
+actual), `scene_question`, `inaction_cost`, `risk` (1–5) and `dilemma` (the
+tested character and contradiction). Every field is serde-defaulted and skipped
+when absent, so existing plans keep their exact output. For a McKee project the
+direct `plan_chapter` write rejects a present-but-invalid value plan (more than
+two secondary axes, blank or duplicate axis names, `risk` outside 1..=5, a blank
+Gap or dilemma) before persisting; the planning validator records the same
+shapes as findings at the operation path. Unmarked projects are not judged by
+the McKee shape rules: their optional value fields are stored exactly as sent.
+
+For McKee projects the artifact's own `schedule.sequences` is validated at every
+planning level (a non-empty list outside Chapter is `sequence_wrong_level`) and
+the value-chain pass runs at Chapter and Scene acceptance. It builds the ordered
+planned-Scene list the decision would leave behind: accepted `chapter_plan` rows
+visible from the branch lineage (a nearer branch shadows a farther one), then
+staged-ancestor `plan_chapter` operations in creation order, then the current
+artifact's operations. A later plan for the same `(book_number,
+chapter_number)` replaces the earlier one entirely, which matches the
+`plan_chapter` write. The merged Sequence set supplies Scene membership and
+climax placements; the evaluated Act list supplies Act climax placements.
+Blocking findings (stage-recordable) are: a non-event (the primary axis opens
+and closes at the same Charge), a broken chain (an axis opens at a Charge other
+than its last closing Charge in the preceding planned Scenes, on the primary or
+any secondary axis, across chapters and batches), a Scene in no Sequence, a
+missing Inaction Cost, a Sequence or Act climax Scene without a dilemma, a
+dilemma naming a contradiction that is not in that character's accepted
+Character Design (trim-exact; a staged CastWorld ancestor's design counts so a
+batch can reference the design it is about to create), and invalid value-plan
+shapes (missing primary axis, more than two secondary axes, blank or duplicate
+axis names, risk outside 1..=5, malformed Gap or dilemma). Advisory findings
+are: one axis turning the same depth direction in three consecutive planned
+Scenes that carry it (a missing occurrence or a flat turn breaks the run), risk
+dropping between consecutive planned Scenes inside one Sequence, a chapter
+ending off a Value Turn, and a Character Design contradiction no dilemma names
+across the planned range. A chapter "lands on a Value Turn" when its last Scene
+leaves the primary axis turned relative to the chapter's **first** Scene's
+opening Charge; the advisory fires when the last Scene's primary axis opens and
+closes at the same Charge (the literal flat-primary case, which also records the
+blocking non-event) **or** when its closing Charge equals the first Scene's
+opening Charge (a net-zero chapter that turns inside but returns to its start).
+Findings use the existing structured shape and JSON-pointer paths: artifact
+Scenes point at `/operations/{i}/operation/input/scenes/{j}/...`, accepted
+Scenes at `/accepted_scenes/{book}/{chapter}/{scene_order}/...`, and
+staged-ancestor Scenes at `/staged_scenes/{book}/{chapter}/{scene_order}/...`;
+repair hints name the plan that must be restaged. Unmarked projects get no
+value-chain findings.
+
+Plan amendments do not carry Sequence membership. On a McKee project a
+`scene_add` amendment is refused at pre-flight with an error that names the
+missing value plan and Sequence membership and directs the author to restage the
+Chapter planning artifact; otherwise the amendment would write a value-less
+Scene that planning acceptance can never re-accept. `scene_replace` edits only
+prose, purpose, cast, location and rating, so the Scene's value plan is carried
+through untouched. `scene_drop`, `scene_reorder` and `synopsis_update` remain
+available: they do not invent value fields, but a drop can leave a Sequence
+member dangling and a reorder can break the axis chain. This pass does not
+cascade into `schedule.sequences` (follow-up #34); the result is reported again
+the next time a Chapter artifact is staged.
+
 Each variant wraps the existing core input shape with typed proposal references
 in ID slots. The dispatcher is a closed allowlist, not an arbitrary tool name
 or free-form `update_entity` payload. `schedule` is new planning metadata:

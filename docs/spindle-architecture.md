@@ -1026,6 +1026,52 @@ accepts the Act parent and the chapter plan together is already checked.
 `act_breakpoints` are derived from the Act list for McKee projects (authored
 maps are refused) and stay authored for unmarked projects.
 
+Sequences are chapter-level schedule metadata (`PlanningSchedule.sequences`),
+not story records (ADR 0006). Each Sequence has a stable `sequence_key`, exactly
+one plot line reference, a `question`, an inciting Scene and a climax Scene that
+must be one of its `member_scenes` **and the last member in story order**;
+members are exact planned-Scene placements in strict story order and may cross
+chapters and books. Accepted Sequences merge by `sequence_key` with a later
+Chapter proposal **refining** the same key: it overrides the scalar fields and
+unions `member_scenes` (deduped, strict story order), so earlier members
+survive. Chapter/Scene acceptance records blocking findings for a missing or
+duplicate key, a missing plot line or question, empty or unordered members, a
+non-positive placement, a missing inciting Scene, a climax that is not a member
+or not the last member, and an inciting Scene after the climax. For a McKee
+project the artifact's own Sequence list is checked at every level; a non-empty
+`schedule.sequences` anywhere other than Chapter is `sequence_wrong_level` and
+is never merged (unmarked projects keep ignoring Sequence metadata).
+
+Planned scenes also carry the value planning the chain is checked against: a
+primary Value Axis plus up to two secondary axes (each with an opening and
+closing Charge), `opposition`, `gap`, `scene_question`, `inaction_cost`, `risk`
+(1–5) and an optional `dilemma` naming the tested character contradiction. All
+fields are additive and serde-defaulted, so existing chapter plans serialize
+exactly as before; there is no new table or migration because chapter plans are
+JSON on `chapter_plan` and Sequences live in the proposal schedule. For McKee
+projects the Chapter/Scene value-chain pass builds the ordered planned-Scene
+list (accepted chapter plans visible from the branch lineage, staged-ancestor
+plans, then the current artifact; a later plan for one chapter replaces the
+earlier one) and records stage-recordable blocking findings for a non-event, a
+broken chain on any axis, a Scene in no Sequence, a missing Inaction Cost, a
+missing dilemma at a Sequence or Act climax, an unknown character
+contradiction, and invalid value-plan shapes. Advisory findings cover a
+same-direction run of three or more Scenes on one axis, a risk drop inside a
+Sequence, a chapter ending off a Value Turn (its last Scene is flat on the
+primary axis, or closes at the Charge the chapter's first Scene opened with — a
+net-zero chapter), and a Character Design contradiction no dilemma tests. The
+findings use the existing structured shape and JSON-pointer paths:
+`/operations/{i}/operation/input/scenes/{j}/...` for the current artifact,
+`/accepted_scenes/{book}/{chapter}/{scene_order}/...` for accepted plans and
+`/staged_scenes/...` for staged ancestors. Unmarked projects get no value-chain
+findings and their payloads are unchanged.
+
+On a McKee project a `scene_add` plan amendment is refused at pre-flight: the
+class cannot add Sequence membership or a value plan, so it must restage the
+Chapter planning artifact instead. `scene_replace` keeps the value-plan fields
+untouched, while `scene_drop`/`scene_reorder`/`synopsis_update` remain available
+and do not cascade into `schedule.sequences` (follow-up #34).
+
 The hidden layer and the unconscious desire are not plain columns: they are
 registered as secret canonical facts (`secret = 1`, one `knowledge_fact` row
 placing the character in the circle of trust, `subject_table = "character"`)

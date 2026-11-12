@@ -1,6 +1,7 @@
 use super::*;
 use spindle_core::charge::{Charge, ChargeDepth, ChargeSign};
-use spindle_core::models::ReaderContract;
+use spindle_core::models::{CreateCharacterInput, GetChapterBriefingInput, ReaderContract};
+use spindle_core::scene_value::{SceneGap, SceneValueAxis};
 async fn fresh_service_local() -> (tempfile::TempDir, SqliteSpindleService) {
     let tmp = tempfile::TempDir::new().unwrap();
     let pool = crate::sqlite::SqlitePool::open(&tmp.path().join("planning.db"))
@@ -509,6 +510,108 @@ fn planned_act(
     }
 }
 
+fn phase_d_value_axis(
+    opening_sign: &str,
+    opening_depth: &str,
+    closing_sign: &str,
+    closing_depth: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "axis": "truth",
+        "opening": {"sign": opening_sign, "depth": opening_depth},
+        "closing": {"sign": closing_sign, "depth": closing_depth},
+    })
+}
+
+fn phase_d_sequence() -> PlannedSequence {
+    let place = |chapter: i32, scene: i32| PlanningStoryPlacement {
+        book_number: 1,
+        chapter_number: chapter,
+        scene_order: Some(scene),
+        note: None,
+    };
+    PlannedSequence {
+        sequence_key: "seq:bell".into(),
+        plot_line_id: Some(PlanningRef::ProposalRef("plot:main".into())),
+        question: "Who rang the impossible bell?".into(),
+        inciting_scene: Some(place(1, 1)),
+        climax_scene: Some(place(2, 2)),
+        member_scenes: vec![place(1, 1), place(1, 2), place(2, 1), place(2, 2)],
+    }
+}
+
+fn value_charge(sign: &str, depth: &str) -> serde_json::Value {
+    serde_json::json!({"sign": sign, "depth": depth})
+}
+
+/// Primary axes for one chapter's two scenes in the fixture chain:
+/// chapter 1 positive→contrary, contrary→contradictory; chapter 2
+/// contradictory→negation, negation→contrary; chapter 3 contrary→contradictory,
+/// contradictory→negation. The chain continues across chapters.
+fn value_test_chain_for_chapter(chapter_number: i32) -> (serde_json::Value, serde_json::Value) {
+    let send = |opening: (&str, &str), closing: (&str, &str)| {
+        serde_json::json!({
+            "axis": "truth",
+            "opening": value_charge(opening.0, opening.1),
+            "closing": value_charge(closing.0, closing.1),
+        })
+    };
+    match chapter_number {
+        1 => (
+            send(("positive", "positive"), ("negative", "contrary")),
+            send(("negative", "contrary"), ("negative", "contradictory")),
+        ),
+        2 => (
+            send(
+                ("negative", "contradictory"),
+                ("negative", "negation_of_the_negation"),
+            ),
+            send(
+                ("negative", "negation_of_the_negation"),
+                ("negative", "contrary"),
+            ),
+        ),
+        _ => (
+            send(("negative", "contrary"), ("negative", "contradictory")),
+            send(
+                ("negative", "contradictory"),
+                ("negative", "negation_of_the_negation"),
+            ),
+        ),
+    }
+}
+
+/// A flat secondary axis: its opening and closing Charge are the same, so it
+/// never breaks the chain between planned Scenes.
+fn value_test_secondary_axis(axis: &str) -> serde_json::Value {
+    serde_json::json!({
+        "axis": axis,
+        "opening": value_charge("positive", "positive"),
+        "closing": value_charge("positive", "positive"),
+    })
+}
+
+/// One Sequence covering the six-scene, three-chapter fixture range.
+fn value_test_sequences() -> Vec<PlannedSequence> {
+    let place = |book_number: i32, chapter_number: i32, scene_order: i32| PlanningStoryPlacement {
+        book_number,
+        chapter_number,
+        scene_order: Some(scene_order),
+        note: None,
+    };
+    let members = (1..=3)
+        .flat_map(|chapter| [place(1, chapter, 1), place(1, chapter, 2)])
+        .collect::<Vec<_>>();
+    vec![PlannedSequence {
+        sequence_key: "seq:ledger".into(),
+        plot_line_id: Some(PlanningRef::ProposalRef("plot:heir".into())),
+        question: "Will Ada trust the heir with the ledger?".into(),
+        inciting_scene: Some(place(1, 1, 1)),
+        climax_scene: Some(place(1, 3, 2)),
+        member_scenes: members,
+    }]
+}
+
 fn act_findings(proposal: &PlanningProposal) -> Vec<&PlanningFinding> {
     proposal
         .findings
@@ -778,20 +881,27 @@ async fn all_human_fixture_applies_allowlist_and_reads_six_complete_manifests() 
         chapter_items.push(planned(&format!("chapter:{number}"),"create_chapter",json!({"book_id":reference("project:root:book"),"book_number":1,"chapter_number":number,"title":format!("Ledger turn {number}")})));
         chapter_items.push(planned(&format!("outline:chapter:{number}"),"set_chapter_outline",json!({"entity_id":reference(&format!("chapter:{number}")),"book_number":1,"chapter_number":number,"content":"A clue forces a costly choice","beats":[{"order":1,"summary":"Find a clue","status":"planned"}]})));
     }
-    let chapters = bundle(
+    let sequences = value_test_sequences();
+    let chapters = bundle_with_schedule(
         &svc,
         &s,
         PlanningLevel::Chapter,
-        &[&root, &book],
+        &[&root, &book, &arc],
         chapter_items,
+        PlanningSchedule {
+            sequences,
+            ..PlanningSchedule::default()
+        },
     )
     .await;
     accept(&svc, &s, &chapters).await;
     let mut plans = Vec::new();
     for number in 1..=3 {
+        let (primary_one, primary_two) = value_test_chain_for_chapter(number);
+        let dilemma = json!({"character_id":reference("cast:ada"),"contradiction":"generous"});
         plans.push(planned(&format!("plan:{number}"),"plan_chapter",json!({"book_number":1,"chapter_number":number,"pov_character_id":reference("cast:ada"),"synopsis":format!("Turn {number}: the forgery forces a costly choice"),"target_theme_ids":[reference("theme:trust")],"target_conflict_ids":[reference("conflict:heir")],"target_plot_line_ids":[reference("plot:heir")],"scenes":[
-   {"scene_order":1,"summary":"Ada follows the ledger to the tidal gate","purpose":"Discover the forged seal","character_ids":[reference("cast:ada"),reference("cast:ben")],"location_id":reference("place:harbor"),"content_rating":"general","beat_structure":["clue","choice"],"research_required":true,"research_tags":["tidal gates"]},
-   {"scene_order":2,"summary":"Ada wagers her signet on Ben's testimony","purpose":"Force a trust decision","character_ids":[reference("cast:ada"),reference("cast:ben")],"location_id":reference("place:harbor"),"content_rating":"general","beat_structure":["cost","change"]}
+   {"scene_order":1,"summary":"Ada follows the ledger to the tidal gate","purpose":"Discover the forged seal","character_ids":[reference("cast:ada"),reference("cast:ben")],"location_id":reference("place:harbor"),"content_rating":"general","beat_structure":["clue","choice"],"research_required":true,"research_tags":["tidal gates"],"primary_value_axis":primary_one,"secondary_value_axes":[value_test_secondary_axis("trust")],"opposition":"The harbor magistrate","gap":{"expected":"The gate log will clear Ada","actual":"The log is missing a page"},"scene_question":"Who altered the tide log?","inaction_cost":"The next tide erases the evidence","risk":number},
+   {"scene_order":2,"summary":"Ada wagers her signet on Ben's testimony","purpose":"Force a trust decision","character_ids":[reference("cast:ada"),reference("cast:ben")],"location_id":reference("place:harbor"),"content_rating":"general","beat_structure":["cost","change"],"primary_value_axis":primary_two,"secondary_value_axes":[value_test_secondary_axis("trust")],"opposition":"Ben's silence","gap":{"expected":"Ben will testify","actual":"Ben asks for the signet first"},"scene_question":"Will Ada risk the signet?","inaction_cost":"Losing the heir's trail for good","risk":number + 1,"dilemma":dilemma}
   ]})));
     }
     let manifests = bundle(
@@ -2356,6 +2466,17 @@ async fn route_generation_real_agent_stages_all_levels_and_applies_only_on_human
                 "target_intensity": 0.65,
                 "recovery_beat": false,
                 "note": "Rising opening tension"
+            }],
+            "sequences": [{
+                "sequence_key": "seq:manifest",
+                "plot_line_id": {"kind": "proposal_ref", "value": "plot:main"},
+                "question": "Who forged the manifest?",
+                "inciting_scene": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "climax_scene": {"book_number": 1, "chapter_number": 1, "scene_order": 2},
+                "member_scenes": [
+                    {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                    {"book_number": 1, "chapter_number": 1, "scene_order": 2}
+                ]
             }]
         }
     });
@@ -2383,7 +2504,13 @@ async fn route_generation_real_agent_stages_all_levels_and_applies_only_on_human
                             "character_ids": [{"kind": "proposal_ref", "value": "cast:ada"}],
                             "location_id": {"kind": "proposal_ref", "value": "place:pier"},
                             "content_rating": "teen",
-                            "purpose": "Plant the altered ledger mystery"
+                            "purpose": "Plant the altered ledger mystery",
+                            "primary_value_axis": {"axis": "truth", "opening": {"sign": "positive", "depth": "positive"}, "closing": {"sign": "negative", "depth": "contrary"}},
+                            "opposition": "The locked registry chest",
+                            "gap": {"expected": "The manifest is complete", "actual": "A page is torn out"},
+                            "scene_question": "Who removed the page?",
+                            "inaction_cost": "The heir's trail goes cold",
+                            "risk": 1
                         },
                         {
                             "scene_order": 2,
@@ -2395,7 +2522,14 @@ async fn route_generation_real_agent_stages_all_levels_and_applies_only_on_human
                             ],
                             "location_id": {"kind": "proposal_ref", "value": "place:pier"},
                             "content_rating": "teen",
-                            "purpose": "Establish rivalry and plant the wax seal clue"
+                            "purpose": "Establish rivalry and plant the wax seal clue",
+                            "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contrary"}, "closing": {"sign": "positive", "depth": "positive"}},
+                            "opposition": "Corin's seal and authority",
+                            "gap": {"expected": "Corin will explain the seal", "actual": "Corin locks the chest instead"},
+                            "scene_question": "Why does Corin carry the missing seal?",
+                            "inaction_cost": "Ada loses her only witness",
+                            "risk": 2,
+                            "dilemma": {"character_id": {"kind": "proposal_ref", "value": "cast:ada"}, "contradiction": "keeps every chart"}
                         }
                     ]
                 }
@@ -5545,6 +5679,11 @@ fn phase_d_cast_input(s: &PlanningSession, contract: &PlanningProposal) -> Stage
             "create_world_rule",
             json!({"rule_name": "Harbor tides", "rule_type": "physics", "description": "The tidal gate opens at dawn"}),
         ),
+        planned(
+            "design:mara",
+            "create_character_design",
+            character_design_payload("cast:mara", &["guarded", "resolute"]),
+        ),
     ];
     a
 }
@@ -5676,6 +5815,7 @@ fn phase_d_series_input(
         ],
         pov_plan: vec![],
         intensity_targets: vec![],
+        sequences: vec![],
         acts: vec![
             planned_act(
                 1,
@@ -5729,6 +5869,7 @@ fn phase_d_book_input(
 fn phase_d_chapter_input(
     s: &PlanningSession,
     contract: &PlanningProposal,
+    series: &PlanningProposal,
     book: &PlanningProposal,
 ) -> StagePlanningInput {
     use serde_json::json;
@@ -5736,6 +5877,7 @@ fn phase_d_chapter_input(
     a.level = PlanningLevel::Chapter;
     a.parents = BTreeMap::from([
         (contract.id.clone(), contract.payload_hash.clone()),
+        (series.id.clone(), series.payload_hash.clone()),
         (book.id.clone(), book.payload_hash.clone()),
     ]);
     a.operations = vec![
@@ -5761,6 +5903,10 @@ fn phase_d_chapter_input(
             }),
         ),
     ];
+    a.schedule = PlanningSchedule {
+        sequences: vec![phase_d_sequence()],
+        ..PlanningSchedule::default()
+    };
     a
 }
 
@@ -5803,7 +5949,13 @@ fn phase_d_scene_input(
                     "character_ids": [reference("cast:mara")],
                     "location_id": reference("loc:watchtower"),
                     "content_rating": "general",
-                    "purpose": "Plant the impossible bell mystery"
+                    "purpose": "Plant the impossible bell mystery",
+                    "primary_value_axis": phase_d_value_axis("positive", "positive", "negative", "contrary"),
+                    "opposition": "The silent bell tower",
+                    "gap": {"expected": "The bell is silent", "actual": "It rings a warning only Mara hears"},
+                    "scene_question": "Who rang the clapperless bell?",
+                    "inaction_cost": "The harbor misses the warning",
+                    "risk": 1
                 },
                 {
                     "scene_order": 2,
@@ -5812,7 +5964,14 @@ fn phase_d_scene_input(
                     "character_ids": [reference("cast:mara")],
                     "location_id": reference("loc:watchtower"),
                     "content_rating": "general",
-                    "purpose": "Confirm the bell clapper is missing"
+                    "purpose": "Confirm the bell clapper is missing",
+                    "primary_value_axis": phase_d_value_axis("negative", "contrary", "positive", "positive"),
+                    "opposition": "The fog on the stair",
+                    "gap": {"expected": "The clapper was stolen", "actual": "The clapper was never fitted"},
+                    "scene_question": "Will Mara trust the impossible sound?",
+                    "inaction_cost": "The warning dies with the fog",
+                    "risk": 2,
+                    "dilemma": {"character_id": reference("cast:mara"), "contradiction": "guarded"}
                 }
             ]
         }),
@@ -5954,7 +6113,12 @@ async fn phase_d_validator_enforces_manifest_completeness_references_pov_causali
     assert!(book_prop.findings.is_empty());
 
     let chapter_prop = svc
-        .stage_planning(phase_d_chapter_input(&s, &contract_prop, &book_prop))
+        .stage_planning(phase_d_chapter_input(
+            &s,
+            &contract_prop,
+            &series_prop,
+            &book_prop,
+        ))
         .await
         .unwrap();
     assert!(chapter_prop.findings.is_empty());
@@ -6000,6 +6164,8 @@ async fn phase_d_validator_enforces_manifest_completeness_references_pov_causali
                         research_required: Some(false),
                         research_tags: vec![],
                         explicit_query: None,
+
+                        ..Default::default()
                     },
                     PlanningPlanChapterSceneInput {
                         scene_order: 2,
@@ -6013,6 +6179,8 @@ async fn phase_d_validator_enforces_manifest_completeness_references_pov_causali
                         research_required: Some(false),
                         research_tags: vec![],
                         explicit_query: None,
+
+                        ..Default::default()
                     },
                     PlanningPlanChapterSceneInput {
                         scene_order: 4,
@@ -6025,6 +6193,8 @@ async fn phase_d_validator_enforces_manifest_completeness_references_pov_causali
                         research_required: Some(false),
                         research_tags: vec![],
                         explicit_query: None,
+
+                        ..Default::default()
                     },
                 ],
             }),
@@ -6047,6 +6217,7 @@ async fn phase_d_validator_enforces_manifest_completeness_references_pov_causali
             promise_events: vec![],
             intensity_targets: vec![],
             acts: vec![],
+            sequences: vec![],
         },
         assumptions: vec![],
         author_questions: vec![],
@@ -6298,6 +6469,8 @@ async fn phase_d_validator_enforces_promise_schedules_pov_rotation_pacing_curves
             },
         ],
         acts: vec![],
+
+        sequences: vec![],
     };
 
     // With default policy (pov_policy = None, pacing_policy = None):
@@ -6611,7 +6784,22 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                     }
                 }
             }
-        ]
+        ],
+        "schedule": {
+            "sequences": [{
+                "sequence_key": "seq:delegate-bell",
+                "plot_line_id": {"kind": "proposal_ref", "value": "plot:main"},
+                "question": "Who rang the impossible bell?",
+                "inciting_scene": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "climax_scene": {"book_number": 1, "chapter_number": 2, "scene_order": 2},
+                "member_scenes": [
+                    {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                    {"book_number": 1, "chapter_number": 1, "scene_order": 2},
+                    {"book_number": 1, "chapter_number": 2, "scene_order": 1},
+                    {"book_number": 1, "chapter_number": 2, "scene_order": 2}
+                ]
+            }]
+        }
     });
     let ch_adv = svc
         .advance_planning(AdvancePlanningInput {
@@ -6620,6 +6808,7 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
             level: Some(PlanningLevel::Chapter),
             parents: Some(BTreeMap::from([
                 (contract_prop.id.clone(), contract_prop.payload_hash.clone()),
+                (series_prop.id.clone(), series_prop.payload_hash.clone()),
                 (book_prop.id.clone(), book_prop.payload_hash.clone()),
             ])),
             target_range: Some(PlanningTargetRange {
@@ -6699,7 +6888,13 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
-                                "purpose": "Plant the impossible bell mystery"
+                                "purpose": "Plant the impossible bell mystery",
+                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "positive", "depth": "positive"}, "closing": {"sign": "negative", "depth": "contrary"}},
+                                "opposition": "The watchtower fog",
+                                "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
+                                "scene_question": "What does the bell want?",
+                                "inaction_cost": "The harbor misses the warning",
+                                "risk": 1
                             },
                             {
                                 "scene_order": 2,
@@ -6708,7 +6903,14 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
-                                "purpose": "Confirm the bell clapper is missing"
+                                "purpose": "Confirm the bell clapper is missing",
+                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contrary"}, "closing": {"sign": "negative", "depth": "contradictory"}},
+                                "opposition": "The watchtower fog",
+                                "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
+                                "scene_question": "What does the bell want?",
+                                "inaction_cost": "The harbor misses the warning",
+                                "risk": 2,
+                                "dilemma": {"character_id": {"kind": "proposal_ref", "value": "cast:mara"}, "contradiction": "guarded"}
                             }
                         ]
                     }
@@ -6734,7 +6936,13 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
-                                "purpose": "Reveal the erased harbour entry"
+                                "purpose": "Reveal the erased harbour entry",
+                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contradictory"}, "closing": {"sign": "negative", "depth": "contrary"}},
+                                "opposition": "The watchtower fog",
+                                "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
+                                "scene_question": "What does the bell want?",
+                                "inaction_cost": "The harbor misses the warning",
+                                "risk": 2
                             },
                             {
                                 "scene_order": 2,
@@ -6743,7 +6951,14 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
-                                "purpose": "Pay off the bell mystery"
+                                "purpose": "Pay off the bell mystery",
+                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contrary"}, "closing": {"sign": "positive", "depth": "positive"}},
+                                "opposition": "The watchtower fog",
+                                "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
+                                "scene_question": "What does the bell want?",
+                                "inaction_cost": "The harbor misses the warning",
+                                "risk": 3,
+                                "dilemma": {"character_id": {"kind": "proposal_ref", "value": "cast:mara"}, "contradiction": "resolute"}
                             }
                         ]
                     }
@@ -6823,7 +7038,13 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
-                                "purpose": "Plant the impossible bell mystery"
+                                "purpose": "Plant the impossible bell mystery",
+                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "positive", "depth": "positive"}, "closing": {"sign": "negative", "depth": "contrary"}},
+                                "opposition": "The watchtower fog",
+                                "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
+                                "scene_question": "What does the bell want?",
+                                "inaction_cost": "The harbor misses the warning",
+                                "risk": 1
                             },
                             {
                                 "scene_order": 2,
@@ -6832,7 +7053,14 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
-                                "purpose": "Confirm the bell clapper is missing"
+                                "purpose": "Confirm the bell clapper is missing",
+                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contrary"}, "closing": {"sign": "negative", "depth": "contradictory"}},
+                                "opposition": "The watchtower fog",
+                                "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
+                                "scene_question": "What does the bell want?",
+                                "inaction_cost": "The harbor misses the warning",
+                                "risk": 2,
+                                "dilemma": {"character_id": {"kind": "proposal_ref", "value": "cast:mara"}, "contradiction": "guarded"}
                             }
                         ]
                     }
@@ -6858,7 +7086,13 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
-                                "purpose": "Reveal the erased harbour entry"
+                                "purpose": "Reveal the erased harbour entry",
+                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contradictory"}, "closing": {"sign": "negative", "depth": "contrary"}},
+                                "opposition": "The watchtower fog",
+                                "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
+                                "scene_question": "What does the bell want?",
+                                "inaction_cost": "The harbor misses the warning",
+                                "risk": 2
                             },
                             {
                                 "scene_order": 2,
@@ -6867,7 +7101,14 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
-                                "purpose": "Pay off the bell mystery"
+                                "purpose": "Pay off the bell mystery",
+                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contrary"}, "closing": {"sign": "positive", "depth": "positive"}},
+                                "opposition": "The watchtower fog",
+                                "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
+                                "scene_question": "What does the bell want?",
+                                "inaction_cost": "The harbor misses the warning",
+                                "risk": 3,
+                                "dilemma": {"character_id": {"kind": "proposal_ref", "value": "cast:mara"}, "contradiction": "resolute"}
                             }
                         ]
                     }
@@ -6984,7 +7225,12 @@ async fn phase_d_living_outline_reseeds_active_run_and_reconciles_planning_sessi
         .await
         .unwrap();
     let chapter_prop = svc
-        .stage_planning(phase_d_chapter_input(&s, &contract_prop, &book_prop))
+        .stage_planning(phase_d_chapter_input(
+            &s,
+            &contract_prop,
+            &series_prop,
+            &book_prop,
+        ))
         .await
         .unwrap();
     let scene_prop = svc
@@ -7315,7 +7561,7 @@ async fn phase_d_tightening_pov_and_pacing_policy_after_staging_revalidates_and_
     // 1. Stage a Chapter proposal with POV = cast:iven AND a sustained pacing deviation (3 chapters off curve)
     // while there is NO POV policy and NO hard pacing policy.
     // Under the initial default policy, it has 0 blocking findings (pacing deviation is only Advisory).
-    let mut ch_input = phase_d_chapter_input(&s, &contract_prop, &book_prop);
+    let mut ch_input = phase_d_chapter_input(&s, &contract_prop, &series_prop, &book_prop);
     ch_input.scope = Some(scope.clone());
     ch_input
         .parents
@@ -8720,8 +8966,20 @@ async fn mckee_scene_batches_must_include_the_accepted_act_climax_scene() {
     )
     .await;
     accept(&svc, &session, &arc).await;
+    let plot_ref = arc
+        .artifact
+        .operations
+        .iter()
+        .find(|item| item.output_ref.starts_with("plot:main"))
+        .map(|item| item.output_ref.clone())
+        .expect("series arc plot line output ref");
+    let act_sequence = |key: &str| {
+        let mut sequence = value_sequence(key, &[(1, 1), (1, 2)], (1, 2));
+        sequence.plot_line_id = Some(PlanningRef::ProposalRef(plot_ref.clone()));
+        sequence
+    };
 
-    let scene = |order: i32, summary: &str| {
+    let scene = |order: i32, summary: &str, opening: (&str, &str), closing: (&str, &str)| {
         json!({
             "scene_order": order,
             "summary": summary,
@@ -8729,7 +8987,18 @@ async fn mckee_scene_batches_must_include_the_accepted_act_climax_scene() {
             "character_ids": [{"kind":"existing_record_id","value": character_id}],
             "location_id": {"kind":"existing_record_id","value": location_id},
             "content_rating": "general",
-            "purpose": "Force a trust decision at the tidal gate"
+            "purpose": "Force a trust decision at the tidal gate",
+            "primary_value_axis": {"axis": "truth", "opening": {"sign": opening.0, "depth": opening.1}, "closing": {"sign": closing.0, "depth": closing.1}},
+            "opposition": "Ben's silence",
+            "gap": {"expected": "Ben explains the seal", "actual": "Ben asks for the harbor"},
+            "scene_question": "Will Ada risk the harbor for the truth?",
+            "inaction_cost": "The forged seal stays buried",
+            "risk": order,
+            "dilemma": if order == 2 {
+                json!({"character_id": {"kind":"existing_record_id","value": character_id}, "contradiction": "generous"})
+            } else {
+                serde_json::Value::Null
+            }
         })
     };
     let range = PlanningTargetRange {
@@ -8758,8 +9027,16 @@ async fn mckee_scene_batches_must_include_the_accepted_act_climax_scene() {
         &session,
         PlanningLevel::Chapter,
         &[&root, &arc],
-        plan(vec![scene(1, "Ada finds the forged seal in the ledger.")]),
-        PlanningSchedule::default(),
+        plan(vec![scene(
+            1,
+            "Ada finds the forged seal in the ledger.",
+            ("positive", "positive"),
+            ("negative", "contrary"),
+        )]),
+        PlanningSchedule {
+            sequences: vec![act_sequence("seq:act-climax")],
+            ..PlanningSchedule::default()
+        },
         Some(range.clone()),
     )
     .await;
@@ -8772,10 +9049,23 @@ async fn mckee_scene_batches_must_include_the_accepted_act_climax_scene() {
         PlanningLevel::Chapter,
         &[&root, &arc],
         plan(vec![
-            scene(1, "Ada finds the forged seal in the ledger."),
-            scene(2, "Ada wagers the harbor on Ben's testimony."),
+            scene(
+                1,
+                "Ada finds the forged seal in the ledger.",
+                ("positive", "positive"),
+                ("negative", "contrary"),
+            ),
+            scene(
+                2,
+                "Ada wagers the harbor on Ben's testimony.",
+                ("negative", "contrary"),
+                ("positive", "positive"),
+            ),
         ]),
-        PlanningSchedule::default(),
+        PlanningSchedule {
+            sequences: vec![act_sequence("seq:act-climax")],
+            ..PlanningSchedule::default()
+        },
         Some(range),
     )
     .await;
@@ -10531,4 +10821,1397 @@ async fn v0058_to_v0059_upgrade_adds_character_design_without_touching_existing_
             .is_ok(),
         "the existing character row must be untouched"
     );
+}
+
+// ---------------------------------------------------------------------------
+// McKee value chain: planned Sequences and scene value plans (ticket #26)
+// ---------------------------------------------------------------------------
+
+struct ValueChainFixture {
+    _tmp: tempfile::TempDir,
+    svc: SqliteSpindleService,
+    session: PlanningSession,
+    scope: PlanningScope,
+    root: PlanningProposal,
+    cast: PlanningProposal,
+    series: PlanningProposal,
+    chapters: PlanningProposal,
+    scene: PlanningProposal,
+}
+
+fn value_turn_charge(sign: ChargeSign, depth: ChargeDepth) -> Charge {
+    Charge::new(sign, depth).expect("valid charge pair")
+}
+
+fn value_axis(opening: Charge, closing: Charge) -> SceneValueAxis {
+    SceneValueAxis {
+        axis: "truth".into(),
+        opening,
+        closing,
+    }
+}
+
+fn value_scene(order: i32, opening: Charge, closing: Charge) -> PlanningPlanChapterSceneInput {
+    PlanningPlanChapterSceneInput {
+        scene_order: order,
+        summary: format!("Value scene {order}"),
+        beat_structure: vec![],
+        character_ids: vec![PlanningRef::ProposalRef("cast:hero".into())],
+        location_id: Some(PlanningRef::ProposalRef("loc:gate".into())),
+        content_rating: Some(spindle_core::models::ContentRating::General),
+        purpose: "Turn the truth axis".into(),
+        research_required: None,
+        research_tags: vec![],
+        explicit_query: None,
+        primary_value_axis: Some(value_axis(opening, closing)),
+        secondary_value_axes: vec![],
+        opposition: Some("The rival".into()),
+        gap: Some(SceneGap {
+            expected: "a welcome".into(),
+            actual: "a refusal".into(),
+        }),
+        scene_question: Some("Will the truth hold?".into()),
+        inaction_cost: Some("The harbor loses its warning".into()),
+        risk: Some(order),
+        dilemma: None,
+    }
+}
+
+fn value_place(book_number: i32, chapter_number: i32, scene_order: i32) -> PlanningStoryPlacement {
+    PlanningStoryPlacement {
+        book_number,
+        chapter_number,
+        scene_order: Some(scene_order),
+        note: None,
+    }
+}
+
+fn value_sequence(key: &str, members: &[(i32, i32)], climax: (i32, i32)) -> PlannedSequence {
+    let member_scenes: Vec<PlanningStoryPlacement> = members
+        .iter()
+        .map(|(chapter, scene)| value_place(1, *chapter, *scene))
+        .collect();
+    PlannedSequence {
+        sequence_key: key.into(),
+        plot_line_id: Some(PlanningRef::ProposalRef("plot:main".into())),
+        question: "Will the truth of the ledger surface?".into(),
+        inciting_scene: member_scenes.first().cloned(),
+        climax_scene: Some(value_place(1, climax.0, climax.1)),
+        member_scenes,
+    }
+}
+
+fn value_dilemma(contradiction: &str) -> PlanningSceneDilemma {
+    PlanningSceneDilemma {
+        character_id: PlanningRef::ProposalRef("cast:hero".into()),
+        contradiction: contradiction.into(),
+    }
+}
+
+fn value_codes(proposal: &PlanningProposal) -> std::collections::BTreeSet<String> {
+    proposal
+        .findings
+        .iter()
+        .map(|finding| finding.code.clone())
+        .collect()
+}
+
+fn value_scene_artifact(
+    s: &PlanningSession,
+    parents: &[&PlanningProposal],
+    plans: Vec<(i32, Vec<PlanningPlanChapterSceneInput>)>,
+) -> StagePlanningInput {
+    let first = plans.first().map(|(chapter, _)| *chapter).unwrap_or(1);
+    let last = plans.last().map(|(chapter, _)| *chapter).unwrap_or(first);
+    let scenes_per_chapter = plans
+        .iter()
+        .map(|(_, scenes)| scenes.len() as i32)
+        .max()
+        .unwrap_or(1);
+    let mut a = artifact(s, "unused");
+    a.level = PlanningLevel::Scene;
+    a.parents = parents
+        .iter()
+        .map(|proposal| (proposal.id.clone(), proposal.payload_hash.clone()))
+        .collect();
+    a.target_range = Some(PlanningTargetRange {
+        book_number: 1,
+        chapter_start: first,
+        chapter_end: last,
+        scenes_per_chapter,
+    });
+    a.operations = plans
+        .into_iter()
+        .map(|(chapter_number, scenes)| PlanningOperationItem {
+            output_ref: format!("plan:{}", unique_fixture_ref("value")),
+            operation: PlanningOperation::PlanChapter(PlanningPlanChapterInput {
+                book_number: 1,
+                chapter_number,
+                pov_character_id: None,
+                synopsis: format!("Value-chain plan for chapter {chapter_number}"),
+                target_theme_ids: vec![],
+                target_conflict_ids: vec![],
+                target_plot_line_ids: vec![],
+                scenes,
+            }),
+        })
+        .collect();
+    a
+}
+
+async fn value_chain_fixture() -> ValueChainFixture {
+    use serde_json::json;
+    let (tmp, svc) = fresh_service_local().await;
+    let (s, root) = accepted_root(&svc).await;
+    let cast = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![
+            planned(
+                "cast:hero",
+                "create_character",
+                json!({"name":"Ada","summary":"Harbor archivist","role":"protagonist"}),
+            ),
+            planned(
+                "design:hero",
+                "create_character_design",
+                character_design_payload("cast:hero", &["guarded", "resolute"]),
+            ),
+            planned(
+                "loc:gate",
+                "create_location",
+                json!({"name":"The Gate","kind":"fortification","summary":"The last gate"}),
+            ),
+        ],
+    )
+    .await;
+    accept(&svc, &s, &cast).await;
+    let series = bundle_with_schedule(
+        &svc,
+        &s,
+        PlanningLevel::SeriesArc,
+        &[&root, &cast],
+        vec![planned(
+            "plot:main",
+            "create_plot_line",
+            json!({
+                "name": "The truth of the tide",
+                "plot_type": "main",
+                "summary": "Trace the forged ledger",
+                "value_axis": "truth",
+                "is_main_plot": true
+            }),
+        )],
+        PlanningSchedule {
+            acts: vec![
+                planned_act(
+                    1,
+                    1,
+                    1,
+                    2,
+                    ChargeSign::Negative,
+                    ChargeDepth::Contrary,
+                    "Ada learns the ledger was forged",
+                    false,
+                ),
+                planned_act(
+                    2,
+                    1,
+                    2,
+                    2,
+                    ChargeSign::Negative,
+                    ChargeDepth::Contradictory,
+                    "Ada answers the harbor",
+                    true,
+                ),
+            ],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    accept(&svc, &s, &series).await;
+    let chapters = bundle_with_schedule(
+        &svc,
+        &s,
+        PlanningLevel::Chapter,
+        &[&root, &series],
+        vec![
+            planned(
+                "chapter:1",
+                "create_chapter",
+                json!({"book_id":reference("project:root:book"),"book_number":1,"chapter_number":1,"title":"One"}),
+            ),
+            planned(
+                "outline:chapter:1",
+                "set_chapter_outline",
+                json!({"entity_id":reference("chapter:1"),"book_number":1,"chapter_number":1,"content":"Ada reads the ledger.","beats":[{"order":1,"summary":"Read","status":"planned"}]}),
+            ),
+            planned(
+                "chapter:2",
+                "create_chapter",
+                json!({"book_id":reference("project:root:book"),"book_number":1,"chapter_number":2,"title":"Two"}),
+            ),
+            planned(
+                "outline:chapter:2",
+                "set_chapter_outline",
+                json!({"entity_id":reference("chapter:2"),"book_number":1,"chapter_number":2,"content":"Ada pays for the truth.","beats":[{"order":1,"summary":"Pay","status":"planned"}]}),
+            ),
+        ],
+        PlanningSchedule {
+            sequences: vec![value_sequence(
+                "seq:truth",
+                &[(1, 1), (1, 2), (2, 1), (2, 2)],
+                (2, 2),
+            )],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    accept(&svc, &s, &chapters).await;
+
+    let mut scenes = vec![
+        // The chapter opens on the axis's negative side and ends on its
+        // positive side, so the chapter is not net-zero: the ending advisory
+        // must stay silent on this passing plan.
+        value_scene(
+            1,
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+        ),
+        value_scene(
+            2,
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+            value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        ),
+    ];
+    scenes[0].risk = Some(2);
+    scenes[0].dilemma = Some(value_dilemma("resolute"));
+    scenes[1].risk = Some(3);
+    scenes[1].dilemma = Some(value_dilemma("guarded"));
+    let scene_input = value_scene_artifact(&s, &[&cast, &series, &chapters], vec![(1, scenes)]);
+    let scene = svc.stage_planning(scene_input).await.unwrap();
+    accept(&svc, &s, &scene).await;
+    let scope = s.scope.clone().unwrap();
+    ValueChainFixture {
+        _tmp: tmp,
+        svc,
+        session: s,
+        scope,
+        root,
+        cast,
+        series,
+        chapters,
+        scene,
+    }
+}
+
+#[tokio::test]
+async fn mckee_value_chain_passes_and_round_trips_scene_value_fields() {
+    let fixture = value_chain_fixture().await;
+    assert!(
+        fixture.scene.findings.is_empty(),
+        "valid value chain must have no findings: {:?}",
+        fixture.scene.findings
+    );
+
+    let plans = fixture
+        .svc
+        .repository
+        .list_chapter_plans_by_project(&fixture.scope.project_id)
+        .await
+        .unwrap();
+    let plan = plans
+        .iter()
+        .find(|plan| plan.chapter_number == 1)
+        .expect("chapter 1 plan");
+    assert_eq!(plan.scenes.len(), 2);
+    let first = &plan.scenes[0];
+    assert_eq!(
+        first.primary_value_axis.as_ref().unwrap().axis,
+        "truth",
+        "primary axis round-trips through plan apply"
+    );
+    assert_eq!(
+        first.primary_value_axis.as_ref().unwrap().opening.depth(),
+        ChargeDepth::Contrary
+    );
+    assert_eq!(
+        first.primary_value_axis.as_ref().unwrap().closing.sign(),
+        ChargeSign::Negative
+    );
+    assert_eq!(first.risk, Some(2));
+    assert_eq!(
+        first.inaction_cost.as_deref(),
+        Some("The harbor loses its warning")
+    );
+    assert_eq!(first.opposition.as_deref(), Some("The rival"));
+    assert_eq!(first.gap.as_ref().unwrap().expected, "a welcome");
+    assert_eq!(first.gap.as_ref().unwrap().actual, "a refusal");
+    assert_eq!(
+        first.scene_question.as_deref(),
+        Some("Will the truth hold?")
+    );
+    assert_eq!(
+        first.primary_value_axis.as_ref().unwrap().axis,
+        "truth",
+        "second scene keeps the same axis"
+    );
+    assert_eq!(first.secondary_value_axes.len(), 0);
+    let first_dilemma = first.dilemma.as_ref().unwrap();
+    assert_eq!(first_dilemma.contradiction, "resolute");
+    assert!(
+        first_dilemma.character_id.starts_with("character:"),
+        "planning apply resolves the dilemma character to a record id: {}",
+        first_dilemma.character_id
+    );
+    let second = &plan.scenes[1];
+    assert_eq!(second.dilemma.as_ref().unwrap().contradiction, "guarded");
+    assert_eq!(second.risk, Some(3));
+
+    // Shared read path: get_chapter_briefing carries the same planned scenes.
+    let briefing = fixture
+        .svc
+        .get_chapter_briefing(GetChapterBriefingInput {
+            project_id: fixture.scope.project_id.clone(),
+            book_number: 1,
+            chapter_number: 1,
+            scene_order: None,
+            character_ids: vec![],
+            location_id: None,
+            format: None,
+            budget_tokens: None,
+            recent_chapter_limit: Some(0),
+            token_budget: None,
+        })
+        .await
+        .unwrap();
+    let briefing_plan = briefing.chapter_plan.expect("chapter plan in briefing");
+    assert_eq!(
+        briefing_plan.scenes[0]
+            .primary_value_axis
+            .as_ref()
+            .unwrap()
+            .axis,
+        "truth"
+    );
+    assert_eq!(
+        briefing_plan.scenes[1]
+            .dilemma
+            .as_ref()
+            .unwrap()
+            .contradiction,
+        "guarded"
+    );
+
+    // Planning status exposes accepted Sequences on the proposal schedule.
+    let status = fixture
+        .svc
+        .planning_status(PlanningStatusInput {
+            session_id: Some(fixture.session.id.clone()),
+            project_id: None,
+            branch_id: None,
+            target_range: None,
+            include_readiness: Some(false),
+        })
+        .await
+        .unwrap();
+    let chapter_summary = status
+        .proposals
+        .iter()
+        .find(|proposal| {
+            proposal.level == PlanningLevel::Chapter
+                && proposal.status == PlanningProposalStatus::Applied
+        })
+        .expect("applied chapter proposal");
+    assert_eq!(
+        chapter_summary.schedule["sequences"][0]["sequence_key"],
+        "seq:truth"
+    );
+    assert_eq!(
+        chapter_summary.schedule["sequences"][0]["member_scenes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+}
+
+#[tokio::test]
+async fn mckee_sequence_refinement_unions_members_across_chapter_artifacts() {
+    use serde_json::json;
+    let fixture = value_chain_fixture().await;
+
+    // A later Chapter artifact refines the accepted seq:truth: it repeats only
+    // one earlier member, adds Scene (book 1, chapter 3, scene 1), and moves the
+    // climax there. The
+    // refine rule must keep the earlier members (so chapter 1's accepted Scenes
+    // stay inside the Sequence) while the overlay's scalar fields win.
+    let mut refined_sequence = value_sequence("seq:truth", &[(1, 2), (3, 1)], (3, 1));
+    refined_sequence.question = "Who forged the ledger?".into();
+    let refined = bundle_with_schedule(
+        &fixture.svc,
+        &fixture.session,
+        PlanningLevel::Chapter,
+        &[&fixture.root, &fixture.series],
+        vec![planned(
+            "chapter:3",
+            "create_chapter",
+            json!({"book_id":reference("project:root:book"),"book_number":1,"chapter_number":3,"title":"Three"}),
+        )],
+        PlanningSchedule {
+            sequences: vec![refined_sequence],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    assert!(
+        refined.findings.is_empty(),
+        "a valid refinement stages cleanly: {:?}",
+        refined.findings
+    );
+
+    // Plan the Scene the refinement added. The chapter-1 Scenes are not part of
+    // this artifact; only the merged Sequence membership can keep them valid.
+    let mut added = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    added.risk = Some(4);
+    added.dilemma = Some(value_dilemma("guarded"));
+    let proposal = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters, &refined],
+            vec![(3, vec![added])],
+        ))
+        .await
+        .unwrap();
+    let codes = value_codes(&proposal);
+    assert!(
+        !codes.contains("scene_no_sequence"),
+        "earlier members survive the refinement: {:?}",
+        proposal.findings
+    );
+    assert!(
+        proposal
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "the merged Sequence satisfies every blocking rule: {:?}",
+        proposal.findings
+    );
+    // The staged refinement must be accepted in the same batch as the Scene
+    // plan that depends on it (the dependency closure rule).
+    let scope = fixture.session.scope.clone().unwrap();
+    let report = fixture
+        .svc
+        .apply_planning(DecidePlanningInput {
+            session_id: fixture.session.id.clone(),
+            scope: Some(scope),
+            expected_hashes: BTreeMap::from([
+                (refined.id.clone(), refined.payload_hash.clone()),
+                (proposal.id.clone(), proposal.payload_hash.clone()),
+            ]),
+            decision: PlanningDecision::Accept,
+            actor: "author".into(),
+            note: "Accept the refined Sequence and the Scene it adds".into(),
+        })
+        .await
+        .unwrap();
+    assert!(report.error.is_none(), "{:?}", report.error);
+    assert!(report.complete);
+}
+
+#[tokio::test]
+async fn mckee_value_chain_blocks_non_events_and_broken_chains() {
+    let fixture = value_chain_fixture().await;
+
+    // A flat primary axis is a non-event.
+    let mut flat = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+    );
+    flat.dilemma = Some(value_dilemma("resolute"));
+    let mut follow = value_scene(
+        2,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    follow.dilemma = Some(value_dilemma("guarded"));
+    let non_event = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(1, vec![flat, follow])],
+        ))
+        .await
+        .unwrap();
+    assert!(value_codes(&non_event).contains("scene_non_event"));
+    assert!(!value_codes(&non_event).contains("value_chain_broken"));
+    let mut decision = decision(&fixture.session, &non_event);
+    decision.decision = PlanningDecision::Accept;
+    assert!(
+        fixture
+            .svc
+            .apply_planning(decision)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("blocking"),
+        "acceptance refuses a non-event"
+    );
+
+    // A later chapter must continue the axis where the previous chapter left it.
+    let broken = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(
+                2,
+                vec![
+                    value_scene(
+                        1,
+                        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                    ),
+                    {
+                        let mut scene = value_scene(
+                            2,
+                            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                            value_turn_charge(
+                                ChargeSign::Negative,
+                                ChargeDepth::NegationOfTheNegation,
+                            ),
+                        );
+                        scene.dilemma = Some(value_dilemma("guarded"));
+                        scene
+                    },
+                ],
+            )],
+        ))
+        .await
+        .unwrap();
+    let broken_codes = value_codes(&broken);
+    assert!(broken_codes.contains("value_chain_broken"), "{broken:?}");
+    let finding = broken
+        .findings
+        .iter()
+        .find(|finding| finding.code == "value_chain_broken")
+        .unwrap();
+    assert_eq!(
+        finding.path,
+        "/operations/0/operation/input/scenes/0/primary_value_axis/opening"
+    );
+
+    // A break inside one batch (chapter 1 replanned together with chapter 2).
+    let mut chapter_one = vec![
+        value_scene(
+            1,
+            value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        ),
+        {
+            let mut scene = value_scene(
+                2,
+                value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+            );
+            scene.dilemma = Some(value_dilemma("guarded"));
+            scene
+        },
+    ];
+    chapter_one[0].dilemma = Some(value_dilemma("resolute"));
+    let mut chapter_two = vec![
+        value_scene(
+            1,
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+        ),
+        {
+            let mut scene = value_scene(
+                2,
+                value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                value_turn_charge(ChargeSign::Negative, ChargeDepth::NegationOfTheNegation),
+            );
+            scene.dilemma = Some(value_dilemma("guarded"));
+            scene
+        },
+    ];
+    chapter_two[0].dilemma = None;
+    let batch = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(1, chapter_one), (2, chapter_two)],
+        ))
+        .await
+        .unwrap();
+    let batch_finding = batch
+        .findings
+        .iter()
+        .find(|finding| finding.code == "value_chain_broken")
+        .expect("broken chain inside one batch");
+    assert_eq!(
+        batch_finding.path,
+        "/operations/1/operation/input/scenes/0/primary_value_axis/opening"
+    );
+}
+
+#[tokio::test]
+async fn mckee_value_chain_blocks_scenes_outside_sequences_and_missing_inaction_cost() {
+    let fixture = value_chain_fixture().await;
+    let mut first = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    first.inaction_cost = None;
+    let second = value_scene(
+        2,
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+    );
+    let proposal = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(3, vec![first, second])],
+        ))
+        .await
+        .unwrap();
+    let codes = value_codes(&proposal);
+    assert!(codes.contains("scene_no_sequence"), "{codes:?}");
+    assert!(codes.contains("scene_missing_inaction_cost"), "{codes:?}");
+    assert_eq!(
+        proposal
+            .findings
+            .iter()
+            .filter(|finding| finding.code == "scene_no_sequence")
+            .count(),
+        2
+    );
+    let climax = proposal
+        .findings
+        .iter()
+        .find(|finding| finding.code == "scene_missing_inaction_cost")
+        .unwrap();
+    assert_eq!(
+        climax.path,
+        "/operations/0/operation/input/scenes/0/inaction_cost"
+    );
+}
+
+#[tokio::test]
+async fn mckee_value_chain_requires_dilemmas_at_climaxes_and_known_contradictions() {
+    let fixture = value_chain_fixture().await;
+
+    // Chapter 2 scene 2 is both the Act 2 and the Sequence climax.
+    let mut without = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    without.dilemma = None;
+    let mut climax_without = value_scene(
+        2,
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+    );
+    climax_without.dilemma = None;
+    let missing = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(2, vec![without, climax_without])],
+        ))
+        .await
+        .unwrap();
+    let codes = value_codes(&missing);
+    assert!(codes.contains("scene_climax_missing_dilemma"), "{codes:?}");
+    assert_eq!(
+        missing
+            .findings
+            .iter()
+            .find(|finding| finding.code == "scene_climax_missing_dilemma")
+            .unwrap()
+            .path,
+        "/operations/0/operation/input/scenes/1/dilemma"
+    );
+
+    // The dilemma must name an accepted Character Design contradiction.
+    let mut unknown = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    unknown.dilemma = Some(value_dilemma("resolute"));
+    let mut bad = value_scene(
+        2,
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+    );
+    bad.dilemma = Some(value_dilemma("never designed"));
+    let unknown = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(2, vec![unknown, bad])],
+        ))
+        .await
+        .unwrap();
+    let codes = value_codes(&unknown);
+    assert!(
+        codes.contains("scene_dilemma_unknown_contradiction"),
+        "{codes:?}"
+    );
+    let finding = unknown
+        .findings
+        .iter()
+        .find(|finding| finding.code == "scene_dilemma_unknown_contradiction")
+        .unwrap();
+    assert_eq!(
+        finding.path,
+        "/operations/0/operation/input/scenes/1/dilemma/contradiction"
+    );
+
+    // A known contradiction clears the gate.
+    let mut known = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    known.dilemma = Some(value_dilemma("resolute"));
+    known.risk = Some(4);
+    let mut valid = value_scene(
+        2,
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+    );
+    valid.risk = Some(5);
+    valid.dilemma = Some(value_dilemma("guarded"));
+    let valid = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(2, vec![known, valid])],
+        ))
+        .await
+        .unwrap();
+    assert!(
+        valid.findings.is_empty(),
+        "a valid cross-chapter continuation has no findings: {:?}",
+        valid.findings
+    );
+    accept(&fixture.svc, &fixture.session, &valid).await;
+}
+
+#[tokio::test]
+async fn mckee_value_chain_validates_scene_value_shapes() {
+    let fixture = value_chain_fixture().await;
+    let mut malformed = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    malformed.primary_value_axis = None;
+    malformed.secondary_value_axes = vec![
+        SceneValueAxis {
+            axis: "a".into(),
+            opening: value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+            closing: value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        },
+        SceneValueAxis {
+            axis: "b".into(),
+            opening: value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+            closing: value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        },
+        SceneValueAxis {
+            axis: "c".into(),
+            opening: value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+            closing: value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        },
+    ];
+    malformed.risk = Some(9);
+    malformed.gap = Some(SceneGap {
+        expected: "  ".into(),
+        actual: "a refusal".into(),
+    });
+    malformed.dilemma = Some(value_dilemma("   "));
+    let mut duplicate = value_scene(
+        2,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    duplicate.secondary_value_axes = vec![
+        SceneValueAxis {
+            axis: "truth".into(),
+            opening: value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            closing: value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        },
+        SceneValueAxis {
+            axis: "  ".into(),
+            opening: value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+            closing: value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        },
+    ];
+    duplicate.dilemma = Some(value_dilemma("guarded"));
+    let proposal = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(2, vec![malformed, duplicate])],
+        ))
+        .await
+        .unwrap();
+    let codes = value_codes(&proposal);
+    for code in [
+        "scene_missing_primary_value_axis",
+        "scene_too_many_secondary_axes",
+        "scene_empty_value_axis_name",
+        "scene_duplicate_value_axis",
+        "scene_invalid_risk",
+        "scene_invalid_gap",
+        "scene_invalid_dilemma",
+    ] {
+        assert!(codes.contains(code), "missing {code} in {codes:?}");
+    }
+}
+
+#[tokio::test]
+async fn mckee_value_chain_advisories_warn_without_blocking() {
+    let fixture = value_chain_fixture().await;
+    let mut chapter_one = vec![
+        value_scene(
+            1,
+            value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        ),
+        {
+            let mut scene = value_scene(
+                2,
+                value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+            );
+            scene.dilemma = Some(value_dilemma("guarded"));
+            scene
+        },
+    ];
+    chapter_one[0].risk = Some(1);
+    chapter_one[1].risk = Some(2);
+    let mut chapter_two = vec![
+        value_scene(
+            1,
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::NegationOfTheNegation),
+        ),
+        {
+            let mut scene = value_scene(
+                2,
+                value_turn_charge(ChargeSign::Negative, ChargeDepth::NegationOfTheNegation),
+                value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+            );
+            scene.dilemma = Some(value_dilemma("guarded"));
+            scene
+        },
+    ];
+    chapter_two[0].risk = Some(3);
+    chapter_two[1].risk = Some(1);
+    let proposal = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(1, chapter_one), (2, chapter_two)],
+        ))
+        .await
+        .unwrap();
+    let codes = value_codes(&proposal);
+    assert!(codes.contains("value_axis_same_direction_run"), "{codes:?}");
+    assert!(codes.contains("sequence_risk_drop"), "{codes:?}");
+    for finding in &proposal.findings {
+        if finding.code == "value_axis_same_direction_run" || finding.code == "sequence_risk_drop" {
+            assert_eq!(finding.severity, PlanningFindingSeverity::Advisory);
+        }
+    }
+    // Advisories never block acceptance.
+    accept(&fixture.svc, &fixture.session, &proposal).await;
+}
+
+#[tokio::test]
+async fn mckee_value_chain_chapter_ending_advisory_and_untested_contradictions() {
+    let fixture = value_chain_fixture().await;
+
+    // A chapter whose last scene turns no axis records the blocking non-event and
+    // the advisory chapter-ending finding.
+    let mut opening = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    opening.dilemma = Some(value_dilemma("resolute"));
+    let mut flat_end = value_scene(
+        2,
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    flat_end.dilemma = Some(value_dilemma("guarded"));
+    let ending = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(2, vec![opening, flat_end])],
+        ))
+        .await
+        .unwrap();
+    let codes = value_codes(&ending);
+    assert!(codes.contains("scene_non_event"), "{codes:?}");
+    assert!(codes.contains("chapter_ending_no_value_turn"), "{codes:?}");
+
+    // A staged CastWorld ancestor contributes a design whose contradictions no
+    // dilemma tests yet: advisory only, never blocking.
+    use serde_json::json;
+    let new_cast = bundle(
+        &fixture.svc,
+        &fixture.session,
+        PlanningLevel::CastWorld,
+        &[&fixture.root],
+        vec![
+            planned(
+                "cast:other",
+                "create_character",
+                json!({"name":"Iven","summary":"Rival clerk","role":"opposition"}),
+            ),
+            planned(
+                "design:other",
+                "create_character_design",
+                character_design_payload("cast:other", &["calm", "stormy"]),
+            ),
+        ],
+    )
+    .await;
+    let mut fresh = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    fresh.risk = Some(4);
+    fresh.dilemma = Some(value_dilemma("resolute"));
+    let mut fresh_turn = value_scene(
+        2,
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+    );
+    fresh_turn.risk = Some(5);
+    fresh_turn.dilemma = Some(value_dilemma("guarded"));
+    let untouched = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters, &new_cast],
+            vec![(2, vec![fresh, fresh_turn])],
+        ))
+        .await
+        .unwrap();
+    let untested: Vec<&PlanningFinding> = untouched
+        .findings
+        .iter()
+        .filter(|finding| finding.code == "character_contradiction_untested")
+        .collect();
+    assert_eq!(untested.len(), 2, "{:?}", untouched.findings);
+    assert!(
+        untouched
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "untested contradictions must be advisory: {:?}",
+        untouched.findings
+    );
+}
+
+#[tokio::test]
+async fn mckee_value_chain_chapter_ending_advisory_fires_on_a_net_zero_chapter() {
+    let fixture = value_chain_fixture().await;
+
+    // Both Scenes turn, so there is no blocking non-event — but the chapter
+    // opens and closes the truth axis at the same Charge, so it lands net-zero.
+    let mut opening = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    opening.dilemma = Some(value_dilemma("resolute"));
+    let mut closing = value_scene(
+        2,
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+    );
+    closing.dilemma = Some(value_dilemma("guarded"));
+    let proposal = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(1, vec![opening, closing])],
+        ))
+        .await
+        .unwrap();
+    let codes = value_codes(&proposal);
+    assert!(
+        codes.contains("chapter_ending_no_value_turn"),
+        "{:?}",
+        proposal.findings
+    );
+    assert!(!codes.contains("scene_non_event"), "{codes:?}");
+    let advisory = proposal
+        .findings
+        .iter()
+        .find(|finding| finding.code == "chapter_ending_no_value_turn")
+        .unwrap();
+    assert_eq!(advisory.severity, PlanningFindingSeverity::Advisory);
+    assert!(
+        advisory.actual.contains("net-zero chapter"),
+        "{}",
+        advisory.actual
+    );
+    assert!(
+        proposal
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "a net-zero chapter is advisory, never blocking: {:?}",
+        proposal.findings
+    );
+    accept(&fixture.svc, &fixture.session, &proposal).await;
+}
+
+#[tokio::test]
+async fn mckee_value_chain_batched_acceptance_uses_staged_ancestor_sequences_and_designs() {
+    use serde_json::json;
+    let fixture = value_chain_fixture().await;
+
+    let new_cast = bundle(
+        &fixture.svc,
+        &fixture.session,
+        PlanningLevel::CastWorld,
+        &[&fixture.root],
+        vec![
+            planned(
+                "cast:new",
+                "create_character",
+                json!({"name":"Iven","summary":"Rival clerk","role":"opposition"}),
+            ),
+            planned(
+                "design:new",
+                "create_character_design",
+                character_design_payload("cast:new", &["calm", "stormy"]),
+            ),
+        ],
+    )
+    .await;
+    let chapter_three = bundle_with_schedule(
+        &fixture.svc,
+        &fixture.session,
+        PlanningLevel::Chapter,
+        &[&fixture.root, &fixture.series],
+        vec![
+            planned(
+                "chapter:3",
+                "create_chapter",
+                json!({"book_id":reference("project:root:book"),"book_number":1,"chapter_number":3,"title":"Three"}),
+            ),
+            planned(
+                "outline:chapter:3",
+                "set_chapter_outline",
+                json!({"entity_id":reference("chapter:3"),"book_number":1,"chapter_number":3,"content":"Ada answers the harbor.","beats":[{"order":1,"summary":"Answer","status":"planned"}]}),
+            ),
+        ],
+        PlanningSchedule {
+            sequences: vec![value_sequence("seq:new", &[(3, 1), (3, 2)], (3, 2))],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    assert!(
+        chapter_three.findings.is_empty(),
+        "{:?}",
+        chapter_three.findings
+    );
+
+    let mut first = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    first.character_ids = vec![PlanningRef::ProposalRef("cast:new".into())];
+    let mut second = value_scene(
+        2,
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+    );
+    second.character_ids = vec![PlanningRef::ProposalRef("cast:new".into())];
+    second.dilemma = Some(PlanningSceneDilemma {
+        character_id: PlanningRef::ProposalRef("cast:new".into()),
+        contradiction: "calm".into(),
+    });
+    let scene = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &new_cast, &chapter_three],
+            vec![(3, vec![first, second])],
+        ))
+        .await
+        .unwrap();
+    assert!(
+        scene
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "staged ancestor sequences and designs must satisfy the blocking rules: {:?}",
+        scene.findings
+    );
+
+    let scope = fixture.session.scope.clone().unwrap();
+    let report = fixture
+        .svc
+        .apply_planning(DecidePlanningInput {
+            session_id: fixture.session.id.clone(),
+            scope: Some(scope),
+            expected_hashes: BTreeMap::from([
+                (new_cast.id.clone(), new_cast.payload_hash.clone()),
+                (chapter_three.id.clone(), chapter_three.payload_hash.clone()),
+                (scene.id.clone(), scene.payload_hash.clone()),
+            ]),
+            decision: PlanningDecision::Accept,
+            actor: "author".into(),
+            note: "Accept staged ancestor designs and sequences in one batch".into(),
+        })
+        .await
+        .unwrap();
+    assert!(report.error.is_none(), "{:?}", report.error);
+    assert!(report.complete);
+    let plans = fixture
+        .svc
+        .repository
+        .list_chapter_plans_by_project(&fixture.scope.project_id)
+        .await
+        .unwrap();
+    assert!(plans.iter().any(|plan| plan.chapter_number == 3));
+}
+
+#[tokio::test]
+async fn mckee_sequences_validate_structure_and_stay_at_the_chapter_level() {
+    use serde_json::json;
+    let fixture = value_chain_fixture().await;
+    let make = |key: &str| value_sequence(key, &[(1, 1), (1, 2)], (1, 2));
+    let mut missing = make("");
+    missing.sequence_key = String::new();
+    missing.question = String::new();
+    missing.plot_line_id = None;
+    missing.member_scenes = vec![];
+    missing.climax_scene = None;
+    let mut bad_climax = make("seq:bad-climax");
+    bad_climax.climax_scene = Some(value_place(1, 2, 1));
+    let mut unordered = make("seq:unordered");
+    unordered.member_scenes = vec![value_place(1, 2, 1), value_place(1, 1, 1)];
+    unordered.climax_scene = Some(value_place(1, 2, 1));
+    let mut inciting = make("seq:inciting");
+    inciting.member_scenes = vec![value_place(1, 1, 1)];
+    inciting.inciting_scene = Some(value_place(1, 2, 1));
+    inciting.climax_scene = Some(value_place(1, 1, 1));
+    let mut no_inciting = make("seq:no-inciting");
+    no_inciting.inciting_scene = None;
+    let duplicate = make("seq:dup");
+    let proposal = bundle_with_schedule(
+        &fixture.svc,
+        &fixture.session,
+        PlanningLevel::Chapter,
+        &[&fixture.root, &fixture.series],
+        vec![planned(
+            "chapter:4",
+            "create_chapter",
+            json!({"book_id":reference("project:root:book"),"book_number":1,"chapter_number":4,"title":"Four"}),
+        )],
+        PlanningSchedule {
+            sequences: vec![
+                missing,
+                bad_climax,
+                unordered,
+                inciting,
+                no_inciting,
+                duplicate.clone(),
+                duplicate,
+            ],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    let codes = value_codes(&proposal);
+    for code in [
+        "sequence_key_missing",
+        "sequence_key_duplicate",
+        "sequence_missing_plot_line",
+        "sequence_missing_question",
+        "sequence_members_empty",
+        "sequence_missing_climax",
+        "sequence_climax_not_member",
+        "sequence_climax_not_last",
+        "sequence_missing_inciting",
+        "sequence_members_unordered",
+        "sequence_inciting_after_climax",
+    ] {
+        assert!(codes.contains(code), "missing {code} in {codes:?}");
+    }
+    let mut invalid_decision = decision(&fixture.session, &proposal);
+    invalid_decision.decision = PlanningDecision::Accept;
+    assert!(
+        fixture.svc.apply_planning(invalid_decision).await.is_err(),
+        "structurally invalid Sequences refuse acceptance"
+    );
+
+    // Sequences on a Scene artifact are wrong-level metadata.
+    let scene = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(
+                2,
+                vec![{
+                    let mut scene = value_scene(
+                        1,
+                        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                    );
+                    scene.dilemma = Some(value_dilemma("resolute"));
+                    scene
+                }],
+            )],
+        ))
+        .await
+        .unwrap();
+    let mut wrong_level_input = scene.artifact.clone();
+    wrong_level_input.operations[0].output_ref =
+        format!("plan:{}", unique_fixture_ref("wrong-level"));
+    wrong_level_input.schedule.sequences =
+        vec![value_sequence("seq:wrong-level", &[(2, 1)], (2, 1))];
+    let wrong_level = fixture.svc.stage_planning(wrong_level_input).await.unwrap();
+    assert!(value_codes(&wrong_level).contains("sequence_wrong_level"));
+    let mut wrong_level_decision = decision(&fixture.session, &wrong_level);
+    wrong_level_decision.decision = PlanningDecision::Accept;
+    assert!(
+        fixture
+            .svc
+            .apply_planning(wrong_level_decision)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn non_mckee_projects_are_exempt_from_value_chain_findings() {
+    use spindle_core::models::CreateLocationInput;
+    let (_tmp, svc) = fresh_service_local().await;
+    let (s, root) = accepted_non_mckee_project(&svc).await;
+    let scope = s.scope.clone().unwrap();
+    let character = svc
+        .create_character(CreateCharacterInput {
+            project_id: scope.project_id.clone(),
+            name: "Nell".into(),
+            summary: "Siege engineer".into(),
+            role: "lead".into(),
+            realm: None,
+            aliases: vec![],
+            voice_profile: Default::default(),
+            emotional_profile: Default::default(),
+            initial_state: None,
+        })
+        .await
+        .unwrap();
+    let location = svc
+        .create_location(CreateLocationInput {
+            project_id: scope.project_id.clone(),
+            name: "The Gate".into(),
+            kind: "fortification".into(),
+            realm: None,
+            summary: "The last gate".into(),
+            initial_state: Default::default(),
+        })
+        .await
+        .unwrap();
+    let mut a = artifact(&s, "unused");
+    a.level = PlanningLevel::Scene;
+    a.parents = BTreeMap::from([(root.id.clone(), root.payload_hash.clone())]);
+    a.target_range = Some(PlanningTargetRange {
+        book_number: 1,
+        chapter_start: 1,
+        chapter_end: 1,
+        scenes_per_chapter: 2,
+    });
+    a.operations = vec![PlanningOperationItem {
+        output_ref: "plan:non-mckee".into(),
+        operation: PlanningOperation::PlanChapter(PlanningPlanChapterInput {
+            book_number: 1,
+            chapter_number: 1,
+            pov_character_id: None,
+            synopsis: "Nell holds the gate.".into(),
+            target_theme_ids: vec![],
+            target_conflict_ids: vec![],
+            target_plot_line_ids: vec![],
+            scenes: vec![
+                PlanningPlanChapterSceneInput {
+                    scene_order: 1,
+                    summary: "Nell counts the arrows.".into(),
+                    beat_structure: vec!["hook".into()],
+                    character_ids: vec![PlanningRef::ExistingRecordId(
+                        character.character_id.clone(),
+                    )],
+                    location_id: Some(PlanningRef::ExistingRecordId(location.location_id.clone())),
+                    content_rating: Some(spindle_core::models::ContentRating::General),
+                    purpose: "Establish the siege".into(),
+                    research_required: None,
+                    research_tags: vec![],
+                    explicit_query: None,
+                    ..Default::default()
+                },
+                PlanningPlanChapterSceneInput {
+                    scene_order: 2,
+                    summary: "Nell opens the gate at dawn.".into(),
+                    beat_structure: vec!["turn".into()],
+                    character_ids: vec![PlanningRef::ExistingRecordId(
+                        character.character_id.clone(),
+                    )],
+                    location_id: Some(PlanningRef::ExistingRecordId(location.location_id.clone())),
+                    content_rating: Some(spindle_core::models::ContentRating::General),
+                    purpose: "Force the gate decision".into(),
+                    research_required: None,
+                    research_tags: vec![],
+                    explicit_query: None,
+                    ..Default::default()
+                },
+            ],
+        }),
+    }];
+    let proposal = svc.stage_planning(a).await.unwrap();
+    assert!(
+        proposal.findings.is_empty(),
+        "non-McKee plans get no value-chain findings: {:?}",
+        proposal.findings
+    );
+    let report = accept(&svc, &s, &proposal).await;
+    assert!(report.complete);
 }

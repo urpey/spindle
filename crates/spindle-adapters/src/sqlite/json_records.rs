@@ -319,6 +319,22 @@ pub struct StoredPlannedScene {
     pub research_tags: Vec<String>,
     #[serde(default)]
     pub explicit_query: Option<String>,
+    #[serde(default)]
+    pub primary_value_axis: Option<spindle_core::scene_value::SceneValueAxis>,
+    #[serde(default)]
+    pub secondary_value_axes: Vec<spindle_core::scene_value::SceneValueAxis>,
+    #[serde(default)]
+    pub opposition: Option<String>,
+    #[serde(default)]
+    pub gap: Option<spindle_core::scene_value::SceneGap>,
+    #[serde(default)]
+    pub scene_question: Option<String>,
+    #[serde(default)]
+    pub inaction_cost: Option<String>,
+    #[serde(default)]
+    pub risk: Option<i32>,
+    #[serde(default)]
+    pub dilemma: Option<spindle_core::scene_value::SceneDilemma>,
 }
 
 impl StoredPlannedScene {
@@ -334,6 +350,14 @@ impl StoredPlannedScene {
             research_required: self.research_required,
             research_tags: self.research_tags,
             explicit_query: self.explicit_query,
+            primary_value_axis: self.primary_value_axis,
+            secondary_value_axes: self.secondary_value_axes,
+            opposition: self.opposition,
+            gap: self.gap,
+            scene_question: self.scene_question,
+            inaction_cost: self.inaction_cost,
+            risk: self.risk,
+            dilemma: self.dilemma,
         }
     }
 }
@@ -351,6 +375,14 @@ impl From<core::PlannedScene> for StoredPlannedScene {
             research_required: value.research_required,
             research_tags: value.research_tags,
             explicit_query: value.explicit_query,
+            primary_value_axis: value.primary_value_axis,
+            secondary_value_axes: value.secondary_value_axes,
+            opposition: value.opposition,
+            gap: value.gap,
+            scene_question: value.scene_question,
+            inaction_cost: value.inaction_cost,
+            risk: value.risk,
+            dilemma: value.dilemma,
         }
     }
 }

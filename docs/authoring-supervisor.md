@@ -63,6 +63,20 @@ placeholder. `act_breakpoints` are derived from the Act list for these
 projects, so `create_pacing_curve` refuses an authored map; pacing curves on
 unmarked projects are unchanged.
 
+Chapter plans for McKee projects also carry Sequences (`PlanningSchedule.sequences`
+on the Chapter artifact) and the scene value plan: primary and secondary Value
+Axes with opening/closing Charges, opposition, Gap, scene question, Inaction
+Cost, risk and the dilemma naming the tested contradiction. Those fields
+round-trip through the chapter plan (planning status, chapter briefing and the
+direct plan read all return them), but the supervisor and
+`authoring_prepare_run` do **not** read or enforce them yet. The value-chain
+blocking and advisory findings exist only at planning stage/acceptance time;
+drafting readiness does not re-check the chain, Sequence membership, Inaction
+Cost or climax dilemmas, so a run can start from a plan whose value chain is
+broken. Supervisor-side enforcement is follow-up work (#31/#32). Sequences may
+cross chapters; the supervisor never turns them into timeline events or
+canonical facts.
+
 ## MCP Tools Interface
 
 The supervisor exposes 9 MCP tools through the `spindle-mcp` server:

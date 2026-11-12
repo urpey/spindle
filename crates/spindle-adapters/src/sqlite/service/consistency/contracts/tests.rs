@@ -2435,6 +2435,8 @@ rating = "explicit"
                     research_required: None,
                     research_tags: Vec::new(),
                     explicit_query: None,
+
+                    ..Default::default()
                 })
                 .collect(),
         })
