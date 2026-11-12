@@ -1050,6 +1050,8 @@ impl Repository {
                 scene_order: s.scene_order,
                 summary: s.summary.clone(),
                 beat_structure: s.beat_structure.clone(),
+                beats: s.beats.clone(),
+                turning_beat: s.turning_beat,
                 character_ids: s.character_ids.clone(),
                 location_id: s.location_id.clone(),
                 content_rating: s.content_rating.clone(),

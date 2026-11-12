@@ -33,6 +33,12 @@ Series-Arc 與 Book 層的排程可以帶一份 ordered **Act list**（`schedule
 
 要判斷 Value Axis、Charge 四階、Gap、broken value chain，或某一層到底有沒有轉折，載入 `story-structure/value-turns`；這裡只留結構位置與閘門。
 
+## 場景的拍與轉折拍
+
+Scene 的 Beat 是結構化的一拍：`kind`（`action`／`reaction`／`turn`）、`actor`、`tactic`、`said`、`wanted` 與 `gap`（expected 對 actual）。McKee 專案的 planned Scene 必須有 Beats，而且**恰好一個 `turn`**；`turning_beat` 用 1-based 位置指向它（`beats` 的第一拍是 1）。沒有 Beats、沒有 `turning_beat`、指到不存在的拍、指到非 `turn` 的拍，或兩個以上的 `turn`，都會擋下接受。Swain 類別只放在可選的 `swain_label`，不是結構。
+
+舊的 `beat_structure` 字串仍可讀取，但 McKee 專案以結構化 Beats 為準，字串不能拿來代替。要設計場景的壓力、opposition、Gap 與轉折拍，載入 `story-structure/scene-design`；要設計對白的 tactic 與潛台詞，載入 `story-structure/dialogue-tactics`。
+
 ## 角色設計（Character Design）
 
 Cast & World 層為每個角色建立一份 Character Design：2–5 個會互相拉扯的矛盾、四層自我（public / personal / private / hidden）、自覺與不自覺慾望、對主角的壓力，以及可演出的行為線索。隱藏層與不自覺慾望是作者層祕密，只有規劃讀取看得到全文；writer 只拿到行為線索。要設計、審查或修復 `character_design_missing` 之前，載入 `story-structure/character-design`。

@@ -210,3 +210,75 @@ fn plan_chapter_scene_schema_advertises_value_plan_fields() {
         );
     }
 }
+
+#[test]
+fn plan_chapter_scene_schema_advertises_structured_beats() {
+    let schemas = all_tool_schemas();
+    let tool = schemas
+        .iter()
+        .find(|tool| tool.name == "plan_chapter")
+        .expect("plan_chapter schema");
+    let value = serde_json::to_value(tool).expect("schema serializes");
+    let item = &value["inputSchema"]["properties"]["scenes"]["items"];
+    let scene = if let Some(properties) = item.get("properties") {
+        properties
+    } else {
+        let reference = item["$ref"].as_str().expect("scene item schema reference");
+        let definition = reference.rsplit('/').next().expect("definition name");
+        &value["inputSchema"]["$defs"][definition]["properties"]
+    };
+
+    // The Scene names its Turning Beat with a 1-based position in `beats`.
+    let turning = scene
+        .get("turning_beat")
+        .expect("plan_chapter scene schema is missing turning_beat");
+    assert_eq!(turning["type"], "integer");
+
+    let beats = scene
+        .get("beats")
+        .expect("plan_chapter scene schema is missing beats");
+    assert_eq!(beats["type"], "array");
+    let beat = if let Some(properties) = beats["items"].get("properties") {
+        properties
+    } else {
+        let reference = beats["items"]["$ref"]
+            .as_str()
+            .expect("beat item schema reference");
+        let definition = reference.rsplit('/').next().expect("definition name");
+        &value["inputSchema"]["$defs"][definition]["properties"]
+    };
+    for field in [
+        "kind",
+        "actor",
+        "tactic",
+        "said",
+        "wanted",
+        "gap",
+        "swain_label",
+    ] {
+        assert!(
+            beat.get(field).is_some(),
+            "plan_chapter beat schema is missing {field}: {value}"
+        );
+    }
+    // The Beat kind is a closed set; Swain categories are free-text labels only.
+    let kind = if let Some(enumeration) = beat["kind"].get("enum") {
+        enumeration.clone()
+    } else {
+        let reference = beat["kind"]["$ref"]
+            .as_str()
+            .expect("beat kind schema reference");
+        let definition = reference.rsplit('/').next().expect("definition name");
+        value["inputSchema"]["$defs"][definition]["enum"].clone()
+    };
+    assert_eq!(
+        kind,
+        serde_json::json!(["action", "reaction", "turn"]),
+        "structured Beat kinds are the closed McKee set: {value}"
+    );
+    assert_eq!(beat["swain_label"]["type"], "string");
+    assert!(
+        beat["swain_label"].get("enum").is_none(),
+        "Swain labels must stay free text, never a closed structural kind"
+    );
+}

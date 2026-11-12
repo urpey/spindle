@@ -22,7 +22,12 @@ pub(crate) fn resolve_operation(
                     if matches!(key.as_str(), "emotional_state" | "base_emotions") {
                         continue;
                     }
-                    if key.ends_with("_id") || key.ends_with("_ids") || key == "controlling_faction"
+                    // `actor` is a character reference on a structured Beat; it
+                    // is not spelled `*_id`, so name it explicitly here.
+                    if key.ends_with("_id")
+                        || key.ends_with("_ids")
+                        || key == "controlling_faction"
+                        || key == "actor"
                     {
                         fn one(v: &mut Value, refs: &BTreeMap<String, String>) -> Result<()> {
                             if v.is_null() {
@@ -699,7 +704,12 @@ fn scope_guard(
                     ) {
                         continue;
                     }
-                    if key.ends_with("_id") || key.ends_with("_ids") || key == "controlling_faction"
+                    // `actor` is a character reference on a structured Beat; it
+                    // is not spelled `*_id`, so name it explicitly here.
+                    if key.ends_with("_id")
+                        || key.ends_with("_ids")
+                        || key == "controlling_faction"
+                        || key == "actor"
                     {
                         let ids: Vec<&str> = if let Some(a) = v.as_array() {
                             a.iter().filter_map(Value::as_str).collect()

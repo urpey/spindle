@@ -95,7 +95,15 @@ The supervisor exposes 9 MCP tools through the `spindle-mcp` server:
 
 Chapter plans are the source of truth for pre-draft scene requirements. Each
 `plan_chapter` scene should carry first-class `character_ids`, `location_id`,
-and `content_rating` fields. `authoring_prepare_run` still accepts old plans
+and `content_rating` fields. On a McKee-structured project a scene also carries
+its structured `beats` (action / reaction / turn, with tactic, said, wanted and
+a per-Beat Gap) and the 1-based `turning_beat` reference; planning acceptance
+refuses a scene with no Beats, no Turning Beat, a reference outside the Beat
+list, a referenced Beat that is not of kind `turn`, or more than one Turn Beat.
+Legacy `beat_structure` strings remain readable for every project, but they are
+not a substitute for structured Beats on a McKee project. The post-draft
+`annotate_scene_beats` phase is separate: it records realized beats on written
+prose and is not changed by scene planning. `authoring_prepare_run` still accepts old plans
 that encoded `location:` / `rating:` in summary text as a legacy fallback, but
 new supervisor flows should not depend on that parsing convention.
 

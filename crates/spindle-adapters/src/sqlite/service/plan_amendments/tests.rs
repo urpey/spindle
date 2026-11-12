@@ -461,6 +461,8 @@ mod plan_ratify {
             scene_order: order,
             summary: summary.to_string(),
             beat_structure: Vec::new(),
+            beats: Vec::new(),
+            turning_beat: None,
             character_ids: Vec::new(),
             location_id: None,
             content_rating: None,
@@ -498,6 +500,38 @@ mod plan_ratify {
         }
     }
 
+    /// Action plus one Turn Beat for the McKee amendment fixtures.
+    fn value_beats() -> Vec<spindle_core::beats::PlannedBeat> {
+        use spindle_core::beats::{BeatKind, PlannedBeat};
+        use spindle_core::scene_value::SceneGap;
+        vec![
+            PlannedBeat {
+                kind: BeatKind::Action,
+                actor: Some("character:alice".into()),
+                tactic: "Ask for the sealed ledger".into(),
+                said: "Show me the ledger.".into(),
+                wanted: "The truth of the forged seal".into(),
+                gap: SceneGap {
+                    expected: "The ledger clears her".into(),
+                    actual: "A page is missing".into(),
+                },
+                swain_label: None,
+            },
+            PlannedBeat {
+                kind: BeatKind::Turn,
+                actor: Some("character:alice".into()),
+                tactic: "Name the forger before the hall".into(),
+                said: "Then the hall forged its own record.".into(),
+                wanted: "A truth the hall cannot bury".into(),
+                gap: SceneGap {
+                    expected: "The hall hears her".into(),
+                    actual: "The hall orders her silence".into(),
+                },
+                swain_label: None,
+            },
+        ]
+    }
+
     /// A scene carrying a complete, shape-valid McKee value plan.
     fn value_scene(
         order: i32,
@@ -509,6 +543,8 @@ mod plan_ratify {
             scene_order: order,
             summary: summary.to_string(),
             beat_structure: vec!["turn".into()],
+            beats: value_beats(),
+            turning_beat: Some(2),
             character_ids: vec!["character:alice".to_string()],
             location_id: Some("location:hall".to_string()),
             content_rating: Some(spindle_core::models::ContentRating::General),
@@ -1356,6 +1392,8 @@ mod plan_ratify {
                     scene_order: 1,
                     summary: "scene one".to_string(),
                     beat_structure: Vec::new(),
+                    beats: Vec::new(),
+                    turning_beat: None,
                     character_ids: vec!["character:alice".to_string()],
                     location_id: Some("location:hall".to_string()),
                     content_rating: Some(ContentRating::General),
@@ -1376,6 +1414,8 @@ mod plan_ratify {
                     scene_order: 2,
                     summary: "scene two".to_string(),
                     beat_structure: Vec::new(),
+                    beats: Vec::new(),
+                    turning_beat: None,
                     character_ids: vec!["character:bob".to_string()],
                     location_id: Some("location:courtyard".to_string()),
                     content_rating: Some(ContentRating::Teen),

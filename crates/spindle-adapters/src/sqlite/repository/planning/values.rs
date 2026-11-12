@@ -20,6 +20,7 @@
 //! findings visible and acceptance refuses until they are repaired.
 
 use super::*;
+use spindle_core::beats::{BeatKind, SceneBeatError, scene_beat_errors};
 use spindle_core::models::PlannedScene;
 use spindle_core::planning::{PlannedAct, PlannedSequence, PlanningRef, PlanningStoryPlacement};
 use spindle_core::scene_value::{
@@ -36,6 +37,8 @@ struct SceneValueEntry {
     book_number: i32,
     chapter_number: i32,
     scene_order: i32,
+    beat_kinds: Vec<BeatKind>,
+    turning_beat: Option<u32>,
     primary: Option<SceneValueAxis>,
     secondary: Vec<SceneValueAxis>,
     gap: Option<SceneGap>,
@@ -58,6 +61,8 @@ impl SceneValueEntry {
             book_number,
             chapter_number,
             scene_order: scene.scene_order,
+            beat_kinds: scene.beats.iter().map(|beat| beat.kind).collect(),
+            turning_beat: scene.turning_beat,
             primary: scene.primary_value_axis.clone(),
             secondary: scene.secondary_value_axes.clone(),
             gap: scene.gap.clone(),
@@ -119,6 +124,7 @@ pub(super) fn validate_mckee_value_chain(
     let receipts = apply::refs_in_conn(conn, &input.session_id)?;
 
     validate_scene_value_shapes(&scenes, findings);
+    validate_scene_beats(&scenes, findings);
     validate_non_events(&scenes, findings);
     validate_value_chain(&scenes, findings);
     validate_sequence_membership(&scenes, &sequences, findings);
@@ -473,6 +479,8 @@ fn evaluated_scene_values_in_conn(
                         book_number: plan.book_number,
                         chapter_number: plan.chapter_number,
                         scene_order: scene.scene_order,
+                        beat_kinds: scene.beats.iter().map(|beat| beat.kind).collect(),
+                        turning_beat: scene.turning_beat,
                         primary: scene.primary_value_axis.clone(),
                         secondary: scene.secondary_value_axes.clone(),
                         gap: scene.gap.clone(),
@@ -505,6 +513,8 @@ fn evaluated_scene_values_in_conn(
                     book_number: plan.book_number,
                     chapter_number: plan.chapter_number,
                     scene_order: scene.scene_order,
+                    beat_kinds: scene.beats.iter().map(|beat| beat.kind).collect(),
+                    turning_beat: scene.turning_beat,
                     primary: scene.primary_value_axis.clone(),
                     secondary: scene.secondary_value_axes.clone(),
                     gap: scene.gap.clone(),
@@ -718,6 +728,59 @@ fn validate_scene_value_shapes(scenes: &[SceneValueEntry], findings: &mut Vec<Pl
                 expected.to_string(),
                 error.to_string(),
                 format!("{} {error}.", scene.repair_hint),
+            ));
+        }
+    }
+}
+
+/// Structured Beat rules for a McKee Scene: Beats are required, exactly one is
+/// of kind `turn`, and `turning_beat` points at it.
+///
+/// The Turning Beat is a 1-based position in `beats`; a Scene therefore names no
+/// Beat order of its own. `beat_structure` strings are ignored here: they stay
+/// readable for every project, but on a McKee project they are never a
+/// substitute for structured Beats.
+fn validate_scene_beats(scenes: &[SceneValueEntry], findings: &mut Vec<PlanningFinding>) {
+    for scene in scenes {
+        for error in scene_beat_errors(&scene.beat_kinds, scene.turning_beat) {
+            let (code, path, expected) = match &error {
+                SceneBeatError::NoBeats => (
+                    "scene_beats_missing",
+                    format!("{}/beats", scene.path),
+                    "at least one structured Beat",
+                ),
+                SceneBeatError::MissingTurningBeat => (
+                    "scene_missing_turning_beat",
+                    format!("{}/turning_beat", scene.path),
+                    "the 1-based position of the Scene's Turning Beat",
+                ),
+                SceneBeatError::TurningBeatOutOfRange { .. } => (
+                    "scene_turning_beat_out_of_range",
+                    format!("{}/turning_beat", scene.path),
+                    "a 1-based position of an existing Beat",
+                ),
+                SceneBeatError::TurningBeatNotTurn { .. } => (
+                    "scene_turning_beat_not_turn",
+                    format!("{}/turning_beat", scene.path),
+                    "a Turning Beat of kind 'turn'",
+                ),
+                SceneBeatError::MultipleTurnBeats { .. } => (
+                    "scene_multiple_turn_beats",
+                    format!("{}/beats", scene.path),
+                    "exactly one Beat of kind 'turn'",
+                ),
+            };
+            findings.push(planning_finding(
+                code,
+                PlanningFindingSeverity::Blocking,
+                path,
+                Vec::new(),
+                expected.to_string(),
+                error.to_string(),
+                format!(
+                    "{} Design the Scene's Beats as action/reaction and exactly one turn, then point turning_beat at the turn.",
+                    scene.repair_hint
+                ),
             ));
         }
     }

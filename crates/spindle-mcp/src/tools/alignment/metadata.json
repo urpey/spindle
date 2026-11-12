@@ -654,6 +654,24 @@
         ],
         "tools": [],
         "trigger": "Load when judging or repairing a Value Turn, a Charge, a Gap, a broken value chain, or whether a Scene, Sequence or Act actually turns the Spine Axis, including Act climax Charges, depth progression and the reserved Act climax placeholder."
+      },
+      {
+        "name": "story-structure/scene-design",
+        "profiles": [
+          "default",
+          "mckee"
+        ],
+        "tools": [],
+        "trigger": "Load when designing or repairing a planned Scene: its Value Axis pressure, opposition, Scene Question, Gap, Turning Beat, Inaction Cost and structured Beats."
+      },
+      {
+        "name": "story-structure/dialogue-tactics",
+        "profiles": [
+          "default",
+          "mckee"
+        ],
+        "tools": [],
+        "trigger": "Load when designing or repairing dialogue as action: tactic, said versus wanted (subtext), Beats inside dialogue, the Turning Beat's line, and Swain labels as optional labels only."
       }
     ],
     "requires_skills": [

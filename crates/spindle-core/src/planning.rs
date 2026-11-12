@@ -1116,6 +1116,16 @@ pub struct PlanningPlanChapterSceneInput {
     pub summary: String,
     #[serde(default)]
     pub beat_structure: Vec<String>,
+    /// The Scene's structured Beats in story order (McKee projects).
+    ///
+    /// The stored [`crate::models::PlannedScene`] carries the same Beats with
+    /// `actor` resolved to a record id; this planning twin keeps the proposal
+    /// reference so a Scene can act a character created in the same batch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beats: Vec<PlanningBeat>,
+    /// 1-based position in `beats` of the Scene's Turning Beat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turning_beat: Option<u32>,
     #[serde(default)]
     pub character_ids: Vec<PlanningRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1167,6 +1177,34 @@ pub struct PlanningSceneDilemma {
     pub character_id: PlanningRef,
     /// The contradiction text, matched trim-exact against the design.
     pub contradiction: String,
+}
+
+/// A structured Beat inside a planning artifact.
+///
+/// The stored form is [`crate::beats::PlannedBeat`]: the two differ only in the
+/// actor, which is a planning reference here and a resolved record id there.
+/// Every other field shares the McKee contract, including the optional
+/// free-text Swain label (a label, never a structural kind).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningBeat {
+    /// Structural kind of this Beat.
+    pub kind: crate::beats::BeatKind,
+    /// Character who takes this Beat, as a planning reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<PlanningRef>,
+    /// The tactic the actor uses to get something.
+    pub tactic: String,
+    /// What is said out loud on this Beat (empty for a silent Beat).
+    pub said: String,
+    /// What the actor actually wants — the subtext behind the tactic.
+    pub wanted: String,
+    /// What the actor expects this attempt to bring versus what the world
+    /// actually returns.
+    pub gap: SceneGap,
+    /// Optional Swain category label. Never a structural kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swain_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -2088,6 +2126,13 @@ mod tests {
         rejects_extra::<PlanningPlanChapterSceneInput>(
             json!({"scene_order":1,"summary":"Clue","purpose":"Discovery"}),
         );
+        rejects_extra::<PlanningBeat>(json!({
+            "kind":"action",
+            "tactic":"Ask for the log",
+            "said":"Show me the tide log.",
+            "wanted":"A clean record",
+            "gap":{"expected":"The log clears her","actual":"A page is missing"}
+        }));
         rejects_extra::<PlanningTargetRange>(
             json!({"book_number":1,"chapter_start":1,"chapter_end":3,"scenes_per_chapter":2}),
         );
@@ -2206,6 +2251,51 @@ mod tests {
         ] {
             rejects_at(conflict.clone(), path);
         }
+    }
+
+    #[test]
+    fn structured_beats_are_additive_and_legacy_string_beats_still_parse() {
+        // Every project can still deserialize a plan that only carries the
+        // legacy `beat_structure` strings.
+        let legacy: PlanningPlanChapterSceneInput = serde_json::from_value(json!({
+            "scene_order": 1,
+            "summary": "Ada follows the ledger",
+            "purpose": "Discover the forged seal",
+            "beat_structure": ["clue", "choice"]
+        }))
+        .unwrap();
+        assert_eq!(legacy.beat_structure, vec!["clue", "choice"]);
+        assert!(legacy.beats.is_empty());
+        assert_eq!(legacy.turning_beat, None);
+        let json = serde_json::to_value(&legacy).unwrap();
+        assert!(json.get("beats").is_none());
+        assert!(json.get("turning_beat").is_none());
+
+        // A structured Scene carries the typed Beats plus the 1-based Turning
+        // Beat position and round-trips through the planning artifact.
+        let structured: PlanningPlanChapterSceneInput = serde_json::from_value(json!({
+            "scene_order": 1,
+            "summary": "Ada follows the ledger",
+            "purpose": "Discover the forged seal",
+            "beats": [
+                {"kind":"action","actor":{"kind":"proposal_ref","value":"cast:ada"},"tactic":"Ask for the log","said":"Show me the tide log.","wanted":"A clean record","gap":{"expected":"The log clears her","actual":"A page is missing"}},
+                {"kind":"reaction","actor":{"kind":"proposal_ref","value":"cast:ben"},"tactic":"Stall","said":"Sealed until the assizes.","wanted":"Time","gap":{"expected":"Procedure buys a day","actual":"Ada offers her signet"}},
+                {"kind":"turn","actor":{"kind":"proposal_ref","value":"cast:ada"},"tactic":"Wager the signet","said":"Take the signet as surety.","wanted":"Ben's testimony","gap":{"expected":"Ben will testify","actual":"Ben asks for the signet first"},"swain_label":"conflict"}
+            ],
+            "turning_beat": 3
+        }))
+        .unwrap();
+        assert_eq!(structured.beats.len(), 3);
+        assert_eq!(structured.beats[2].kind, crate::beats::BeatKind::Turn);
+        assert_eq!(structured.turning_beat, Some(3));
+        assert_eq!(structured.beats[2].swain_label.as_deref(), Some("conflict"));
+        let json = serde_json::to_value(&structured).unwrap();
+        assert_eq!(json["beats"][0]["kind"], "action");
+        assert_eq!(
+            json["beats"][0]["actor"],
+            json!({"kind":"proposal_ref","value":"cast:ada"})
+        );
+        assert!(json["beats"][0].get("swain_label").is_none());
     }
 }
 

@@ -510,6 +510,74 @@ fn planned_act(
     }
 }
 
+/// Three structured Beats for a fixture Scene: one action, one reaction and
+/// exactly one turn, with the Scene's Turning Beat pointing at the turn.
+/// `actor` and `opponent` are planning reference values.
+fn scene_beats_for(actor: serde_json::Value, opponent: serde_json::Value) -> serde_json::Value {
+    serde_json::json!([
+        {
+            "kind": "action",
+            "actor": actor.clone(),
+            "tactic": "Press for the tide log",
+            "said": "Show me the log.",
+            "wanted": "A clean record that clears her name",
+            "gap": {"expected": "The log clears her", "actual": "A page is missing"}
+        },
+        {
+            "kind": "reaction",
+            "actor": opponent.clone(),
+            "tactic": "Stall behind procedure",
+            "said": "The log is sealed until the assizes.",
+            "wanted": "Time to remove his name",
+            "gap": {"expected": "Procedure buys a day", "actual": "Ada offers her signet"},
+            "swain_label": "conflict"
+        },
+        {
+            "kind": "turn",
+            "actor": actor,
+            "tactic": "Wager the signet",
+            "said": "Then take the signet as surety.",
+            "wanted": "Ben's testimony",
+            "gap": {"expected": "Ben will testify", "actual": "Ben asks for the signet first"}
+        }
+    ])
+}
+
+/// The proposal-reference form of [`scene_beats_for`].
+fn scene_beats(actor: &str, opponent: &str) -> serde_json::Value {
+    scene_beats_for(reference(actor), reference(opponent))
+}
+
+/// Three Beats for a single-character Scene: no second actor is invented.
+fn solo_scene_beats(actor: &str) -> serde_json::Value {
+    serde_json::json!([
+        {
+            "kind": "action",
+            "actor": reference(actor),
+            "tactic": "Test the tower door",
+            "said": "The bell rang.",
+            "wanted": "A reason she can name",
+            "gap": {"expected": "A weather-vane fault", "actual": "The clapper is missing"}
+        },
+        {
+            "kind": "reaction",
+            "actor": reference(actor),
+            "tactic": "Talk herself out of it",
+            "said": "Fog moves like that.",
+            "wanted": "To stay safe",
+            "gap": {"expected": "The sound explains itself", "actual": "It rings again"}
+        },
+        {
+            "kind": "turn",
+            "actor": reference(actor),
+            "tactic": "Climb to the lantern room",
+            "said": "Then I'll look.",
+            "wanted": "The truth of the bell",
+            "gap": {"expected": "Proof of a prank", "actual": "The bell was never fitted"}
+        }
+    ])
+}
+
 fn phase_d_value_axis(
     opening_sign: &str,
     opening_depth: &str,
@@ -900,8 +968,8 @@ async fn all_human_fixture_applies_allowlist_and_reads_six_complete_manifests() 
         let (primary_one, primary_two) = value_test_chain_for_chapter(number);
         let dilemma = json!({"character_id":reference("cast:ada"),"contradiction":"generous"});
         plans.push(planned(&format!("plan:{number}"),"plan_chapter",json!({"book_number":1,"chapter_number":number,"pov_character_id":reference("cast:ada"),"synopsis":format!("Turn {number}: the forgery forces a costly choice"),"target_theme_ids":[reference("theme:trust")],"target_conflict_ids":[reference("conflict:heir")],"target_plot_line_ids":[reference("plot:heir")],"scenes":[
-   {"scene_order":1,"summary":"Ada follows the ledger to the tidal gate","purpose":"Discover the forged seal","character_ids":[reference("cast:ada"),reference("cast:ben")],"location_id":reference("place:harbor"),"content_rating":"general","beat_structure":["clue","choice"],"research_required":true,"research_tags":["tidal gates"],"primary_value_axis":primary_one,"secondary_value_axes":[value_test_secondary_axis("trust")],"opposition":"The harbor magistrate","gap":{"expected":"The gate log will clear Ada","actual":"The log is missing a page"},"scene_question":"Who altered the tide log?","inaction_cost":"The next tide erases the evidence","risk":number},
-   {"scene_order":2,"summary":"Ada wagers her signet on Ben's testimony","purpose":"Force a trust decision","character_ids":[reference("cast:ada"),reference("cast:ben")],"location_id":reference("place:harbor"),"content_rating":"general","beat_structure":["cost","change"],"primary_value_axis":primary_two,"secondary_value_axes":[value_test_secondary_axis("trust")],"opposition":"Ben's silence","gap":{"expected":"Ben will testify","actual":"Ben asks for the signet first"},"scene_question":"Will Ada risk the signet?","inaction_cost":"Losing the heir's trail for good","risk":number + 1,"dilemma":dilemma}
+   {"scene_order":1,"summary":"Ada follows the ledger to the tidal gate","purpose":"Discover the forged seal","character_ids":[reference("cast:ada"),reference("cast:ben")],"location_id":reference("place:harbor"),"content_rating":"general","beat_structure":["clue","choice"],"beats":scene_beats("cast:ada","cast:ben"),"turning_beat":3,"research_required":true,"research_tags":["tidal gates"],"primary_value_axis":primary_one,"secondary_value_axes":[value_test_secondary_axis("trust")],"opposition":"The harbor magistrate","gap":{"expected":"The gate log will clear Ada","actual":"The log is missing a page"},"scene_question":"Who altered the tide log?","inaction_cost":"The next tide erases the evidence","risk":number},
+   {"scene_order":2,"summary":"Ada wagers her signet on Ben's testimony","purpose":"Force a trust decision","character_ids":[reference("cast:ada"),reference("cast:ben")],"location_id":reference("place:harbor"),"content_rating":"general","beat_structure":["cost","change"],"beats":scene_beats("cast:ada","cast:ben"),"turning_beat":3,"primary_value_axis":primary_two,"secondary_value_axes":[value_test_secondary_axis("trust")],"opposition":"Ben's silence","gap":{"expected":"Ben will testify","actual":"Ben asks for the signet first"},"scene_question":"Will Ada risk the signet?","inaction_cost":"Losing the heir's trail for good","risk":number + 1,"dilemma":dilemma}
   ]})));
     }
     let manifests = bundle(
@@ -2501,6 +2569,8 @@ async fn route_generation_real_agent_stages_all_levels_and_applies_only_on_human
                             "scene_order": 1,
                             "summary": "Ada checks the tide ledger at North Pier and finds a torn leaf.",
                             "beat_structure": ["Open ledger", "Find missing page"],
+                            "beats": scene_beats("cast:ada", "cast:corin"),
+                            "turning_beat": 3,
                             "character_ids": [{"kind": "proposal_ref", "value": "cast:ada"}],
                             "location_id": {"kind": "proposal_ref", "value": "place:pier"},
                             "content_rating": "teen",
@@ -2516,6 +2586,8 @@ async fn route_generation_real_agent_stages_all_levels_and_applies_only_on_human
                             "scene_order": 2,
                             "summary": "Corin interrupts Ada and locks the registry chest with his ring seal.",
                             "beat_structure": ["Corin arrives", "Seal impression"],
+                            "beats": scene_beats("cast:ada", "cast:corin"),
+                            "turning_beat": 3,
                             "character_ids": [
                                 {"kind": "proposal_ref", "value": "cast:ada"},
                                 {"kind": "proposal_ref", "value": "cast:corin"}
@@ -5946,6 +6018,8 @@ fn phase_d_scene_input(
                     "scene_order": 1,
                     "summary": "Mara hears the bronze bell.",
                     "beat_structure": ["hook", "turn"],
+                    "beats": solo_scene_beats("cast:mara"),
+                    "turning_beat": 3,
                     "character_ids": [reference("cast:mara")],
                     "location_id": reference("loc:watchtower"),
                     "content_rating": "general",
@@ -5961,6 +6035,8 @@ fn phase_d_scene_input(
                     "scene_order": 2,
                     "summary": "Mara climbs to the lantern room.",
                     "beat_structure": ["escalation", "decision"],
+                    "beats": solo_scene_beats("cast:mara"),
+                    "turning_beat": 3,
                     "character_ids": [reference("cast:mara")],
                     "location_id": reference("loc:watchtower"),
                     "content_rating": "general",
@@ -6885,6 +6961,8 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "scene_order": 1,
                                 "summary": "Mara hears the bronze bell.",
                                 "beat_structure": ["hook", "turn"],
+                                "beats": solo_scene_beats("cast:mara"),
+                                "turning_beat": 3,
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
@@ -6900,6 +6978,8 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "scene_order": 2,
                                 "summary": "Mara climbs to the lantern room.",
                                 "beat_structure": ["escalation", "decision"],
+                                "beats": solo_scene_beats("cast:mara"),
+                                "turning_beat": 3,
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
@@ -6933,6 +7013,8 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "scene_order": 1,
                                 "summary": "Mara inspects the archive ledger.",
                                 "beat_structure": ["discovery"],
+                                "beats": solo_scene_beats("cast:mara"),
+                                "turning_beat": 3,
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
@@ -6948,6 +7030,8 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "scene_order": 2,
                                 "summary": "Mara confronts the harbour signal.",
                                 "beat_structure": ["climax"],
+                                "beats": solo_scene_beats("cast:mara"),
+                                "turning_beat": 3,
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
@@ -7035,6 +7119,8 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "scene_order": 1,
                                 "summary": "Mara hears the bronze bell.",
                                 "beat_structure": ["hook", "turn"],
+                                "beats": solo_scene_beats("cast:mara"),
+                                "turning_beat": 3,
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
@@ -7050,6 +7136,8 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "scene_order": 2,
                                 "summary": "Mara climbs to the lantern room.",
                                 "beat_structure": ["escalation", "decision"],
+                                "beats": solo_scene_beats("cast:mara"),
+                                "turning_beat": 3,
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
@@ -7083,6 +7171,8 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "scene_order": 1,
                                 "summary": "Mara inspects the archive ledger.",
                                 "beat_structure": ["discovery"],
+                                "beats": solo_scene_beats("cast:mara"),
+                                "turning_beat": 3,
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
@@ -7098,6 +7188,8 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "scene_order": 2,
                                 "summary": "Mara confronts the harbour signal.",
                                 "beat_structure": ["climax"],
+                                "beats": solo_scene_beats("cast:mara"),
+                                "turning_beat": 3,
                                 "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
@@ -8984,6 +9076,11 @@ async fn mckee_scene_batches_must_include_the_accepted_act_climax_scene() {
             "scene_order": order,
             "summary": summary,
             "beat_structure": ["hook", "turn"],
+            "beats": scene_beats_for(
+                json!({"kind":"existing_record_id","value": character_id}),
+                json!({"kind":"existing_record_id","value": character_id}),
+            ),
+            "turning_beat": 3,
             "character_ids": [{"kind":"existing_record_id","value": character_id}],
             "location_id": {"kind":"existing_record_id","value": location_id},
             "content_rating": "general",
@@ -10851,11 +10948,55 @@ fn value_axis(opening: Charge, closing: Charge) -> SceneValueAxis {
     }
 }
 
+/// Three structured Beats for a value-chain scene, with the proposal-reference
+/// form of the actor: planning apply must resolve it to a record id.
+fn value_beats() -> Vec<PlanningBeat> {
+    use spindle_core::beats::BeatKind;
+    let gap = |expected: &str, actual: &str| SceneGap {
+        expected: expected.into(),
+        actual: actual.into(),
+    };
+    vec![
+        PlanningBeat {
+            kind: BeatKind::Action,
+            actor: Some(PlanningRef::ProposalRef("cast:hero".into())),
+            tactic: "Ask for the ledger".into(),
+            said: "Show me the ledger.".into(),
+            wanted: "Proof that the seal was forged".into(),
+            gap: gap("The ledger proves the forgery", "A page is missing"),
+            swain_label: None,
+        },
+        PlanningBeat {
+            kind: BeatKind::Reaction,
+            actor: Some(PlanningRef::ProposalRef("cast:hero".into())),
+            tactic: "Test the seal against the light".into(),
+            said: "The wax is still warm.".into(),
+            wanted: "A witness she can trust".into(),
+            gap: gap("The seal is old", "The seal was pressed today"),
+            swain_label: Some("conflict".into()),
+        },
+        PlanningBeat {
+            kind: BeatKind::Turn,
+            actor: Some(PlanningRef::ProposalRef("cast:hero".into())),
+            tactic: "Wager her post on the forgery".into(),
+            said: "Then the harbor forged its own record.".into(),
+            wanted: "The truth, whatever it costs".into(),
+            gap: gap(
+                "The magistrate will hear her",
+                "The magistrate orders her silence",
+            ),
+            swain_label: None,
+        },
+    ]
+}
+
 fn value_scene(order: i32, opening: Charge, closing: Charge) -> PlanningPlanChapterSceneInput {
     PlanningPlanChapterSceneInput {
         scene_order: order,
         summary: format!("Value scene {order}"),
         beat_structure: vec![],
+        beats: value_beats(),
+        turning_beat: Some(3),
         character_ids: vec![PlanningRef::ProposalRef("cast:hero".into())],
         location_id: Some(PlanningRef::ProposalRef("loc:gate".into())),
         content_rating: Some(spindle_core::models::ContentRating::General),
@@ -11145,6 +11286,22 @@ async fn mckee_value_chain_passes_and_round_trips_scene_value_fields() {
     assert_eq!(
         first.inaction_cost.as_deref(),
         Some("The harbor loses its warning")
+    );
+    assert_eq!(first.beats.len(), 3, "structured Beats round-trip");
+    assert_eq!(first.turning_beat, Some(3), "the Turning Beat round-trips");
+    assert_eq!(first.beats[2].kind, spindle_core::beats::BeatKind::Turn);
+    assert_eq!(
+        first.beats[2].gap.actual,
+        "The magistrate orders her silence"
+    );
+    assert_eq!(first.beats[1].swain_label.as_deref(), Some("conflict"));
+    assert!(
+        first.beats[0]
+            .actor
+            .as_deref()
+            .is_some_and(|actor| actor.starts_with("character:")),
+        "planning apply resolves the Beat actor to a record id: {:?}",
+        first.beats[0].actor
     );
     assert_eq!(first.opposition.as_deref(), Some("The rival"));
     assert_eq!(first.gap.as_ref().unwrap().expected, "a welcome");
@@ -12123,6 +12280,199 @@ async fn mckee_sequences_validate_structure_and_stay_at_the_chapter_level() {
 }
 
 #[tokio::test]
+async fn mckee_structured_beats_stage_persist_and_read_back() {
+    let fixture = value_chain_fixture().await;
+    assert!(
+        fixture.scene.findings.is_empty(),
+        "a Scene with one Turn Beat has no beat findings: {:?}",
+        fixture.scene.findings
+    );
+
+    let plans = fixture
+        .svc
+        .repository
+        .list_chapter_plans_by_project(&fixture.scope.project_id)
+        .await
+        .unwrap();
+    let plan_id = plans
+        .iter()
+        .find(|plan| plan.chapter_number == 1)
+        .expect("chapter 1 plan")
+        .id
+        .clone();
+    let stored = fixture
+        .svc
+        .repository
+        .get_chapter_plan(&plan_id)
+        .await
+        .unwrap();
+    let first = &stored.scenes[0];
+    assert_eq!(first.beats.len(), 3, "Beats persist through planning apply");
+    assert_eq!(first.turning_beat, Some(3));
+    assert_eq!(
+        first.beats[2].kind,
+        spindle_core::beats::BeatKind::Turn,
+        "the referenced Beat is the Turn Beat"
+    );
+    assert_eq!(first.beats[1].swain_label.as_deref(), Some("conflict"));
+    assert_eq!(
+        first.beats[2].gap.actual,
+        "The magistrate orders her silence"
+    );
+    assert!(
+        first.beats.iter().all(|beat| beat
+            .actor
+            .as_deref()
+            .is_some_and(|id| id.starts_with("character:"))),
+        "every Beat actor is resolved to a record id: {:?}",
+        first.beats
+    );
+
+    // The briefing read path serves the same stored Beats.
+    let briefing = fixture
+        .svc
+        .get_chapter_briefing(GetChapterBriefingInput {
+            project_id: fixture.scope.project_id.clone(),
+            book_number: 1,
+            chapter_number: 1,
+            scene_order: None,
+            character_ids: vec![],
+            location_id: None,
+            format: None,
+            budget_tokens: None,
+            recent_chapter_limit: Some(0),
+            token_budget: None,
+        })
+        .await
+        .unwrap();
+    let briefed = &briefing.chapter_plan.expect("chapter plan briefing").scenes[0];
+    assert_eq!(briefed.beats.len(), 3);
+    assert_eq!(briefed.turning_beat, Some(3));
+}
+
+#[tokio::test]
+async fn mckee_beat_blocking_findings_stage_but_refuse_acceptance() {
+    let fixture = value_chain_fixture().await;
+    // The batch keeps the fixture's two-scene chapter (so Act 1's reserved
+    // climax scene exists); only the first Scene's Beats are mutated.
+    let scene = |beats: Vec<PlanningBeat>, turning_beat: Option<u32>| {
+        let mut first = value_scene(
+            1,
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+        );
+        first.beats = beats;
+        first.turning_beat = turning_beat;
+        first.dilemma = Some(value_dilemma("resolute"));
+        let mut second = value_scene(
+            2,
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+            value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        );
+        second.dilemma = Some(value_dilemma("guarded"));
+        vec![first, second]
+    };
+    let stage = |scenes: Vec<PlanningPlanChapterSceneInput>| {
+        let svc = fixture.svc.clone();
+        let session = fixture.session.clone();
+        let cast = fixture.cast.clone();
+        let series = fixture.series.clone();
+        let chapters = fixture.chapters.clone();
+        async move {
+            svc.stage_planning(value_scene_artifact(
+                &session,
+                &[&cast, &series, &chapters],
+                vec![(1, scenes)],
+            ))
+            .await
+            .unwrap()
+        }
+    };
+
+    // No structured Beats at all: legacy strings never satisfy the rule.
+    let mut legacy_only = scene(vec![], None);
+    legacy_only[0].beat_structure = vec!["clue".into(), "turn".into()];
+    let no_beats = stage(legacy_only).await;
+    let codes = value_codes(&no_beats);
+    assert!(codes.contains("scene_beats_missing"), "{codes:?}");
+    assert!(!codes.contains("scene_missing_turning_beat"), "{codes:?}");
+    let finding = no_beats
+        .findings
+        .iter()
+        .find(|finding| finding.code == "scene_beats_missing")
+        .unwrap();
+    assert_eq!(finding.path, "/operations/0/operation/input/scenes/0/beats");
+
+    // Beats but no Turning Beat reference.
+    let missing_reference = stage(scene(value_beats(), None)).await;
+    let finding = missing_reference
+        .findings
+        .iter()
+        .find(|finding| finding.code == "scene_missing_turning_beat")
+        .expect("missing turning_beat");
+    assert_eq!(
+        finding.path,
+        "/operations/0/operation/input/scenes/0/turning_beat"
+    );
+
+    // Out-of-range Turning Beat reference.
+    let out_of_range = stage(scene(value_beats(), Some(9))).await;
+    let finding = out_of_range
+        .findings
+        .iter()
+        .find(|finding| finding.code == "scene_turning_beat_out_of_range")
+        .expect("out-of-range turning_beat");
+    assert_eq!(
+        finding.path,
+        "/operations/0/operation/input/scenes/0/turning_beat"
+    );
+
+    // The referenced Beat is not of kind turn.
+    let not_turn = stage(scene(value_beats(), Some(1))).await;
+    let finding = not_turn
+        .findings
+        .iter()
+        .find(|finding| finding.code == "scene_turning_beat_not_turn")
+        .expect("turning_beat must be a turn");
+    assert_eq!(
+        finding.path,
+        "/operations/0/operation/input/scenes/0/turning_beat"
+    );
+
+    // More than one Turn Beat makes the reference ambiguous.
+    let mut two_turns = value_beats();
+    two_turns[0].kind = spindle_core::beats::BeatKind::Turn;
+    let multiple = stage(scene(two_turns, Some(3))).await;
+    let finding = multiple
+        .findings
+        .iter()
+        .find(|finding| finding.code == "scene_multiple_turn_beats")
+        .expect("two Turn Beats");
+    assert_eq!(finding.path, "/operations/0/operation/input/scenes/0/beats");
+
+    // Every case stages with the findings visible and refuses acceptance.
+    for proposal in [
+        &no_beats,
+        &missing_reference,
+        &out_of_range,
+        &not_turn,
+        &multiple,
+    ] {
+        let mut decision = decision(&fixture.session, proposal);
+        decision.decision = PlanningDecision::Accept;
+        assert!(
+            fixture.svc.apply_planning(decision).await.is_err(),
+            "a Blocking beat finding must refuse acceptance"
+        );
+    }
+
+    // The valid control stages cleanly and is accepted.
+    let valid = stage(scene(value_beats(), Some(3))).await;
+    assert!(valid.findings.is_empty(), "{:?}", valid.findings);
+    accept(&fixture.svc, &fixture.session, &valid).await;
+}
+
+#[tokio::test]
 async fn non_mckee_projects_are_exempt_from_value_chain_findings() {
     use spindle_core::models::CreateLocationInput;
     let (_tmp, svc) = fresh_service_local().await;
@@ -12209,9 +12559,25 @@ async fn non_mckee_projects_are_exempt_from_value_chain_findings() {
     let proposal = svc.stage_planning(a).await.unwrap();
     assert!(
         proposal.findings.is_empty(),
-        "non-McKee plans get no value-chain findings: {:?}",
+        "non-McKee plans get no value-chain or beat findings: {:?}",
         proposal.findings
     );
     let report = accept(&svc, &s, &proposal).await;
     assert!(report.complete);
+
+    // Legacy string beats survive the round-trip, and the additive structured
+    // fields stay absent from the payload of an unmarked project.
+    let plan_id = report.operations[0]
+        .returned_ids
+        .values()
+        .next()
+        .expect("chapter plan id")
+        .clone();
+    let plan = svc.repository.get_chapter_plan(&plan_id).await.unwrap();
+    assert_eq!(plan.scenes[0].beat_structure, vec!["hook".to_string()]);
+    assert!(plan.scenes[0].beats.is_empty());
+    assert_eq!(plan.scenes[0].turning_beat, None);
+    let scene_json = serde_json::to_value(&plan.scenes[0]).unwrap();
+    assert!(scene_json.get("beats").is_none());
+    assert!(scene_json.get("turning_beat").is_none());
 }

@@ -1066,6 +1066,28 @@ findings use the existing structured shape and JSON-pointer paths:
 `/staged_scenes/...` for staged ancestors. Unmarked projects get no value-chain
 findings and their payloads are unchanged.
 
+Planned Scenes also carry structured **Beats** (`spindle_core::beats`) for McKee
+projects: each Beat has a closed `kind` (`action`, `reaction`, `turn`), an
+optional `actor`, the `tactic`, what is `said`, what is `wanted` (the subtext),
+a per-Beat `gap` (expected versus actual) and an optional free-text
+`swain_label`. The Scene names its **Turning Beat** with `turning_beat`, the
+1-based position of that Beat in the ordered `beats` list, so a Scene numbers no
+Beat of its own. The planning artifact carries the same fields with a planning
+reference for `actor` (`spindle_core::planning::PlanningBeat`); planning apply
+resolves it to a record id, and `plan_chapter`, `get_chapter_plan` and the
+chapter briefing all round-trip the resolved form. The legacy
+`beat_structure: Vec<String>` is untouched: every project still deserializes it,
+but on a McKee project structured Beats are authoritative and the strings are
+never a substitute. Chapter/Scene acceptance records stage-recordable blocking
+findings for a Scene with no Beats (`scene_beats_missing`), no Turning Beat
+reference (`scene_missing_turning_beat`), a reference that is not the 1-based
+position of an existing Beat (`scene_turning_beat_out_of_range`), a reference to
+a Beat that is not of kind `turn` (`scene_turning_beat_not_turn`), and more than
+one Turn Beat (`scene_multiple_turn_beats`). Swain categories remain optional
+labels only (ADR 0007) and never gain validation or enum membership. There is no
+migration: chapter plans are JSON on `chapter_plan`. Unmarked projects get no
+Beat findings and their payloads are unchanged.
+
 On a McKee project a `scene_add` plan amendment is refused at pre-flight: the
 class cannot add Sequence membership or a value plan, so it must restage the
 Chapter planning artifact instead. `scene_replace` keeps the value-plan fields

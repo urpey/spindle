@@ -1,4 +1,5 @@
 pub mod acts;
+pub mod beats;
 pub mod canon;
 pub mod canonical_facts;
 pub mod character_design;

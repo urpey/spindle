@@ -9263,6 +9263,40 @@ async fn planning_advance_and_accept(
 // Scenario brief used by the new-book entry flow: a harbor mystery with one
 // POV character, one location, one world rule, a planted promise, and a
 // two-chapter / four-scene near horizon.
+/// Three structured Beats for a McKee scene fixture: action, reaction and one
+/// turn, with the Turning Beat pointing at the turn. `actor` is a proposal
+/// reference key (e.g. `cast:mara`), so apply must resolve it to a record id.
+fn mckee_scene_beats(actor: &str) -> serde_json::Value {
+    let actor = || serde_json::json!({"kind": "proposal_ref", "value": actor});
+    serde_json::json!([
+        {
+            "kind": "action",
+            "actor": actor(),
+            "tactic": "Press the watch for an answer",
+            "said": "Who rang the bell?",
+            "wanted": "A name she can act on",
+            "gap": {"expected": "The watch has no answer", "actual": "The watch was already empty"}
+        },
+        {
+            "kind": "reaction",
+            "actor": actor(),
+            "tactic": "Test the cut rope against the salt line",
+            "said": "The cut is fresh.",
+            "wanted": "Proof that the warning is deliberate",
+            "gap": {"expected": "The rope was cut by weather", "actual": "The cut is fresh and salted"},
+            "swain_label": "conflict"
+        },
+        {
+            "kind": "turn",
+            "actor": actor(),
+            "tactic": "Choose the harbor warning over the archive",
+            "said": "Then the archive waits.",
+            "wanted": "The harbor safe, whatever it costs",
+            "gap": {"expected": "The archive can wait a night", "actual": "The archive burns while she climbs"}
+        }
+    ])
+}
+
 /// Phase F's scene submission: two chapter plans whose value chain continues
 /// across chapters and whose climax Scene names Mara's other contradiction.
 fn phase_f_scene_submission(session_id: &str, range: &serde_json::Value) -> serde_json::Value {
@@ -9271,6 +9305,8 @@ fn phase_f_scene_submission(session_id: &str, range: &serde_json::Value) -> serd
         "summary": "Mara hears the bronze bell and finds fresh salt on the cut rope.",
         "purpose": "Force Mara to choose between the archive and the harbor warning.",
         "beat_structure": ["hook", "turn"],
+        "beats": mckee_scene_beats("cast:mara"),
+        "turning_beat": 3,
         "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
         "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
         "content_rating": "general",
@@ -9287,6 +9323,8 @@ fn phase_f_scene_submission(session_id: &str, range: &serde_json::Value) -> serd
         "summary": "Mara burns the archive log to keep the promise bell silent.",
         "purpose": "Pay the price of the contradiction she chose.",
         "beat_structure": ["decision", "cost"],
+        "beats": mckee_scene_beats("cast:mara"),
+        "turning_beat": 3,
         "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
         "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
         "content_rating": "general",
@@ -9428,6 +9466,8 @@ fn entry_value_scenes(chapter: i32) -> Vec<serde_json::Value> {
             "scene_order": 1,
             "summary": "Mara hears the bronze bell.",
             "beat_structure": ["hook", "turn"],
+            "beats": mckee_scene_beats("cast:mara"),
+            "turning_beat": 3,
             "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
             "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
             "content_rating": "general",
@@ -9444,6 +9484,8 @@ fn entry_value_scenes(chapter: i32) -> Vec<serde_json::Value> {
             "scene_order": 2,
             "summary": "Mara climbs to the lantern room.",
             "beat_structure": ["escalation", "decision"],
+            "beats": mckee_scene_beats("cast:mara"),
+            "turning_beat": 3,
             "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
             "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
             "content_rating": "general",
@@ -11643,6 +11685,8 @@ async fn non_mckee_project_plan_chapter_payloads_keep_the_legacy_scene_shape() {
         "inaction_cost",
         "risk",
         "dilemma",
+        "beats",
+        "turning_beat",
     ] {
         assert!(
             scene.get(field).is_none(),
