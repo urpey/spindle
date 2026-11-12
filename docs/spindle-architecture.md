@@ -1072,6 +1072,37 @@ findings use the existing structured shape and JSON-pointer paths:
 `/staged_scenes/...` for staged ancestors. Unmarked projects get no value-chain
 findings and their payloads are unchanged.
 
+Subplot structure is checked over the merged Sequences and Convergence Points in
+the same Chapter/Scene pass (`spindle_core::subplot` owns the pure rules). A
+Subplot Sequence climax placed **after every** Convergence Point of its Subplot
+is blocking (`subplot_sequence_climax_after_convergence_point`); the finding
+points at `/schedule/sequences/{i}/climax_scene` for a Sequence the artifact
+declares or refines and at `/merged_sequences/{sequence_key}/climax_scene` for an
+inherited one. Four advisories never block: a Subplot with no Convergence Point,
+a Subplot Value Axis that goes three consecutive scanned Chapters without a turn
+(a Chapter gap or a turning Chapter resets the run), a Subplot whose turns do not
+support its declared job (`contradict` needs a negative-ending turn, `resonate` a
+positive-ending one; `set_up` and `complicate` impose no direction), and a Subplot
+turning deeper than the Main Plot inside one Act (Act N covers Scenes after Act
+N-1's climax up to and including its own; the Main Plot axis is its `value_axis`,
+falling back to the series Spine Axis). The job and depth heuristics and the
+dormancy/Act-range definitions are documented in
+[planning engine](planning-engine-design.md). Non-McKee projects get none of
+these findings.
+
+An Act may name the Subplot Sequence climax that causes it:
+`PlannedAct.cause` is an optional `{ plot_line_id, sequence_key }`, additive and
+skipped when absent. At Series-Arc/Book acceptance every merged Act with a cause
+is resolved against the merged plot lines and Sequences: the plot line must
+exist and be a Subplot, the Sequence must carry the cited key and belong to that
+plot line, its climax must be at or before a Convergence Point and at or before
+the Act's own climax. Failures are stage-recordable blocking findings
+(`act_cause_unresolved_subplot_sequence`, `act_cause_not_a_subplot`,
+`act_cause_after_act_climax`, `act_cause_after_convergence_point`); an inherited
+Act's cause is reported at `/merged_acts/{order}/cause/...`. A later Book or
+Series-Arc artifact can be staged after the Chapter Sequences exist because the
+Sequences are read from applied Chapter proposals, not from a parent.
+
 Planned Scenes also carry structured **Beats** (`spindle_core::beats`) for McKee
 projects: each Beat has a closed `kind` (`action`, `reaction`, `turn`), an
 optional `actor_character_id` (a character record id in the stored form, a

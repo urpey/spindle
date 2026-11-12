@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- Add McKee **Subplot structural checks** over planned Sequences and
+  Convergence Points. A Subplot Sequence whose climax lands after every one of
+  that Subplot's Convergence Points is a stage-recordable Blocking finding
+  (`subplot_sequence_climax_after_convergence_point`); a climax at or before a
+  point satisfies the rule, and a Subplot with no Convergence Point is advisory
+  instead. Four advisories never block: a Subplot with no Convergence Point, a
+  Subplot Value Axis that goes three consecutive scanned Chapters without a turn
+  (a chapter gap or a turning Chapter resets the run), a Subplot whose turns do
+  not support its declared job (`contradict` needs a turn ending negative,
+  `resonate` one ending positive; `set_up` and `complicate` impose no direction),
+  and a Subplot turning deeper than the Main Plot inside one Act (Act N covers
+  the Scenes after Act N-1's climax up to and including its own; the Main Plot
+  axis is its `value_axis`, falling back to the series Spine Axis). The findings
+  use JSON-pointer paths into `schedule.sequences` or `/merged_sequences/...`
+  and are exempt for unmarked projects. The heuristics and exact run/range
+  definitions are documented in `docs/planning-engine-design.md`.
+- Let an **Act climax cite a Subplot Sequence climax as its cause**:
+  `PlannedAct` gains an optional `cause` (`{ plot_line_id, sequence_key }`,
+  additive and skipped when absent, so existing Act JSON is unchanged). At
+  Series-Arc/Book acceptance the merged Act's cause must resolve to a Subplot
+  plot line and a Sequence of that Subplot whose climax is at or before a
+  Convergence Point and at or before the Act's own climax. Failures are
+  stage-recordable Blocking findings
+  (`act_cause_unresolved_subplot_sequence`, `act_cause_not_a_subplot`,
+  `act_cause_after_act_climax`, `act_cause_after_convergence_point`), and an
+  inherited Act's cause is reported at `/merged_acts/{order}/cause/...`. A later
+  Book/Series-Arc artifact can be staged after Chapter Sequences exist, so the
+  cause resolves in practice. `planning_status` exposes the cause in the
+  proposal schedule; there is no new tool, table or migration.
 - Add the **Key Fact** planning operation (`create_key_fact`) to the closed
   allowlist at the Chapter and Scene levels. Its closed turning set is `death`,
   `revealed_secret`, `relationship_turn`, `item_gained`, `item_lost`,
