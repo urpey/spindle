@@ -114,14 +114,18 @@ impl SubjectSnapshot {
 
     /// Writer-facing promise redaction (McKee projects): drop every planned
     /// payoff location, payoff Turning Beat and target Act from this snapshot's
-    /// open promises. A writer may know a promise's nature, never where it is
-    /// planned to pay off. The promise rows themselves are untouched; only this
-    /// projection loses the placement.
+    /// open promises **and** from the promise entity's kind-specific details. A
+    /// writer may know a promise's nature, never where it is planned to pay off.
+    /// The promise rows themselves are untouched; only this projection loses the
+    /// placement. The rule itself lives in
+    /// [`crate::promise_visibility`](crate::promise_visibility), shared with the
+    /// other writer-facing promise surfaces.
     pub fn redact_promise_payoffs(&mut self) {
         for promise in &mut self.open_promises {
-            promise.planned_payoff = None;
-            promise.planned_payoff_turning_beat = None;
-            promise.target_act = None;
+            crate::promise_visibility::redact_subject_promise_payoff(promise);
+        }
+        if let SubjectKindSpecific::NarrativePromise(details) = &mut self.kind_specific {
+            crate::promise_visibility::redact_promise_details_payoff(details);
         }
     }
 

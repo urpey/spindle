@@ -156,11 +156,16 @@ are the deus-ex-machina guard. A promise's payoff before its setup is already a
 hard blocking error. The drafting packet now renders the plan: for a McKee
 project `prepare_scene` fills the scene card from the current planned Scene
 (Value Axis and Charge, opposition, Gap, Turning Beat, structured beats) and
-turns every canon fact whose placement is that Scene — including a due Key Fact
-— into a `canon` hard constraint with its value, so the writer cannot omit or
-alter it. A promise planted or reinforced in the Scene appears by nature, never
-by payoff location. A Scene with no planned value plan yields an unavailable
-packet entry with a reason rather than placeholder text.
+turns each **due Key Fact** — recognised by the reserved `key_fact.<kind>:`
+predicate namespace, placed at this Scene or chapter-level — into a `canon` hard
+constraint with its value and unique fact id, so the writer cannot omit or alter
+it. An ordinary planned fact is never a packet constraint. A due secret Key Fact
+ships only inside the `[SECRETS IN PLAY]` envelope when someone who knows it is
+present; otherwise its value is withheld and an explicit `due_key_facts`
+unavailable-pass entry records the omission. A promise planted or reinforced in
+the Scene appears by nature, never by payoff location. A Scene with no planned
+value plan yields an unavailable packet entry with a reason rather than
+placeholder text.
 
 `mining_policy` on `authoring_start_run` is optional and defaults to `disabled`
 (a run that never opts in behaves exactly as before). Set it to `propose_all`

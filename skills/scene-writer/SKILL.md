@@ -8,24 +8,24 @@ description: >
 
 # Scene Writer
 
-Deliver on **this project's declared genre and reader contract** (`promise`, `style_notes`, `boundaries`, `style` world rules, `narrator_voice`) as **Project Style Requirements**. Genre and voice compliance outrank generic craft defaults: comedy must land jokes, a thriller must propel, a promised hook must not fade quietly.
+Deliver on **this project's declared genre and reader contract** (`promise`, `style_notes`, `boundaries`, `style` world rules, and `narrator_voice`), surfaced as **Project Style Requirements** in scene context. Genre and voice compliance outrank generic craft defaults: a comedy must land jokes, a thriller must propel, and a chapter promised to end on a hook must not end on a quiet reflective fade.
 
 ## Voice and Delivery
 
 Honor the author's creative direction and style contract. Surface concrete canon or boundary conflicts; otherwise execute routine drafting, saving, and local fixes without asking permission.
 
-Before continuing an existing manuscript, locate the preceding scene with `list_chapter_scenes` and read its prose with `get_entity`, alongside `voice_samples` and voice profiles. Summaries preserve events; prose preserves cadence. Match diction, distance, humor, interiority and dialogue without copying phrases.
+Before continuing an existing manuscript, locate the preceding scene with `list_chapter_scenes` and read a passage of its actual prose with `get_entity`, alongside supplied `voice_samples` and character voice profiles. Summaries preserve events; prose preserves cadence. Match diction, narrative distance, humor, interiority, and dialogue without copying sample phrases.
 
-Save only manuscript prose in the draft text (no prefaces, beat outlines, critique or closing notes); use headings/system blocks only when the book's format has them. A writing task is complete only when prose and required state updates are saved and verified by tool results.
+Save only manuscript prose in the draft text (no assistant prefaces, beat outlines, critique, or closing notes). Use headings or system blocks only when they belong to the book's format. A writing task is complete only when prose and required state updates are saved and verified by tool results.
 
 ## Step 1: Prepare Context
 
-1. Call `set_active_project` once per session.
-2. Call `prepare_scene` (`intent`: `draft`/`revise`/`continue`, plus optional `scene_id`, placement, cast, `location_id`, `budget_tokens`) for one bounded preparation packet: purpose/cursor, hard constraints, style and voice hooks, novel/scene context, existing prose, `drafting_packet_v1`, coverage and freshness `dependency_tokens`.
+1. Call `set_active_project` once per session to set the active project and branch.
+2. Call `prepare_scene` (`intent`: `"draft"`, `"revise"`, or `"continue"`, plus optional `scene_id`, `chapter_id`, `book_number`, `chapter_number`, `scene_order`, `character_ids`, `location_id`, `budget_tokens`) to assemble a bounded scene preparation packet in a single read (`writer_cursor`, `scene_purpose`, `hard_constraints`, `reader_contract`, `style_directive`, `compact_shelf_digest`, `voice_samples`, `scene_negatives`, `novel` and `scene` context, `existing_prose`, `drafting_packet_v1`, `coverage`, and freshness `dependency_tokens`).
 3. Use `get_writer_state`, `get_chapter_briefing`, `get_scene_context`, `get_character_snapshot`, `find_scenes_referencing`, `list_chapter_scenes`, or `list_book_chapters` when inspecting individual slices outside `prepare_scene`.
 4. Before offloading to a server-side route, check `bible://config/routing` (`caller_should_send_brief`, `adapter_kind`) and load `get_reference(name="scene-writer/offloaded-generation")`.
 
-**McKee projects:** treat `drafting_packet_v1` as the whole writing brief. The scene card carries the planned Value Axis and opening/closing Charge, opposition, Gap, Turning Beat and structured beats; `hard_constraints` carry every Key Fact due in this scene; `promises_due` carries a promise's nature, never its payoff location. Draft through a subagent that sees only that packet where the host allows it, and keep other scenes' plans, `hidden_self`, `unconscious_desire`, their fact ids and payoff locations out of its context. Render the planned turn and due facts exactly. A missing plan is reported as an unavailable packet, never as placeholder text.
+**McKee 結構專案：** `drafting_packet_v1` 即完整寫作簡報；只讓看到該 packet 的子代理動筆，其餘場景計畫、隱藏層與回收位置不得進入上下文。細節見 `get_reference(name="scene-writer/drafting-packets")`。
 
 ## Step 2: Enforce Canon, Voice, and Constraints
 
@@ -42,20 +42,20 @@ Write with clear stimulus-response causality, concrete character-specific detail
 
 ## Step 4: Content Rating and Provenance
 
-Choose the rating deliberately; verify boundaries against the reader contract.
+Choose `general`, `teen`, `mature`, or `explicit` deliberately and verify boundaries against the reader contract.
 
 - Pass `authorship: "assistant"` to `commit_scene` for host-composed or host-revised prose (`"human"` is reserved for the author's own writing), and the server `generation_receipt` when one is required.
-- **Explicit prose origin gate**: `commit_scene` rejects client-authored explicit sexual prose without a server-side generation receipt; load `scene-writer/offloaded-generation` when drafting or revising it.
+- **Explicit sexual prose origin gate**: `commit_scene` rejects client-authored explicit sexual prose without a server-side generation receipt. When drafting or revising `explicit` sexual prose, load `get_reference(name="scene-writer/offloaded-generation")`.
 
 ## Step 5: Self-Review and Preflight
 
 Preflight with `commit_scene` (`dry_run: true`) using the payload you intend to commit, and inspect `issues`, `warnings`, `blocking_count`, and `coverage`; a blocking finding writes nothing. Review the prose against the checks below, then revise. `save_scene_draft` remains save-only compatibility: it applies no continuity, beats, summary, or cursor.
 
 1. **Findings**: Check world-rule, canonical-fact, retcon-reachability, style-contract, and advisory temporal findings from the preflight.
-2. **Step 5a — Genre & Style Gate**: Verify tone, `narrator_voice`, genre payload, active co-leads, `chapter_ending_style` and cadence; rewrite and re-save if any fails.
+2. **Step 5a — Genre & Style Gate**: Verify tone match, `narrator_voice` delivery, genre payload density, active co-leads, `chapter_ending_style`, and cadence. Rewrite and re-save if any check fails.
 3. **Step 5b — Fiction Anti-Slop & Craft Gate**: Check `anti_slop` against `compact_shelf_digest`, `voice_samples`, and `scene_negatives` (full 12-shelf catalog at `bible://references/anti-slop`):
    - **Hard shelves**: `contrast_not_x_but_y` (<=1/chapter), `emotion_cocktail` (0), `fishing_ending` (0).
-   - **Soft shelves** (advisory; `said_bookism` is soft-only by default at <=2 non-`said` tags/chapter): `said_bookism`, `body_reactions`, `eye_department`, `gesture_rack`, `atmosphere_prefabs`, `naming_watchlist`, `rhythm_cadence`, `triadic_listing`, `solitary_fade`.
+   - **Soft shelves**: advisory against the digest; the full 12-shelf catalog and per-shelf limits are at `bible://references/anti-slop`.
    - When a shelf hits, rewrite from the scene beat in 1–2 passes (never synonym-swap) and re-save.
 4. **Consistency & Review**: Run `check_consistency` (`canonical_fact_prose_drift`, `world_rule_semantic_drift`, `voice_drift`, `retcon_reachability`, `style_compliance`, `temporal_coherence`, `chronology`, `knowledge_timing`; with `deep_check: true`, inspect `audit_coverage` and `next_offset`). Use `run_dual_persona_review` for Craft Technician, Literary Critic, and Target Reader evaluation.
 
@@ -63,20 +63,18 @@ Preflight with `commit_scene` (`dry_run: true`) using the payload you intend to 
 
 Call `commit_scene` once with `full_text`, `summary`, `content_rating`, `authorship`, the preparation token and `expected_scene_version`, the typed `continuity` package, `beat_annotations`, an optional chapter-final `chapter_summary`, and a client `idempotency_key`. It applies prose, approved continuity, beats, summary, and cursor in one write.
 
-1. **Inspect the receipt**: Check `issues`, `warnings`, `blocking_count`, `coverage`, `applied`, beat/summary flags, `writer_cursor`, `follow_ups` and `undo_support`. Retry only with the same key and payload; a different payload fails.
+1. **Inspect the receipt**: Check `issues`, `warnings`, `blocking_count`, `coverage`, `applied`, `beat_count`, `chapter_summary_saved`, `writer_cursor`, `follow_ups`, and `undo_support`. Retry only with the same key and payload; a different payload fails.
 2. **Targeted repair**: Outside the ordinary loop, `set_scene_clock`, `commit_character_state`, `update_relationship`, `record_knowledge` (or `create_future_knowledge`), `update_promise_status`, `update_entity`, `update_world_rule`, `annotate_scene_beats`, `commit_scene_changes`, `save_summary`, and `update_writer_position` remain available.
 3. **Author decisions only**: Mined canon proposals never auto-ratify; use the ratification workflow in `scene-writer/authoring-runs`. After a timeout or reconnect, inspect `get_writer_state` before retrying.
 
 ## On-Demand References (Load Only When Triggered)
 
-Never read every reference; call `get_reference` only when needed:
+Never read every reference before drafting; call `get_reference` only when needed. Each
+manifest trigger names when to load it:
 
-- `scene-writer/offloaded-generation`: explicit-rating offload, `generation_id` receipts, `bible://config/routing`.
-- `scene-writer/craft-and-voice`: Swain Scene/Sequel, MRU/dialogue/POV craft, common failure modes.
-- `scene-writer/research-and-sources`: research packs, read-only canon recon, local file sync.
-- `scene-writer/authoring-runs`: supervised run drafting and post-commit canon mining.
-- `scene-writer/drafting-packets`: typed packet brief and rollout boundary.
-- `anti-slop`: Full 12-shelf fiction anti-slop catalog.
+- `scene-writer/offloaded-generation`, `scene-writer/craft-and-voice`,
+  `scene-writer/research-and-sources`, `scene-writer/authoring-runs`,
+  `scene-writer/drafting-packets` (McKee packet brief), `anti-slop`.
 
 <!-- tool: annotate_scene_beats -->
 <!-- tool: check_consistency -->

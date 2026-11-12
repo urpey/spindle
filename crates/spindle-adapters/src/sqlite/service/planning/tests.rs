@@ -12983,7 +12983,8 @@ async fn mckee_long_range_promise_needs_a_target_act_that_exists_and_reads_back(
     reject_planning(&fixture.svc, &fixture.session, &unknown).await;
 
     // A long-range promise naming an accepted Act stages cleanly and reads
-    // back through planning_status and get_entity.
+    // back through planning_status; get_entity is writer-facing and redacts the
+    // payoff location (see #31 visibility below).
     let valid = stage_promises(
         &fixture,
         vec![promise_op(
@@ -13049,12 +13050,15 @@ async fn mckee_long_range_promise_needs_a_target_act_that_exists_and_reads_back(
     else {
         panic!("promise snapshot must expose promise details");
     };
-    assert_eq!(details.target_act, Some(2));
-    assert_eq!(details.planned_payoff_turning_beat, Some(3));
-    assert_eq!(
-        details.planned_payoff.as_ref().map(|p| p.book_number),
-        Some(2)
-    );
+    // #31 writer visibility: the planning status above keeps the full planned
+    // intent, but `get_entity` is a writer-facing read and must not expose the
+    // payoff location, payoff Turning Beat or target Act. The promise's nature
+    // stays readable.
+    assert_eq!(details.target_act, None);
+    assert_eq!(details.planned_payoff_turning_beat, None);
+    assert_eq!(details.planned_payoff, None);
+    assert_eq!(details.promise_type, "mystery");
+    assert_eq!(details.description, "Who forged the ledger?");
 }
 
 #[tokio::test]
@@ -13244,7 +13248,20 @@ async fn mckee_key_fact_stages_applies_and_binds_as_a_planned_and_pending_fact()
         .unwrap();
     assert!(fact.scene_id.is_none(), "a Key Fact is planned-and-pending");
     assert_eq!((fact.book_number, fact.chapter_number), (1, 2));
-    assert_eq!(fact.predicate, "hero:key:reveal");
+    // The reserved predicate namespace is the durable Key Fact marker; the
+    // author's key is preserved verbatim after it.
+    assert_eq!(fact.predicate, "key_fact.revealed_secret:hero:key:reveal");
+    assert!(spindle_core::key_fact::is_key_fact_predicate(
+        &fact.predicate
+    ));
+    assert_eq!(
+        spindle_core::key_fact::key_fact_kind_from_predicate(&fact.predicate),
+        Some(spindle_core::key_fact::KeyFactKind::RevealedSecret)
+    );
+    assert_eq!(
+        spindle_core::key_fact::canonical_fact_display_predicate(&fact.predicate),
+        "hero:key:reveal"
+    );
     assert_eq!(
         fact.value_text.as_deref(),
         Some("The truth costs the harbor its warning")
@@ -16534,6 +16551,169 @@ async fn mckee_writer_visibility_narrows_reads_and_fills_the_packet() {
     .await
     .unwrap();
 
+    // ── Key Fact read-path fixtures (not staged through planning) ───────────
+    // The reads under test are about *which* canonical facts are due and how a
+    // secret one is gated, so the remaining rows are written directly with the
+    // same shape the `create_key_fact` apply path produces: the reserved
+    // `key_fact.<kind>:` predicate namespace, a planned-and-pending placement
+    // (`scene_id: None`), and (for a secret) `secret = 1` with a holder.
+    let characters = svc
+        .repository
+        .list_characters_by_project(&project_id)
+        .await
+        .unwrap();
+    let mara_id = characters
+        .iter()
+        .find(|character| character.name == "Mara")
+        .expect("Mara from the cast")
+        .id
+        .clone();
+    let bran_id = svc
+        .create_character(CreateCharacterInput {
+            project_id: project_id.clone(),
+            name: "Bran".into(),
+            summary: "Harbor pilot who keeps his own counsel".into(),
+            role: "supporting".into(),
+            realm: None,
+            aliases: Vec::new(),
+            voice_profile: Default::default(),
+            emotional_profile: Default::default(),
+            initial_state: None,
+        })
+        .await
+        .unwrap()
+        .character_id;
+    async fn register_secret_key_fact(
+        svc: &SqliteSpindleService,
+        project_id: &str,
+        key: &str,
+        value: &str,
+        holder: Option<&str>,
+    ) -> String {
+        svc.register_canonical_fact(spindle_core::models::RegisterCanonicalFactInput {
+            project_id: project_id.to_string(),
+            scene_id: None,
+            book_number: 1,
+            chapter_number: 1,
+            fact_type: Some("revealed_secret".into()),
+            key: Some(key.to_string()),
+            value: Some(value.to_string()),
+            context: None,
+            subject_table: holder.map(|_| "character".to_string()),
+            subject_id: holder.map(str::to_string),
+            predicate: Some(format!("key_fact.revealed_secret:{key}")),
+            value_kind: Some("string".into()),
+            value_text: Some(value.to_string()),
+            value_number: None,
+            value_unit: None,
+            value_json: None,
+            aliases: Vec::new(),
+            scope: None,
+            valid_from: Some(spindle_core::models::StoryPlacement {
+                book_number: 1,
+                chapter_number: 1,
+                scene_order: Some(2),
+                note: None,
+            }),
+            valid_until: None,
+            legacy_untyped: None,
+            supersedes_fact_id: None,
+            secrecy: Some(spindle_core::models::SecrecyScope {
+                holder_ids: holder.into_iter().map(str::to_string).collect(),
+                concealment_note: Some("Planned reveal".into()),
+            }),
+        })
+        .await
+        .unwrap()
+        .canonical_fact_id
+    }
+    // Holder present (POV): the value may ship inside [SECRETS IN PLAY].
+    register_secret_key_fact(
+        &svc,
+        &project_id,
+        "Mara:bell_reveal",
+        "Mara saw the bell clapper in the magistrate's chest",
+        Some(&mara_id),
+    )
+    .await;
+    // Holder absent: the value must be withheld and the omission reported.
+    register_secret_key_fact(
+        &svc,
+        &project_id,
+        "Bran:bell_reveal",
+        "Bran hid the clapper beneath the tide gate",
+        Some(&bran_id),
+    )
+    .await;
+    // An ordinary planned fact at the same placement: never a Key Fact
+    // constraint, because it does not carry the reserved namespace.
+    svc.register_canonical_fact(spindle_core::models::RegisterCanonicalFactInput {
+        project_id: project_id.clone(),
+        scene_id: None,
+        book_number: 1,
+        chapter_number: 1,
+        fact_type: Some("note".into()),
+        key: Some("harbor:ledger".into()),
+        value: Some("The ledger is kept in the harbor office".into()),
+        context: None,
+        subject_table: None,
+        subject_id: None,
+        predicate: Some("harbor:ledger".into()),
+        value_kind: Some("string".into()),
+        value_text: Some("The ledger is kept in the harbor office".into()),
+        value_number: None,
+        value_unit: None,
+        value_json: None,
+        aliases: Vec::new(),
+        scope: None,
+        valid_from: Some(spindle_core::models::StoryPlacement {
+            book_number: 1,
+            chapter_number: 1,
+            scene_order: Some(2),
+            note: None,
+        }),
+        valid_until: None,
+        legacy_untyped: None,
+        supersedes_fact_id: None,
+        secrecy: None,
+    })
+    .await
+    .unwrap();
+    // A chapter-level Key Fact (`scene_order: None`) is due in every Scene of
+    // the chapter, not skipped by the old exact-Scene match.
+    svc.register_canonical_fact(spindle_core::models::RegisterCanonicalFactInput {
+        project_id: project_id.clone(),
+        scene_id: None,
+        book_number: 1,
+        chapter_number: 1,
+        fact_type: Some("item_gained".into()),
+        key: Some("harbor:chapter_key".into()),
+        value: Some("The harbor log is unsealed".into()),
+        context: None,
+        subject_table: None,
+        subject_id: None,
+        predicate: Some("key_fact.item_gained:harbor:chapter_key".into()),
+        value_kind: Some("string".into()),
+        value_text: Some("The harbor log is unsealed".into()),
+        value_number: None,
+        value_unit: None,
+        value_json: None,
+        aliases: Vec::new(),
+        scope: None,
+        valid_from: Some(spindle_core::models::StoryPlacement {
+            book_number: 1,
+            chapter_number: 1,
+            scene_order: None,
+            note: None,
+        }),
+        valid_until: None,
+        legacy_untyped: None,
+        supersedes_fact_id: None,
+        secrecy: None,
+    })
+    .await
+    .unwrap();
+
     let briefing = svc
         .get_chapter_briefing(GetChapterBriefingInput {
             project_id: project_id.clone(),
@@ -16558,6 +16738,12 @@ async fn mckee_writer_visibility_narrows_reads_and_fills_the_packet() {
         "later and earlier Scene plans must be omitted from a McKee briefing: {plan:?}"
     );
     assert_eq!(plan.scenes[0].scene_order, 2);
+    // Additive, documented McKee marker: the narrowed list is deliberate.
+    let scope = plan.scene_scope.as_ref().expect("McKee scene_scope marker");
+    assert_eq!(scope.mode, "current_scene_only");
+    assert_eq!(scope.current_scene_order, Some(2));
+    assert_eq!(scope.planned_scene_count, 2);
+    assert_eq!(scope.exposed_scene_count, 1);
     let context = briefing
         .scene_context
         .as_ref()
@@ -16675,6 +16861,53 @@ async fn mckee_writer_visibility_narrows_reads_and_fills_the_packet() {
     );
     assert!(!earlier_json.contains("planned payoff: 1:2:2"));
 
+    // A placement-only briefing resolves the writer cursor's next Scene, not
+    // Scene 1: the written Scene 1 puts the cursor there, so the briefing is
+    // for Scene 2 and reports Scene 1 as realized.
+    let placement_only = svc
+        .get_chapter_briefing(GetChapterBriefingInput {
+            project_id: project_id.clone(),
+            book_number: 1,
+            chapter_number: 1,
+            scene_order: None,
+            character_ids: Vec::new(),
+            location_id: None,
+            format: Some(spindle_core::models::ContextFormat::Json),
+            budget_tokens: Some(12_000),
+            recent_chapter_limit: Some(0),
+            token_budget: None,
+        })
+        .await
+        .unwrap();
+    let placement_plan = placement_only.chapter_plan.as_ref().unwrap();
+    assert_eq!(
+        placement_plan.scenes[0].scene_order, 2,
+        "a later-Scene briefing must not fall back to Scene 1: {placement_plan:?}"
+    );
+    let placement_context = placement_only.scene_context.as_ref().unwrap();
+    assert_eq!(
+        placement_context
+            .novel
+            .realized_scenes
+            .iter()
+            .map(|scene| scene.scene_order)
+            .collect::<Vec<_>>(),
+        vec![1],
+        "{:?}",
+        placement_context.novel.realized_scenes
+    );
+    assert_eq!(
+        placement_only
+            .chapter_plan
+            .as_ref()
+            .unwrap()
+            .scene_scope
+            .as_ref()
+            .unwrap()
+            .current_scene_order,
+        Some(2)
+    );
+
     // get_scene_context carries the same slice, and never the later plan.
     let location_id = plan.scenes[0]
         .location_id
@@ -16754,7 +16987,13 @@ async fn mckee_writer_visibility_narrows_reads_and_fills_the_packet() {
     assert_eq!(packet.scene_card.value_shift.axis, "truth");
     assert_eq!(packet.scene_card.value_shift.before, "negative (contrary)");
     assert_eq!(packet.scene_card.value_shift.after, "positive");
-    assert_eq!(packet.scene_card.emotion.exit, "positive");
+    // A McKee plan has no emotion field: the exit honestly says there is no
+    // planned shift instead of masquerading as an emotion label.
+    assert_eq!(
+        packet.scene_card.emotion.exit,
+        "unchanged (no planned emotion shift)"
+    );
+    assert!(!packet.scene_card.emotion.entry.is_empty());
     let gap = packet.scene_card.gap.as_ref().expect("Gap");
     assert_eq!(gap.expected, "The clapper was stolen");
     assert_eq!(gap.actual, "The clapper was never fitted");
@@ -16796,18 +17035,87 @@ async fn mckee_writer_visibility_narrows_reads_and_fills_the_packet() {
         Some("guarded")
     );
 
-    // Due Key Fact as a hard canon constraint with its value.
+    // Due Key Fact as a hard canon constraint with its value. The constraint id
+    // is the unique fact id (predicates can collide); the author key rides in
+    // the statement.
     let key_fact = packet
         .hard_constraints
         .iter()
-        .find(|constraint| constraint.id == "Mara:lantern_key")
+        .find(|constraint| {
+            constraint.kind == ConstraintKind::Canon
+                && constraint
+                    .statement
+                    .starts_with("Mara:lantern_key: Mara finds the lantern-room key")
+        })
         .expect("due Key Fact is a hard constraint");
-    assert_eq!(key_fact.kind, ConstraintKind::Canon);
+    assert_ne!(
+        key_fact.id, "Mara:lantern_key",
+        "the predicate is not unique; the fact record id is"
+    );
+    assert!(key_fact.id.starts_with("canonical_fact:"), "{key_fact:?}");
+    // The reserved namespace is stripped from writer-facing text.
     assert!(
-        key_fact
-            .statement
-            .contains("Mara finds the lantern-room key in the fog"),
+        !key_fact.statement.contains("key_fact.item_gained:"),
         "{key_fact:?}"
+    );
+
+    // A chapter-level Key Fact (`valid_from.scene_order: None`) is due too, and
+    // an ordinary planned fact at the same placement never becomes a Key Fact
+    // constraint.
+    assert!(
+        packet.hard_constraints.iter().any(|constraint| constraint
+            .statement
+            .contains("harbor:chapter_key: The harbor log is unsealed")),
+        "a chapter-level Key Fact is due: {:?}",
+        packet.hard_constraints
+    );
+    assert!(
+        !packet
+            .hard_constraints
+            .iter()
+            .any(|constraint| constraint.statement.contains("The ledger is kept")),
+        "an ordinary planned fact must stay out of the packet constraints: {:?}",
+        packet.hard_constraints
+    );
+
+    // A secret Key Fact with its holder present ships only inside the
+    // [SECRETS IN PLAY] envelope (circle roster + concealment note), never as a
+    // plain constraint; the holder-absent secret is withheld with an explicit
+    // omission signal and its value never appears.
+    let secrets = packet
+        .hard_constraints
+        .iter()
+        .filter(|constraint| constraint.id == "[SECRETS IN PLAY]")
+        .collect::<Vec<_>>();
+    assert_eq!(secrets.len(), 1, "{:?}", packet.hard_constraints);
+    assert!(
+        secrets[0]
+            .statement
+            .contains("Mara saw the bell clapper in the magistrate's chest"),
+        "{secrets:?}"
+    );
+    assert!(
+        secrets[0].statement.contains("Known ONLY to: Mara"),
+        "{secrets:?}"
+    );
+    assert!(
+        secrets[0].statement.contains("Concealment: Planned reveal"),
+        "{secrets:?}"
+    );
+    let withheld_packet_json = serde_json::to_string(packet).unwrap();
+    assert!(
+        !withheld_packet_json.contains("Bran hid the clapper beneath the tide gate"),
+        "a withheld secret leaked its value: {withheld_packet_json}"
+    );
+    assert!(
+        prepared
+            .coverage
+            .unavailable_passes
+            .iter()
+            .any(|pass| pass.pass == "due_key_facts"
+                && pass.reason.contains("withheld 1 due secret Key Fact")),
+        "the withheld secret must be reported, not silently dropped: {:?}",
+        prepared.coverage.unavailable_passes
     );
 
     // Promise nature is in the card; no payoff placement is.
@@ -16821,8 +17129,46 @@ async fn mckee_writer_visibility_narrows_reads_and_fills_the_packet() {
         packet.scene_card.promises_due
     );
     let packet_json = serde_json::to_string(packet).unwrap();
-    assert!(!packet_json.contains("planned_payoff"));
-    assert!(!packet_json.contains("target_act"));
+    // No payoff location or target Act is encoded anywhere in the packet, and
+    // the promise's nature is what remains.
+    for leaked in [
+        "book_number\":2,\"chapter_number\":2",
+        "planned_payoff",
+        "target_act",
+        "planned_payoff_turning_beat",
+    ] {
+        assert!(
+            !packet_json.contains(leaked),
+            "a payoff/placement leak {leaked:?} reached the packet: {packet_json}"
+        );
+    }
+
+    // Scene 1 of the same chapter also receives the chapter-level Key Fact.
+    let scene_one = svc
+        .prepare_scene(PrepareSceneInput {
+            project_id: project_id.clone(),
+            book_number: Some(1),
+            chapter_number: Some(1),
+            scene_order: Some(1),
+            intent: Some(PrepareSceneIntent::Draft),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let scene_one_packet = scene_one
+        .drafting_packet_v1
+        .as_ref()
+        .expect("Scene 1 packet");
+    assert!(
+        scene_one_packet
+            .hard_constraints
+            .iter()
+            .any(|constraint| constraint
+                .statement
+                .contains("harbor:chapter_key: The harbor log is unsealed")),
+        "a None scene_order placement is due in every Scene of the chapter: {:?}",
+        scene_one_packet.hard_constraints
+    );
 
     // A Scene with no planned value plan fails honestly instead of carrying
     // placeholder text.

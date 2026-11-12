@@ -39,6 +39,9 @@ Every generated profile includes the shared entry core (`spindle`, 6 entry tools
 Large context/analysis output schemas load optionally through versioned
 [response contracts](tool-response-contracts.md); actual results are unchanged.
 Their measured byte ceilings are explicit in `tools/profile-budgets.json`;
+raising one is an explicit decision recorded with measured before → after bytes
+and a reason in the same PR's `CHANGELOG.md` `## Unreleased` entry, never a side
+effect of schema-inventory regeneration.
 canonical target caps remain unmet until domain consolidation and compatibility
 cleanup complete; `commit_scene` is the first
 receipts-inline canonical write in these profiles. `get_skill` and `get_reference` check active profile coverage and

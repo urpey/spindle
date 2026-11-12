@@ -11786,6 +11786,39 @@ async fn mckee_character_design_is_full_in_planning_status_and_redacted_in_other
 /// public `plan_chapter` tool and reads it back through the public
 /// `get_chapter_briefing` tool. The new value-plan fields are absent from both
 /// the request and the response, so the payload shape is unchanged.
+/// Normalize the briefing markdown's only volatile parts (record ids and the
+/// author-clock timestamps) so a non-McKee briefing can be asserted
+/// byte-for-byte against a literal: every line the McKee work could have
+/// changed stays exact.
+fn normalize_briefing_volatile(text: &str) -> String {
+    let mut out = String::new();
+    for (index, line) in text.lines().enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        let mut line = line.to_string();
+        if let (Some(start), Some(end)) = (line.find(" at "), line.rfind(" UTC"))
+            && start + 4 < end
+        {
+            line.replace_range(start + 4..end, "<timestamp>");
+        }
+        let mut normalized = String::new();
+        let mut rest = line.as_str();
+        while let Some(position) = rest.find("character:01") {
+            normalized.push_str(&rest[..position + "character:".len()]);
+            normalized.push_str("<id>");
+            let tail = &rest[position + "character:".len()..];
+            let cut = tail
+                .find(|character: char| !character.is_ascii_alphanumeric())
+                .unwrap_or(tail.len());
+            rest = &tail[cut..];
+        }
+        normalized.push_str(rest);
+        out.push_str(&normalized);
+    }
+    out
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn non_mckee_project_plan_chapter_payloads_keep_the_legacy_scene_shape() {
     use crate::tools::{ToolRouter, ToolSerializationState};
@@ -11890,6 +11923,108 @@ async fn non_mckee_project_plan_chapter_payloads_keep_the_legacy_scene_shape() {
         .unwrap();
     assert_ne!(briefing.is_error, Some(true), "{briefing:?}");
     let structured = briefing.structured_content.expect("briefing content");
+    // The additive McKee marker is skipped entirely for an existing project, and
+    // the whole plan (both Scenes) is still exposed.
+    assert!(
+        structured["chapter_plan"].get("scene_scope").is_none(),
+        "a non-McKee briefing must not grow scene_scope: {structured}"
+    );
+    assert_eq!(
+        structured["chapter_plan"]["scenes"]
+            .as_array()
+            .expect("planned scenes")
+            .len(),
+        2,
+        "a non-McKee briefing exposes the whole chapter plan"
+    );
+    // No McKee markdown block may appear: the briefing text is the legacy text.
+    let legacy_markdown = structured["briefing_markdown"]
+        .as_str()
+        .expect("briefing markdown");
+    for mckee_heading in [
+        "## Planned scene",
+        "## Earlier scenes in this chapter",
+        "## Character design (writer slice)",
+    ] {
+        assert!(
+            !legacy_markdown.contains(mckee_heading),
+            "a non-McKee briefing must not render {mckee_heading:?}: {legacy_markdown}"
+        );
+    }
+    // Byte-identical regression: every line (minus the volatile record id and
+    // author-clock timestamp) is exactly the pre-McKee briefing markdown.
+    let expected = r#"# Chapter Briefing
+
+Target scene: Book 1, Chapter 1, Scene 1
+
+## Hard constraints
+- None.
+
+## Continuity sheets
+
+- Treat physical details, habits, voice profile, current state, relationships, and recent appearances here as authoritative for drafting.
+
+# Nell
+- Subject: `character:character:<id>`
+- Table: `character`
+- Placement: book 1, chapter 1, scene 1
+- Provenance: asserted by author at <timestamp> UTC
+- Snapshot kind: character
+## Details
+- Role: lead
+- Summary: Siege engineer
+## Voice Profile
+- from asserted by author at <timestamp> UTC
+## Current State
+- source: baseline | from asserted by author at <timestamp> UTC
+
+## Recent chapter summaries
+- None recorded before this chapter.
+
+## Chapter outline
+- Format: json
+[{"order":1,"summary":"Nell counts the arrows.","scene_id":null,"status":"planned"},{"order":2,"summary":"Nell opens the gate at dawn.","scene_id":null,"status":"planned"}]
+- Beats:
+- 1 [planned]: Nell counts the arrows.
+- 2 [planned]: Nell opens the gate at dawn.
+
+## Current chapter plan
+- Synopsis: Nell holds the gate.
+- Planned scene 1: Nell counts the arrows.
+  purpose: Establish the siege
+- Planned scene 2: Nell opens the gate at dawn.
+  purpose: Force the gate decision
+
+## Scene context unavailable
+- Resolved scene order: 1
+- Resolved character ids: character:<id>
+- Missing fields for scene context: location_id"#;
+    assert_eq!(
+        normalize_briefing_volatile(legacy_markdown),
+        expected,
+        "non-McKee briefing markdown changed"
+    );
+    // The chapter plan keeps exactly the legacy keys; the additive `scene_scope`
+    // marker is not present for a non-McKee project.
+    let mut plan_keys: Vec<&str> = structured["chapter_plan"]
+        .as_object()
+        .expect("chapter plan")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    plan_keys.sort_unstable();
+    assert_eq!(
+        plan_keys,
+        vec![
+            "pov_character_id",
+            "scenes",
+            "synopsis",
+            "target_conflict_ids",
+            "target_plot_line_ids",
+            "target_theme_ids",
+        ],
+        "non-McKee chapter_plan JSON grew a field"
+    );
     let scene = &structured["chapter_plan"]["scenes"][0];
     for field in [
         "primary_value_axis",
@@ -12615,6 +12750,203 @@ async fn mckee_writer_visibility_and_filled_packet_through_mcp_tools() {
         "the planted promise's nature must be visible: {earlier}"
     );
 
+    // The additive McKee marker names the deliberate narrowing, and a
+    // placement-only briefing resolves the cursor's next Scene (Scene 2), never
+    // Scene 1.
+    assert_eq!(
+        briefing["chapter_plan"]["scene_scope"]["mode"], "current_scene_only",
+        "{briefing}"
+    );
+    assert_eq!(
+        briefing["chapter_plan"]["scene_scope"]["planned_scene_count"],
+        2
+    );
+    assert_eq!(
+        briefing["chapter_plan"]["scene_scope"]["exposed_scene_count"],
+        1
+    );
+    let placement_only = planning_call(
+        &write_router,
+        "get_chapter_briefing",
+        serde_json::json!({
+            "project_id": project_id,
+            "book_number": 1,
+            "chapter_number": 1,
+            "recent_chapter_limit": 0
+        }),
+    )
+    .await;
+    assert_eq!(
+        placement_only["chapter_plan"]["scenes"][0]["scene_order"], 2,
+        "a later-Scene briefing must not fall back to Scene 1: {placement_only}"
+    );
+    assert_eq!(
+        placement_only["chapter_plan"]["scene_scope"]["current_scene_order"], 2,
+        "{placement_only}"
+    );
+    assert_eq!(
+        placement_only["scene_context"]["novel"]["realized_scenes"][0]["scene_order"], 1,
+        "{placement_only}"
+    );
+
+    // ── Promise payoff redaction across every writer-facing surface ───────
+    // One promise encodes its payoff in the structured fields *and* in a note;
+    // no writer-facing read may carry the location, the payoff Turning Beat,
+    // the target Act or the leaking note, while the nature stays visible.
+    let leaking_promise = planning_call(
+        &write_router,
+        "create_narrative_promise",
+        serde_json::json!({
+            "project_id": project_id,
+            "promise_type": "mystery",
+            "description": "Who stole Mara's tide chart?",
+            "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+            "planned_payoff": {"book_number": 3, "chapter_number": 9, "scene_order": 1},
+            "planned_payoff_turning_beat": 3,
+            "target_act": 2,
+            "notes": ["payoff lands in book 3 chapter 9", "plant the chart early"]
+        }),
+    )
+    .await;
+    let leaking_promise_id = leaking_promise["narrative_promise_id"]
+        .as_str()
+        .expect("promise id")
+        .to_string();
+    let mara_id = briefing["scene_context"]["scene"]["characters"][0]["character_id"]
+        .as_str()
+        .expect("Mara record id")
+        .to_string();
+    let promise_entity = planning_call(
+        &write_router,
+        "get_entity",
+        serde_json::json!({
+            "project_id": project_id,
+            "table": "narrative_promise",
+            "entity_id": leaking_promise_id
+        }),
+    )
+    .await;
+    let promise_entity_text = promise_entity.to_string();
+    assert!(
+        promise_entity_text.contains("Who stole Mara's tide chart?"),
+        "promise nature must stay visible: {promise_entity}"
+    );
+    // `planned_payoff` is a non-skipped Option in the pre-existing snapshot
+    // shape, so it serializes as null when redacted; the other two fields are
+    // skipped when unset. No payoff location, target Act or leaking note may
+    // appear.
+    assert!(promise_entity["kind_specific"]["details"]["planned_payoff"].is_null());
+    assert!(
+        promise_entity["kind_specific"]["details"]
+            .get("planned_payoff_turning_beat")
+            .is_none()
+    );
+    assert!(
+        promise_entity["kind_specific"]["details"]
+            .get("target_act")
+            .is_none()
+    );
+    for leaked in [
+        "payoff lands in book 3 chapter 9",
+        "plant the chart early",
+        "book_number\":3",
+    ] {
+        assert!(
+            !promise_entity_text.contains(leaked),
+            "get_entity(narrative_promise) leaked {leaked:?}: {promise_entity}"
+        );
+    }
+
+    let character_snapshot = planning_call(
+        &write_router,
+        "get_character_snapshot",
+        serde_json::json!({
+            "project_id": project_id,
+            "character_id": mara_id
+        }),
+    )
+    .await;
+    let character_text = character_snapshot.to_string();
+    assert!(
+        character_text.contains("Who stole Mara's tide chart?"),
+        "an open promise's nature must stay visible on a character snapshot: {character_snapshot}"
+    );
+    for promise in character_snapshot["snapshot"]["open_promises"]
+        .as_array()
+        .expect("open promises")
+    {
+        assert!(
+            promise["planned_payoff"].is_null(),
+            "a character snapshot leaked a payoff: {promise}"
+        );
+        assert!(promise.get("planned_payoff_turning_beat").is_none());
+        assert!(promise.get("target_act").is_none());
+    }
+    for leaked in ["book_number\":3", "payoff lands in book 3 chapter 9"] {
+        assert!(
+            !character_text.contains(leaked),
+            "get_character_snapshot leaked {leaked:?}: {character_snapshot}"
+        );
+    }
+
+    let writer_state = planning_call(
+        &write_router,
+        "get_writer_state",
+        serde_json::json!({"project_id": project_id}),
+    )
+    .await;
+    let writer_state_text = writer_state.to_string();
+    assert!(
+        writer_state_text.contains("Who stole Mara's tide chart?"),
+        "a due promise's nature must stay visible in writer state: {writer_state}"
+    );
+    let due_promise = writer_state["open_promises_due_now"]
+        .as_array()
+        .expect("due promises")
+        .iter()
+        .find(|promise| promise["description"] == "Who stole Mara's tide chart?")
+        .unwrap_or_else(|| panic!("due promise missing: {writer_state}"));
+    assert!(due_promise["planned_payoff"].is_null(), "{due_promise}");
+    assert_eq!(due_promise["notes"], serde_json::json!([]), "{due_promise}");
+    for leaked in [
+        "payoff lands in book 3 chapter 9",
+        "plant the chart early",
+        "book_number\":3",
+    ] {
+        assert!(
+            !writer_state_text.contains(leaked),
+            "get_writer_state leaked {leaked:?}: {writer_state}"
+        );
+    }
+
+    // The bible resource is the fifth projection; it omits the fields entirely.
+    let resource_router = crate::resources::ResourceRouter::new(svc.clone());
+    let resource = resource_router
+        .read_resource(&format!("bible://projects/{project_id}/narrative-promises"))
+        .await
+        .unwrap();
+    let resource_text = match &resource.contents[0] {
+        rmcp::model::ResourceContents::TextResourceContents { text, .. } => text.clone(),
+        rmcp::model::ResourceContents::BlobResourceContents { .. } => {
+            panic!("narrative-promises should be JSON text")
+        }
+    };
+    assert!(
+        resource_text.contains("Who stole Mara's tide chart?"),
+        "the resource keeps a promise's nature: {resource_text}"
+    );
+    for leaked in [
+        "planned_payoff",
+        "target_act",
+        "payoff lands in book 3 chapter 9",
+        "plant the chart early",
+    ] {
+        assert!(
+            !resource_text.contains(leaked),
+            "the narrative-promises resource leaked {leaked:?}: {resource_text}"
+        );
+    }
+
     // ── get_scene_context ────────────────────────────────────────────────
     let scene_context = planning_call(
         &write_router,
@@ -12664,7 +12996,12 @@ async fn mckee_writer_visibility_and_filled_packet_through_mcp_tools() {
     assert_eq!(card["value_shift"]["axis"], "truth");
     assert_eq!(card["value_shift"]["before"], "negative (contrary)");
     assert_eq!(card["value_shift"]["after"], "positive");
-    assert_eq!(card["emotion"]["exit"], "positive");
+    // A McKee plan has no emotion field: the exit says so honestly instead of
+    // reusing a Charge label as an emotion.
+    assert_eq!(
+        card["emotion"]["exit"],
+        "unchanged (no planned emotion shift)"
+    );
     assert_eq!(card["gap"]["expected"], "The clapper was stolen");
     assert_eq!(card["gap"]["actual"], "The clapper was never fitted");
     assert_eq!(card["turning_beat"]["kind"], "turn");
@@ -12703,11 +13040,19 @@ async fn mckee_writer_visibility_and_filled_packet_through_mcp_tools() {
             .any(|promise| promise == "mystery: Who rang the clapperless bell?"),
         "{prepared}"
     );
+    // The packet carries the promise's nature and never the payoff location or
+    // the note that encodes it.
+    let packet_text = prepared["drafting_packet_v1"].to_string();
     assert!(
-        !prepared["drafting_packet_v1"]
-            .to_string()
-            .contains("planned_payoff")
+        packet_text.contains("Who stole Mara's tide chart?"),
+        "the promise nature must stay in the packet: {prepared}"
     );
+    for leaked in ["book 3 chapter 9", "book_number\":3", "planned_payoff"] {
+        assert!(
+            !packet_text.contains(leaked),
+            "the packet leaked {leaked:?}: {prepared}"
+        );
+    }
 
     // Chapter 2 Scene 2 carries the planned Key Fact and the promise payoff.
     let prepared_key_fact = planning_call(
@@ -12725,21 +13070,37 @@ async fn mckee_writer_visibility_and_filled_packet_through_mcp_tools() {
     let constraints = prepared_key_fact["drafting_packet_v1"]["hard_constraints"]
         .as_array()
         .expect("hard constraints");
+    // `Mara:bell_forgery` is a revealed_secret Key Fact: it is a secret whose
+    // holder (Mara) is in the Scene, so it must ship inside the
+    // [SECRETS IN PLAY] envelope, never as a plain "render it exactly"
+    // constraint, and the reserved predicate namespace must not leak into the
+    // writer-facing roster.
     let key_fact = constraints
         .iter()
-        .find(|constraint| constraint["id"] == "Mara:bell_forgery")
-        .unwrap_or_else(|| panic!("due Key Fact missing: {prepared_key_fact}"));
+        .find(|constraint| constraint["id"] == "[SECRETS IN PLAY]")
+        .unwrap_or_else(|| panic!("due secret Key Fact missing: {prepared_key_fact}"));
     assert_eq!(key_fact["kind"], "canon");
+    let statement = key_fact["statement"].as_str().unwrap();
     assert!(
-        key_fact["statement"]
-            .as_str()
-            .unwrap()
-            .contains("Mara finds the bell clapper hidden in the magistrate's sea chest"),
+        statement.contains("Mara finds the bell clapper hidden in the magistrate's sea chest"),
         "{key_fact}"
     );
+    assert!(statement.contains("Known ONLY to: Mara"), "{key_fact}");
     assert!(
         !prepared_key_fact["drafting_packet_v1"]
             .to_string()
-            .contains("planned_payoff")
+            .contains("key_fact.revealed_secret:"),
+        "the reserved namespace must stay out of writer-facing text: {prepared_key_fact}"
     );
+    let key_fact_packet_text = prepared_key_fact["drafting_packet_v1"].to_string();
+    assert!(
+        key_fact_packet_text.contains("Who rang the clapperless bell?"),
+        "the promise nature must stay in the packet: {prepared_key_fact}"
+    );
+    for leaked in ["book 3 chapter 9", "book_number\":3", "planned_payoff"] {
+        assert!(
+            !key_fact_packet_text.contains(leaked),
+            "the packet leaked {leaked:?}: {prepared_key_fact}"
+        );
+    }
 }

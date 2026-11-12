@@ -13,6 +13,7 @@ pub mod model_output;
 pub mod models;
 pub mod planning;
 pub mod plot_line;
+pub mod promise_visibility;
 pub mod provenance;
 pub mod scene_value;
 pub mod sequences;

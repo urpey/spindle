@@ -4599,6 +4599,12 @@ struct SceneSecretGate {
     /// enveloped secret. Empty for pure-withhold scenes (and for the common
     /// no-secrets case), keeping the no-secrets path byte-identical.
     envelope_blocks: Vec<spindle_core::models::HardConstraint>,
+    /// The same envelope blocks keyed by canonical-fact id, so a caller that
+    /// projects one fact list of its own (the drafting packet's due Key Facts)
+    /// can attach the exact block the resolver produced without re-deriving
+    /// visibility. Withheld facts are absent here and present in
+    /// `gated_fact_ids`.
+    envelope_by_fact: std::collections::BTreeMap<String, spindle_core::models::HardConstraint>,
 }
 
 impl SceneSecretGate {

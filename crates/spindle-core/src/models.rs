@@ -2683,6 +2683,31 @@ pub struct ChapterPlanBriefing {
     pub target_plot_line_ids: Vec<String>,
     #[serde(default)]
     pub scenes: Vec<PlannedScene>,
+    /// Additive McKee writer-visibility marker. Present only when the list was
+    /// narrowed for a McKee project; skipped entirely for non-McKee projects so
+    /// the v1 envelope stays byte-identical. See
+    /// `docs/tool-response-contracts.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_scope: Option<ChapterPlanSceneScope>,
+}
+
+/// Describes how `ChapterPlanBriefing.scenes` was narrowed for a McKee writer.
+///
+/// The stored chapter plan keeps every Scene; a writer-facing briefing exposes
+/// only the current Scene. Without this marker a reader cannot tell a
+/// deliberately narrowed list from a one-Scene plan, so the field is additive
+/// and documented rather than silent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChapterPlanSceneScope {
+    /// Visibility mode. Currently always `current_scene_only`.
+    pub mode: String,
+    /// The resolved current Scene order this briefing targets, when one could
+    /// be resolved.
+    pub current_scene_order: Option<i32>,
+    /// How many Scenes the stored chapter plan carries.
+    pub planned_scene_count: usize,
+    /// How many Scenes this briefing exposes in `scenes`.
+    pub exposed_scene_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

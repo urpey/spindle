@@ -21,7 +21,7 @@ tools = ["annotate_scene_beats", "check_consistency", "get_character_snapshot", 
 [[references]]
 name = "drafting-packets"
 path = "references/drafting-packets.md"
-trigger = "Load for the typed drafting-packet rollout boundary."
+trigger = "Load for the McKee filled-packet writer brief and the drafting-packet rollout boundary."
 profiles = ["default"]
 tools = ["prepare_scene"]
 

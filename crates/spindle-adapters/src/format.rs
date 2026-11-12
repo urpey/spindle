@@ -292,19 +292,7 @@ pub fn format_chapter_briefing_markdown(
     // Scenes' realized results and the Character Design slice. Empty for
     // non-McKee projects, so the briefing markdown stays byte-identical.
     if let Some(scene_context) = scene_context {
-        if let Some(planned_scene) = scene_context.novel.planned_scene.as_ref() {
-            lines.push(format_planned_scene_markdown(planned_scene));
-        }
-        let realized_scenes_markdown =
-            format_realized_scenes_markdown(&scene_context.novel.realized_scenes);
-        if !realized_scenes_markdown.is_empty() {
-            lines.push(realized_scenes_markdown);
-        }
-        let design_markdown =
-            format_character_design_slice_markdown(&scene_context.novel.character_design_slice);
-        if !design_markdown.is_empty() {
-            lines.push(design_markdown);
-        }
+        push_mckee_writer_visibility_markdown(&mut lines, &scene_context.novel);
     }
     let active_threads_markdown = format_chapter_briefing_active_threads_markdown(active_threads);
     if !active_threads_markdown.is_empty() {
@@ -1142,18 +1130,9 @@ pub fn format_scene_context_markdown_with_packet(
     // McKee writer visibility: the current Scene's plan, earlier written
     // Scenes' realized results and the Character Design slice. All three are
     // empty for non-McKee projects, so nothing is pushed and the markdown stays
-    // byte-identical.
-    if let Some(planned_scene) = novel.planned_scene.as_ref() {
-        lines.push(format_planned_scene_markdown(planned_scene));
-    }
-    let realized_scenes_markdown = format_realized_scenes_markdown(&novel.realized_scenes);
-    if !realized_scenes_markdown.is_empty() {
-        lines.push(realized_scenes_markdown);
-    }
-    let design_markdown = format_character_design_slice_markdown(&novel.character_design_slice);
-    if !design_markdown.is_empty() {
-        lines.push(design_markdown);
-    }
+    // byte-identical. The same block is rendered by the chapter briefing; both
+    // call the one helper so the two surfaces cannot drift.
+    push_mckee_writer_visibility_markdown(&mut lines, novel);
 
     if let Some(standards) = standards.map(str::trim).filter(|value| !value.is_empty()) {
         lines.push("\n## Standards".to_string());
@@ -2779,9 +2758,13 @@ pub fn build_context_search_query(
 
 /// Project a SQLite [`CanonicalFact`] into the `HardConstraint` row consumed
 /// by the scene-context / chapter-briefing bundles.
+///
+/// A Key Fact's reserved predicate namespace is stripped from the constraint id
+/// so writer-facing text shows the author's key, never `key_fact.<kind>:`.
+/// Ordinary facts keep their exact predicate and therefore their exact output.
 pub fn canonical_fact_hard_constraint(fact: &CanonicalFact) -> HardConstraint {
     HardConstraint {
-        id: fact.predicate.clone(),
+        id: spindle_core::key_fact::canonical_fact_display_predicate(&fact.predicate).to_string(),
         statement: canonical_fact_value_display(fact),
     }
 }
@@ -2789,12 +2772,17 @@ pub fn canonical_fact_hard_constraint(fact: &CanonicalFact) -> HardConstraint {
 /// Project a SQLite [`CanonicalFact`] into the public [`CanonicalFactReadModel`].
 /// The SQLite record stores `value_number` as `Option<f64>` (the SurrealDB
 /// version stored a `serde_json::Number`), so the mapping is mechanical.
+///
+/// A Key Fact's reserved `key_fact.<kind>:` predicate namespace is stripped from
+/// the writer-facing predicate (the record id keeps the row identity); ordinary
+/// facts keep their exact predicate.
 pub fn canonical_fact_read_model(fact: &CanonicalFact) -> CanonicalFactReadModel {
     CanonicalFactReadModel {
         canonical_fact_id: fact.id.clone(),
         subject_table: fact.subject_table.clone(),
         subject_id: fact.subject_id.clone(),
-        predicate: fact.predicate.clone(),
+        predicate: spindle_core::key_fact::canonical_fact_display_predicate(&fact.predicate)
+            .to_string(),
         value_kind: fact.value_kind.clone(),
         value_text: fact.value_text.clone(),
         value_number: fact.value_number,
@@ -4313,19 +4301,45 @@ pub fn charge_label(charge: &Charge) -> String {
     }
 }
 
-/// One structured Beat rendered as a required-beat line for the scene card.
-pub fn format_required_beat(beat: &spindle_core::beats::PlannedBeat) -> String {
+/// Push the McKee writer-visibility markdown blocks (current Scene plan,
+/// earlier realized Scenes, Character Design slice) shared by the chapter
+/// briefing and the scene context. Nothing is pushed for a non-McKee project
+/// because all three inputs are empty, keeping the markdown byte-identical.
+pub fn push_mckee_writer_visibility_markdown(
+    lines: &mut Vec<String>,
+    novel: &spindle_core::models::SceneContextNovelLayer,
+) {
+    if let Some(planned_scene) = novel.planned_scene.as_ref() {
+        lines.push(format_planned_scene_markdown(planned_scene));
+    }
+    let realized_scenes_markdown = format_realized_scenes_markdown(&novel.realized_scenes);
+    if !realized_scenes_markdown.is_empty() {
+        lines.push(realized_scenes_markdown);
+    }
+    let design_markdown = format_character_design_slice_markdown(&novel.character_design_slice);
+    if !design_markdown.is_empty() {
+        lines.push(design_markdown);
+    }
+}
+
+/// The ` says "…"` fragment both Beat renderers share; empty when the Beat has
+/// no dialogue.
+fn beat_said_fragment(beat: &spindle_core::beats::PlannedBeat) -> String {
     let said = beat.said.trim();
-    let said_part = if said.is_empty() {
+    if said.is_empty() {
         String::new()
     } else {
         format!(" says \"{said}\"")
-    };
+    }
+}
+
+/// One structured Beat rendered as a required-beat line for the scene card.
+pub fn format_required_beat(beat: &spindle_core::beats::PlannedBeat) -> String {
     format!(
         "[{}] {}{}; wants {}; gap: {} → {}",
         beat.kind.as_str(),
         beat.tactic.trim(),
-        said_part,
+        beat_said_fragment(beat),
         beat.wanted.trim(),
         beat.gap.expected.trim(),
         beat.gap.actual.trim()
@@ -4334,16 +4348,10 @@ pub fn format_required_beat(beat: &spindle_core::beats::PlannedBeat) -> String {
 
 /// The Turning Beat rendered as the scene card's `turn` line.
 pub fn format_turning_beat_turn(beat: &spindle_core::beats::PlannedBeat) -> String {
-    let said = beat.said.trim();
-    let said_part = if said.is_empty() {
-        String::new()
-    } else {
-        format!(" says \"{said}\"")
-    };
     format!(
         "{}{}; wants {}; gap: expected {}, actual {}",
         beat.tactic.trim(),
-        said_part,
+        beat_said_fragment(beat),
         beat.wanted.trim(),
         beat.gap.expected.trim(),
         beat.gap.actual.trim()
@@ -4489,7 +4497,10 @@ pub fn format_character_design_slice_markdown(
 
 /// McKee writer-facing redaction: drop every planned payoff placement from the
 /// open promises carried by subject snapshots (continuity sheets and the
-/// scene-context subject layer). The promise rows are untouched.
+/// scene-context subject layer). The promise rows are untouched, and the one
+/// redaction rule lives in [`spindle_core::promise_visibility`], which
+/// [`SnapshotSubject::redact_promise_payoffs`] applies to both `open_promises`
+/// and the promise entity's kind-specific details.
 pub fn redact_snapshot_promise_payoffs(snapshots: &mut [SnapshotSubject]) {
     for snapshot in snapshots {
         snapshot.redact_promise_payoffs();

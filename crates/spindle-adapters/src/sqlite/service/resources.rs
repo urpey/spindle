@@ -1103,6 +1103,12 @@ impl SqliteSpindleService {
                 )
             }
             "narrative-promises" => {
+                let mckee = self
+                    .repository
+                    .get_project(&project_id)
+                    .await
+                    .map(|project| project.mckee_structured)
+                    .unwrap_or(false);
                 let records = self
                     .repository
                     .list_narrative_promises_by_project(&project_id)
@@ -1111,7 +1117,7 @@ impl SqliteSpindleService {
                     records
                         .into_iter()
                         .map(|p| {
-                            json!({
+                            let mut row = json!({
                                 "id": p.id,
                                 "project_id": p.project_id,
                                 "promise_type": p.promise_type,
@@ -1121,7 +1127,17 @@ impl SqliteSpindleService {
                                 "planned_payoff": p.planned_payoff,
                                 "status_history": p.status_history,
                                 "notes": p.notes,
-                            })
+                            });
+                            if mckee {
+                                // Writer visibility: a McKee promise row keeps
+                                // its nature and omits the planned payoff
+                                // location, payoff Turning Beat, target Act and
+                                // the notes that can encode them. The one
+                                // redaction rule lives in
+                                // `spindle_core::promise_visibility`.
+                                spindle_core::promise_visibility::redact_promise_json(&mut row);
+                            }
+                            row
                         })
                         .collect(),
                 )
