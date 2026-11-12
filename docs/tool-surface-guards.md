@@ -59,6 +59,10 @@ After an intentional compatibility schema change, regenerate with
 inspect the pointer/rule diff, and rerun without the update setting. This does
 not update discovery snapshots or authorize a budget increase. Intentional
 public surface changes still require same-PR snapshot updates and a changelog.
+A genuine ceiling raise is a separate, explicit decision: record the measured
+before → after bytes and the reason in the same PR's `CHANGELOG.md`
+`## Unreleased` entry (the McKee DTO additions did this), and never edit
+`tools/profile-budgets.json` just to make a lint pass.
 The target caps are not claims of implemented reduction. Generated transitional
 profiles now have measured compatibility ceilings; canonical descriptions/enums,
 narrowed skill cores and compact discovery remain upcoming P4 work.

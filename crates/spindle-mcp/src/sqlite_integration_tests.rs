@@ -11786,6 +11786,39 @@ async fn mckee_character_design_is_full_in_planning_status_and_redacted_in_other
 /// public `plan_chapter` tool and reads it back through the public
 /// `get_chapter_briefing` tool. The new value-plan fields are absent from both
 /// the request and the response, so the payload shape is unchanged.
+/// Normalize the briefing markdown's only volatile parts (record ids and the
+/// author-clock timestamps) so a non-McKee briefing can be asserted
+/// byte-for-byte against a literal: every line the McKee work could have
+/// changed stays exact.
+fn normalize_briefing_volatile(text: &str) -> String {
+    let mut out = String::new();
+    for (index, line) in text.lines().enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        let mut line = line.to_string();
+        if let (Some(start), Some(end)) = (line.find(" at "), line.rfind(" UTC"))
+            && start + 4 < end
+        {
+            line.replace_range(start + 4..end, "<timestamp>");
+        }
+        let mut normalized = String::new();
+        let mut rest = line.as_str();
+        while let Some(position) = rest.find("character:01") {
+            normalized.push_str(&rest[..position + "character:".len()]);
+            normalized.push_str("<id>");
+            let tail = &rest[position + "character:".len()..];
+            let cut = tail
+                .find(|character: char| !character.is_ascii_alphanumeric())
+                .unwrap_or(tail.len());
+            rest = &tail[cut..];
+        }
+        normalized.push_str(rest);
+        out.push_str(&normalized);
+    }
+    out
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn non_mckee_project_plan_chapter_payloads_keep_the_legacy_scene_shape() {
     use crate::tools::{ToolRouter, ToolSerializationState};
@@ -11890,6 +11923,108 @@ async fn non_mckee_project_plan_chapter_payloads_keep_the_legacy_scene_shape() {
         .unwrap();
     assert_ne!(briefing.is_error, Some(true), "{briefing:?}");
     let structured = briefing.structured_content.expect("briefing content");
+    // The additive McKee marker is skipped entirely for an existing project, and
+    // the whole plan (both Scenes) is still exposed.
+    assert!(
+        structured["chapter_plan"].get("scene_scope").is_none(),
+        "a non-McKee briefing must not grow scene_scope: {structured}"
+    );
+    assert_eq!(
+        structured["chapter_plan"]["scenes"]
+            .as_array()
+            .expect("planned scenes")
+            .len(),
+        2,
+        "a non-McKee briefing exposes the whole chapter plan"
+    );
+    // No McKee markdown block may appear: the briefing text is the legacy text.
+    let legacy_markdown = structured["briefing_markdown"]
+        .as_str()
+        .expect("briefing markdown");
+    for mckee_heading in [
+        "## Planned scene",
+        "## Earlier scenes in this chapter",
+        "## Character design (writer slice)",
+    ] {
+        assert!(
+            !legacy_markdown.contains(mckee_heading),
+            "a non-McKee briefing must not render {mckee_heading:?}: {legacy_markdown}"
+        );
+    }
+    // Byte-identical regression: every line (minus the volatile record id and
+    // author-clock timestamp) is exactly the pre-McKee briefing markdown.
+    let expected = r#"# Chapter Briefing
+
+Target scene: Book 1, Chapter 1, Scene 1
+
+## Hard constraints
+- None.
+
+## Continuity sheets
+
+- Treat physical details, habits, voice profile, current state, relationships, and recent appearances here as authoritative for drafting.
+
+# Nell
+- Subject: `character:character:<id>`
+- Table: `character`
+- Placement: book 1, chapter 1, scene 1
+- Provenance: asserted by author at <timestamp> UTC
+- Snapshot kind: character
+## Details
+- Role: lead
+- Summary: Siege engineer
+## Voice Profile
+- from asserted by author at <timestamp> UTC
+## Current State
+- source: baseline | from asserted by author at <timestamp> UTC
+
+## Recent chapter summaries
+- None recorded before this chapter.
+
+## Chapter outline
+- Format: json
+[{"order":1,"summary":"Nell counts the arrows.","scene_id":null,"status":"planned"},{"order":2,"summary":"Nell opens the gate at dawn.","scene_id":null,"status":"planned"}]
+- Beats:
+- 1 [planned]: Nell counts the arrows.
+- 2 [planned]: Nell opens the gate at dawn.
+
+## Current chapter plan
+- Synopsis: Nell holds the gate.
+- Planned scene 1: Nell counts the arrows.
+  purpose: Establish the siege
+- Planned scene 2: Nell opens the gate at dawn.
+  purpose: Force the gate decision
+
+## Scene context unavailable
+- Resolved scene order: 1
+- Resolved character ids: character:<id>
+- Missing fields for scene context: location_id"#;
+    assert_eq!(
+        normalize_briefing_volatile(legacy_markdown),
+        expected,
+        "non-McKee briefing markdown changed"
+    );
+    // The chapter plan keeps exactly the legacy keys; the additive `scene_scope`
+    // marker is not present for a non-McKee project.
+    let mut plan_keys: Vec<&str> = structured["chapter_plan"]
+        .as_object()
+        .expect("chapter plan")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    plan_keys.sort_unstable();
+    assert_eq!(
+        plan_keys,
+        vec![
+            "pov_character_id",
+            "scenes",
+            "synopsis",
+            "target_conflict_ids",
+            "target_plot_line_ids",
+            "target_theme_ids",
+        ],
+        "non-McKee chapter_plan JSON grew a field"
+    );
     let scene = &structured["chapter_plan"]["scenes"][0];
     for field in [
         "primary_value_axis",
@@ -11908,6 +12043,70 @@ async fn non_mckee_project_plan_chapter_payloads_keep_the_legacy_scene_shape() {
             "legacy scene payload must not grow {field}: {structured}"
         );
     }
+
+    // #31 regression: an existing project's scene context and drafting packet
+    // keep their exact legacy shape. No McKee visibility field appears, and
+    // every scene-card placeholder survives unchanged.
+    let scene_context = router
+        .call_tool(
+            "get_scene_context",
+            Some(
+                serde_json::json!({
+                    "project_id": project.project_id,
+                    "book_number": 1,
+                    "chapter_number": 1,
+                    "scene_order": 2,
+                    "character_ids": [character.character_id],
+                    "location_id": location.location_id
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_ne!(scene_context.is_error, Some(true), "{scene_context:?}");
+    let scene_context = scene_context.structured_content.expect("scene context");
+    for field in ["planned_scene", "realized_scenes", "character_design_slice"] {
+        assert!(
+            scene_context["novel"].get(field).is_none(),
+            "an existing project's scene context must not grow {field}: {scene_context}"
+        );
+    }
+
+    let prepared = router
+        .call_tool(
+            "prepare_scene",
+            Some(
+                serde_json::json!({
+                    "project_id": project.project_id,
+                    "book_number": 1,
+                    "chapter_number": 1,
+                    "scene_order": 2,
+                    "intent": "draft"
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_ne!(prepared.is_error, Some(true), "{prepared:?}");
+    let prepared = prepared.structured_content.expect("prepared scene");
+    let packet = &prepared["drafting_packet_v1"];
+    assert!(
+        !packet.is_null(),
+        "the legacy packet must still be produced: {prepared}"
+    );
+    assert_eq!(packet["scene_card"]["opposition"], "Scene conflict");
+    assert_eq!(packet["scene_card"]["value_shift"]["axis"], "narrative");
+    assert_eq!(packet["scene_card"]["value_shift"]["before"], "opening");
+    assert_eq!(packet["scene_card"]["value_shift"]["after"], "shifted");
+    assert_eq!(packet["scene_card"]["emotion"]["exit"], "changed");
+    assert!(packet["scene_card"].get("gap").is_none());
+    assert!(packet["scene_card"].get("turning_beat").is_none());
+    assert!(packet.get("character_design_slice").is_none());
+    assert_eq!(packet["hard_constraints"], serde_json::json!([]));
 }
 
 /// McKee #28 public contract: `create_narrative_promise` advertises the
@@ -12238,4 +12437,670 @@ async fn planning_status_exposes_an_act_cause_reference_through_mcp_tools() {
         book_summary["schedule"]["acts"][0]["cause"]["sequence_key"], "seq:sub",
         "{status}"
     );
+}
+
+/// The chapter artifact shared by the MCP McKee read-visibility test: two
+/// chapter records and the one Sequence covering the four-Scene horizon. The
+/// long-form entry-flow test stages the same payload inline.
+fn planning_entry_chapter_artifact(range: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "level": "chapter",
+        "rationale": "Two causal chapter turns for the near horizon.",
+        "target_range": range,
+        "operations": [
+            {"output_ref": "chapter:1", "operation": {"operation": "create_chapter", "input": {
+                "book_id": {"kind": "proposal_ref", "value": "project:root:book"},
+                "book_number": 1, "chapter_number": 1, "title": "The First Watch"
+            }}},
+            {"output_ref": "outline:chapter:1", "operation": {"operation": "set_chapter_outline", "input": {
+                "entity_id": {"kind": "proposal_ref", "value": "chapter:1"},
+                "book_number": 1, "chapter_number": 1,
+                "content": "Mara hears the impossible bell.",
+                "beats": [{"order": 1, "summary": "Hear the bell", "status": "planned"}]
+            }}},
+            {"output_ref": "chapter:2", "operation": {"operation": "create_chapter", "input": {
+                "book_id": {"kind": "proposal_ref", "value": "project:root:book"},
+                "book_number": 1, "chapter_number": 2, "title": "The Second Watch"
+            }}},
+            {"output_ref": "outline:chapter:2", "operation": {"operation": "set_chapter_outline", "input": {
+                "entity_id": {"kind": "proposal_ref", "value": "chapter:2"},
+                "book_number": 1, "chapter_number": 2,
+                "content": "Mara decodes the bell's logbook.",
+                "beats": [{"order": 1, "summary": "Decode the logbook", "status": "planned"}]
+            }}}
+        ],
+        "schedule": {
+            "sequences": [{
+                "sequence_key": "seq:entry-bell",
+                "plot_line_id": {"kind": "proposal_ref", "value": "plot:main"},
+                "question": "Who rang the clapperless bell?",
+                "inciting_scene": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "climax_scene": {"book_number": 1, "chapter_number": 2, "scene_order": 2},
+                "member_scenes": [
+                    {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                    {"book_number": 1, "chapter_number": 1, "scene_order": 2},
+                    {"book_number": 1, "chapter_number": 2, "scene_order": 1},
+                    {"book_number": 1, "chapter_number": 2, "scene_order": 2}
+                ]
+            }]
+        }
+    })
+}
+
+/// #31 MCP contract: for a McKee project the public writer-facing reads return
+/// only the current Scene's plan, earlier Scenes' realized summaries and the
+/// Character Design slice. The drafting packet's scene card is filled from the
+/// plan, due Key Facts are hard canon constraints, and promise payoff locations
+/// never appear.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mckee_writer_visibility_and_filled_packet_through_mcp_tools() {
+    use crate::tools::{ToolRouter, ToolSerializationState};
+    use std::sync::Arc;
+
+    let (_tmp, svc) = fresh_service().await;
+    let planning_router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        Some("new-book".to_string()),
+        Arc::new(ToolSerializationState::default()),
+    );
+    let range = serde_json::json!({
+        "book_number": 1, "chapter_start": 1, "chapter_end": 2, "scenes_per_chapter": 2
+    });
+
+    let begun = planning_call(
+        &planning_router,
+        "planning_begin",
+        serde_json::json!({
+            "premise": "A harbor archivist discovers the clapperless bell rings a warning only she can hear.",
+            "horizon": range,
+            "rating_ceiling": "teen"
+        }),
+    )
+    .await;
+    let session_id = begun["session"]["session_id"].as_str().unwrap().to_string();
+    let contract = planning_advance_and_accept(
+        &planning_router,
+        &session_id,
+        "contract",
+        serde_json::json!({
+            "schema_version": 1,
+            "level": "contract",
+            "rationale": "Review the reader promise before creating the project.",
+            "operations": [{
+                "output_ref": "project:root",
+                "operation": {"operation": "create_project", "input": {
+                    "name": "The Clapperless Bell",
+                    "project_type": "novel",
+                    "genre": "mystery",
+                    "reader_contract": {
+                        "promise": "A fair-play mystery that earns its final bell.",
+                        "style_notes": ["Close third person"],
+                        "boundaries": []
+                    }
+                }}
+            }]
+        }),
+        "mcp-31-contract",
+        None,
+    )
+    .await;
+    let project_id = contract["session"]["project_id"]
+        .as_str()
+        .expect("project attached")
+        .to_string();
+
+    planning_advance_and_accept(
+        &planning_router,
+        &session_id,
+        "cast_world",
+        serde_json::json!({
+            "schema_version": 1,
+            "level": "cast_world",
+            "rationale": "Minimal cast and world.",
+            "operations": [
+                {"output_ref": "cast:mara", "operation": {"operation": "create_character", "input": {
+                    "name": "Mara", "summary": "Harbor archivist", "role": "protagonist"
+                }}},
+                {"output_ref": "design:mara", "operation": {"operation": "create_character_design", "input": {
+                    "character_id": {"kind": "proposal_ref", "value": "cast:mara"},
+                    "contradictions": ["keeps every chart", "cannot read her own heart"],
+                    "public_self": "Harbor archivist",
+                    "personal_self": "Raises her nephew alone",
+                    "private_self": "Fears deep water",
+                    "hidden_self": "She signed the forged manifest",
+                    "conscious_desire": "Clear the harbor's name",
+                    "unconscious_desire": "To be forgiven",
+                    "pressure_on_protagonist": "Withholds the chart that would convict her",
+                    "behavior_cues": ["straightens the chart corners before answering"]
+                }}},
+                {"output_ref": "loc:watchtower", "operation": {"operation": "create_location", "input": {
+                    "name": "Watchtower", "kind": "building", "summary": "Tidal signal tower"
+                }}},
+                {"output_ref": "rule:tides", "operation": {"operation": "create_world_rule", "input": {
+                    "rule_name": "Harbor tides", "rule_type": "physics", "description": "The tidal gate opens at dawn"
+                }}}
+            ]
+        }),
+        "mcp-31-cast",
+        None,
+    )
+    .await;
+    planning_advance_and_accept(
+        &planning_router,
+        &session_id,
+        "series_arc",
+        planning_entry_series_artifact(),
+        "mcp-31-series",
+        Some(range.clone()),
+    )
+    .await;
+    planning_advance_and_accept(
+        &planning_router,
+        &session_id,
+        "book",
+        serde_json::json!({
+            "schema_version": 1,
+            "level": "book",
+            "rationale": "Coarse book destination.",
+            "operations": [{
+                "output_ref": "outline:book",
+                "operation": {"operation": "set_book_outline", "input": {
+                    "book_id": {"kind": "proposal_ref", "value": "project:root:book"},
+                    "book_number": 1,
+                    "content": "Mara uncovers the signal conspiracy at the watchtower."
+                }}
+            }]
+        }),
+        "mcp-31-book",
+        None,
+    )
+    .await;
+    planning_advance_and_accept(
+        &planning_router,
+        &session_id,
+        "chapter",
+        planning_entry_chapter_artifact(&range),
+        "mcp-31-chapter",
+        Some(range.clone()),
+    )
+    .await;
+    planning_advance_and_accept(
+        &planning_router,
+        &session_id,
+        "scene",
+        planning_entry_scene_artifact(),
+        "mcp-31-scene",
+        Some(range.clone()),
+    )
+    .await;
+
+    let write_router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        None,
+        Arc::new(ToolSerializationState::default()),
+    );
+
+    // An earlier written Scene gives the briefing a realized result.
+    planning_call(
+        &write_router,
+        "save_scene_draft",
+        serde_json::json!({
+            "project_id": project_id,
+            "book_number": 1,
+            "chapter_number": 1,
+            "scene_order": 1,
+            "full_text": "Mara counts the tide tables twice before the bell sounds.",
+            "summary": "Mara counts the tide tables before the bell.",
+            "content_rating": "general"
+        }),
+    )
+    .await;
+
+    // ── get_chapter_briefing for the current Scene ────────────────────────
+    let briefing = planning_call(
+        &write_router,
+        "get_chapter_briefing",
+        serde_json::json!({
+            "project_id": project_id,
+            "book_number": 1,
+            "chapter_number": 1,
+            "scene_order": 2,
+            "recent_chapter_limit": 0
+        }),
+    )
+    .await;
+    let plan_scenes = briefing["chapter_plan"]["scenes"]
+        .as_array()
+        .expect("chapter plan scenes");
+    assert_eq!(
+        plan_scenes.len(),
+        1,
+        "later Scene plans must be omitted: {briefing}"
+    );
+    assert_eq!(plan_scenes[0]["scene_order"], 2);
+    assert_eq!(
+        briefing["scene_context"]["novel"]["planned_scene"]["scene_order"], 2,
+        "{briefing}"
+    );
+    assert_eq!(
+        briefing["scene_context"]["novel"]["realized_scenes"][0]["summary"],
+        "Mara counts the tide tables before the bell.",
+        "{briefing}"
+    );
+    let design = &briefing["scene_context"]["novel"]["character_design_slice"][0];
+    assert_eq!(design["character_name"], "Mara");
+    assert_eq!(design["tested_contradiction"], "keeps every chart");
+    assert_eq!(design["conscious_desire"], "Clear the harbor's name");
+    assert_eq!(
+        design["behavior_cues"][0],
+        "straightens the chart corners before answering"
+    );
+    assert_eq!(
+        briefing["scene_context"]["novel"]["narrative_promises_due"][0]["planned_payoff"],
+        serde_json::Value::Null
+    );
+    let briefing_text = briefing.to_string();
+    for leaked in [
+        "She signed the forged manifest",
+        "To be forgiven",
+        "hidden_self_fact_id",
+        "unconscious_desire_fact_id",
+    ] {
+        assert!(
+            !briefing_text.contains(leaked),
+            "briefing leaked {leaked:?}: {briefing_text}"
+        );
+    }
+    assert!(
+        briefing["briefing_markdown"]
+            .as_str()
+            .unwrap()
+            .contains("## Planned scene")
+    );
+    assert!(
+        !briefing["briefing_markdown"]
+            .as_str()
+            .unwrap()
+            .contains("- Planned scene 1:")
+    );
+
+    // The earlier Scene's briefing never exposes the later Scene's plan.
+    let earlier = planning_call(
+        &write_router,
+        "get_chapter_briefing",
+        serde_json::json!({
+            "project_id": project_id,
+            "book_number": 1,
+            "chapter_number": 1,
+            "scene_order": 1,
+            "recent_chapter_limit": 0
+        }),
+    )
+    .await;
+    let earlier_plan = earlier["chapter_plan"].to_string();
+    assert!(
+        !earlier_plan.contains("Mara climbs to the lantern room."),
+        "later Scene plan leaked: {earlier_plan}"
+    );
+    assert!(
+        earlier
+            .to_string()
+            .contains("Who rang the clapperless bell?"),
+        "the planted promise's nature must be visible: {earlier}"
+    );
+
+    // The additive McKee marker names the deliberate narrowing, and a
+    // placement-only briefing resolves the cursor's next Scene (Scene 2), never
+    // Scene 1.
+    assert_eq!(
+        briefing["chapter_plan"]["scene_scope"]["mode"], "current_scene_only",
+        "{briefing}"
+    );
+    assert_eq!(
+        briefing["chapter_plan"]["scene_scope"]["planned_scene_count"],
+        2
+    );
+    assert_eq!(
+        briefing["chapter_plan"]["scene_scope"]["exposed_scene_count"],
+        1
+    );
+    let placement_only = planning_call(
+        &write_router,
+        "get_chapter_briefing",
+        serde_json::json!({
+            "project_id": project_id,
+            "book_number": 1,
+            "chapter_number": 1,
+            "recent_chapter_limit": 0
+        }),
+    )
+    .await;
+    assert_eq!(
+        placement_only["chapter_plan"]["scenes"][0]["scene_order"], 2,
+        "a later-Scene briefing must not fall back to Scene 1: {placement_only}"
+    );
+    assert_eq!(
+        placement_only["chapter_plan"]["scene_scope"]["current_scene_order"], 2,
+        "{placement_only}"
+    );
+    assert_eq!(
+        placement_only["scene_context"]["novel"]["realized_scenes"][0]["scene_order"], 1,
+        "{placement_only}"
+    );
+
+    // ── Promise payoff redaction across every writer-facing surface ───────
+    // One promise encodes its payoff in the structured fields *and* in a note;
+    // no writer-facing read may carry the location, the payoff Turning Beat,
+    // the target Act or the leaking note, while the nature stays visible.
+    let leaking_promise = planning_call(
+        &write_router,
+        "create_narrative_promise",
+        serde_json::json!({
+            "project_id": project_id,
+            "promise_type": "mystery",
+            "description": "Who stole Mara's tide chart?",
+            "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+            "planned_payoff": {"book_number": 3, "chapter_number": 9, "scene_order": 1},
+            "planned_payoff_turning_beat": 3,
+            "target_act": 2,
+            "notes": ["payoff lands in book 3 chapter 9", "plant the chart early"]
+        }),
+    )
+    .await;
+    let leaking_promise_id = leaking_promise["narrative_promise_id"]
+        .as_str()
+        .expect("promise id")
+        .to_string();
+    let mara_id = briefing["scene_context"]["scene"]["characters"][0]["character_id"]
+        .as_str()
+        .expect("Mara record id")
+        .to_string();
+    let promise_entity = planning_call(
+        &write_router,
+        "get_entity",
+        serde_json::json!({
+            "project_id": project_id,
+            "table": "narrative_promise",
+            "entity_id": leaking_promise_id
+        }),
+    )
+    .await;
+    let promise_entity_text = promise_entity.to_string();
+    assert!(
+        promise_entity_text.contains("Who stole Mara's tide chart?"),
+        "promise nature must stay visible: {promise_entity}"
+    );
+    // `planned_payoff` is a non-skipped Option in the pre-existing snapshot
+    // shape, so it serializes as null when redacted; the other two fields are
+    // skipped when unset. No payoff location, target Act or leaking note may
+    // appear.
+    assert!(promise_entity["kind_specific"]["details"]["planned_payoff"].is_null());
+    assert!(
+        promise_entity["kind_specific"]["details"]
+            .get("planned_payoff_turning_beat")
+            .is_none()
+    );
+    assert!(
+        promise_entity["kind_specific"]["details"]
+            .get("target_act")
+            .is_none()
+    );
+    for leaked in [
+        "payoff lands in book 3 chapter 9",
+        "plant the chart early",
+        "book_number\":3",
+    ] {
+        assert!(
+            !promise_entity_text.contains(leaked),
+            "get_entity(narrative_promise) leaked {leaked:?}: {promise_entity}"
+        );
+    }
+
+    let character_snapshot = planning_call(
+        &write_router,
+        "get_character_snapshot",
+        serde_json::json!({
+            "project_id": project_id,
+            "character_id": mara_id
+        }),
+    )
+    .await;
+    let character_text = character_snapshot.to_string();
+    assert!(
+        character_text.contains("Who stole Mara's tide chart?"),
+        "an open promise's nature must stay visible on a character snapshot: {character_snapshot}"
+    );
+    for promise in character_snapshot["snapshot"]["open_promises"]
+        .as_array()
+        .expect("open promises")
+    {
+        assert!(
+            promise["planned_payoff"].is_null(),
+            "a character snapshot leaked a payoff: {promise}"
+        );
+        assert!(promise.get("planned_payoff_turning_beat").is_none());
+        assert!(promise.get("target_act").is_none());
+    }
+    for leaked in ["book_number\":3", "payoff lands in book 3 chapter 9"] {
+        assert!(
+            !character_text.contains(leaked),
+            "get_character_snapshot leaked {leaked:?}: {character_snapshot}"
+        );
+    }
+
+    let writer_state = planning_call(
+        &write_router,
+        "get_writer_state",
+        serde_json::json!({"project_id": project_id}),
+    )
+    .await;
+    let writer_state_text = writer_state.to_string();
+    assert!(
+        writer_state_text.contains("Who stole Mara's tide chart?"),
+        "a due promise's nature must stay visible in writer state: {writer_state}"
+    );
+    let due_promise = writer_state["open_promises_due_now"]
+        .as_array()
+        .expect("due promises")
+        .iter()
+        .find(|promise| promise["description"] == "Who stole Mara's tide chart?")
+        .unwrap_or_else(|| panic!("due promise missing: {writer_state}"));
+    assert!(due_promise["planned_payoff"].is_null(), "{due_promise}");
+    assert_eq!(due_promise["notes"], serde_json::json!([]), "{due_promise}");
+    for leaked in [
+        "payoff lands in book 3 chapter 9",
+        "plant the chart early",
+        "book_number\":3",
+    ] {
+        assert!(
+            !writer_state_text.contains(leaked),
+            "get_writer_state leaked {leaked:?}: {writer_state}"
+        );
+    }
+
+    // The bible resource is the fifth projection; it omits the fields entirely.
+    let resource_router = crate::resources::ResourceRouter::new(svc.clone());
+    let resource = resource_router
+        .read_resource(&format!("bible://projects/{project_id}/narrative-promises"))
+        .await
+        .unwrap();
+    let resource_text = match &resource.contents[0] {
+        rmcp::model::ResourceContents::TextResourceContents { text, .. } => text.clone(),
+        rmcp::model::ResourceContents::BlobResourceContents { .. } => {
+            panic!("narrative-promises should be JSON text")
+        }
+    };
+    assert!(
+        resource_text.contains("Who stole Mara's tide chart?"),
+        "the resource keeps a promise's nature: {resource_text}"
+    );
+    for leaked in [
+        "planned_payoff",
+        "target_act",
+        "payoff lands in book 3 chapter 9",
+        "plant the chart early",
+    ] {
+        assert!(
+            !resource_text.contains(leaked),
+            "the narrative-promises resource leaked {leaked:?}: {resource_text}"
+        );
+    }
+
+    // ── get_scene_context ────────────────────────────────────────────────
+    let scene_context = planning_call(
+        &write_router,
+        "get_scene_context",
+        serde_json::json!({
+            "project_id": project_id,
+            "book_number": 1,
+            "chapter_number": 1,
+            "scene_order": 2,
+            "character_ids": [],
+            "location_id": briefing["scene_seed"]["location_id"]
+        }),
+    )
+    .await;
+    assert_eq!(
+        scene_context["novel"]["planned_scene"]["scene_order"], 2,
+        "{scene_context}"
+    );
+    assert_eq!(
+        scene_context["novel"]["character_design_slice"][0]["tested_contradiction"],
+        "keeps every chart"
+    );
+    assert!(
+        scene_context["novel"]["narrative_promises_due"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|promise| promise["planned_payoff"].is_null()),
+        "payoff location must be redacted: {scene_context}"
+    );
+
+    // ── prepare_scene: filled card, due Key Fact, promise nature ──────────
+    let prepared = planning_call(
+        &write_router,
+        "prepare_scene",
+        serde_json::json!({
+            "project_id": project_id,
+            "book_number": 1,
+            "chapter_number": 1,
+            "scene_order": 2,
+            "intent": "draft"
+        }),
+    )
+    .await;
+    let card = &prepared["drafting_packet_v1"]["scene_card"];
+    assert_eq!(card["opposition"], "The fog on the stair", "{prepared}");
+    assert_eq!(card["value_shift"]["axis"], "truth");
+    assert_eq!(card["value_shift"]["before"], "negative (contrary)");
+    assert_eq!(card["value_shift"]["after"], "positive");
+    // A McKee plan has no emotion field: the exit says so honestly instead of
+    // reusing a Charge label as an emotion.
+    assert_eq!(
+        card["emotion"]["exit"],
+        "unchanged (no planned emotion shift)"
+    );
+    assert_eq!(card["gap"]["expected"], "The clapper was stolen");
+    assert_eq!(card["gap"]["actual"], "The clapper was never fitted");
+    assert_eq!(card["turning_beat"]["kind"], "turn");
+    assert_eq!(
+        card["turning_beat"]["tactic"],
+        "Choose the harbor warning over the archive"
+    );
+    assert_eq!(card["required_beats"].as_array().unwrap().len(), 3);
+    assert_eq!(card["chapter"]["planned_scene_count"], 2);
+    for placeholder in [
+        "Scene conflict",
+        "\"narrative\"",
+        "\"opening\"",
+        "\"shifted\"",
+        "\"changed\"",
+    ] {
+        assert!(
+            !card.to_string().contains(placeholder),
+            "placeholder {placeholder:?} remains: {card}"
+        );
+    }
+    assert_eq!(
+        prepared["drafting_packet_v1"]["character_design_slice"][0]["tested_contradiction"],
+        "keeps every chart"
+    );
+    assert_eq!(
+        prepared["drafting_packet_v1"]["hard_constraints"],
+        serde_json::json!([]),
+        "Scene 2 of chapter 1 has no due Key Fact: {prepared}"
+    );
+    assert!(
+        card["promises_due"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|promise| promise == "mystery: Who rang the clapperless bell?"),
+        "{prepared}"
+    );
+    // The packet carries the promise's nature and never the payoff location or
+    // the note that encodes it.
+    let packet_text = prepared["drafting_packet_v1"].to_string();
+    assert!(
+        packet_text.contains("Who stole Mara's tide chart?"),
+        "the promise nature must stay in the packet: {prepared}"
+    );
+    for leaked in ["book 3 chapter 9", "book_number\":3", "planned_payoff"] {
+        assert!(
+            !packet_text.contains(leaked),
+            "the packet leaked {leaked:?}: {prepared}"
+        );
+    }
+
+    // Chapter 2 Scene 2 carries the planned Key Fact and the promise payoff.
+    let prepared_key_fact = planning_call(
+        &write_router,
+        "prepare_scene",
+        serde_json::json!({
+            "project_id": project_id,
+            "book_number": 1,
+            "chapter_number": 2,
+            "scene_order": 2,
+            "intent": "draft"
+        }),
+    )
+    .await;
+    let constraints = prepared_key_fact["drafting_packet_v1"]["hard_constraints"]
+        .as_array()
+        .expect("hard constraints");
+    // `Mara:bell_forgery` is a revealed_secret Key Fact: it is a secret whose
+    // holder (Mara) is in the Scene, so it must ship inside the
+    // [SECRETS IN PLAY] envelope, never as a plain "render it exactly"
+    // constraint, and the reserved predicate namespace must not leak into the
+    // writer-facing roster.
+    let key_fact = constraints
+        .iter()
+        .find(|constraint| constraint["id"] == "[SECRETS IN PLAY]")
+        .unwrap_or_else(|| panic!("due secret Key Fact missing: {prepared_key_fact}"));
+    assert_eq!(key_fact["kind"], "canon");
+    let statement = key_fact["statement"].as_str().unwrap();
+    assert!(
+        statement.contains("Mara finds the bell clapper hidden in the magistrate's sea chest"),
+        "{key_fact}"
+    );
+    assert!(statement.contains("Known ONLY to: Mara"), "{key_fact}");
+    assert!(
+        !prepared_key_fact["drafting_packet_v1"]
+            .to_string()
+            .contains("key_fact.revealed_secret:"),
+        "the reserved namespace must stay out of writer-facing text: {prepared_key_fact}"
+    );
+    let key_fact_packet_text = prepared_key_fact["drafting_packet_v1"].to_string();
+    assert!(
+        key_fact_packet_text.contains("Who rang the clapperless bell?"),
+        "the promise nature must stay in the packet: {prepared_key_fact}"
+    );
+    for leaked in ["book 3 chapter 9", "book_number\":3", "planned_payoff"] {
+        assert!(
+            !key_fact_packet_text.contains(leaked),
+            "the packet leaked {leaked:?}: {prepared_key_fact}"
+        );
+    }
 }

@@ -132,6 +132,13 @@ every non-planning carrier strips them through one predicate helper
 (`format::is_planning_only_secret_fact`), including both `check_consistency` secret-leak tiers, so
 a consistency finding never echoes their text, predicate or fact id.
 
+A due **secret Key Fact** (`key_fact.revealed_secret:*`, `secret = 1`) uses this same resolver: the
+scene context and the drafting packet's due-Key-Fact hard constraints both call
+`resolve_scene_secret_gate`, so the fact ships only as a `[SECRETS IN PLAY]` envelope when a circle
+member (including the POV) is present, and is withheld with an explicit `due_key_facts`
+unavailable-pass entry in the packet when nobody who knows it is in the Scene. A plain Key Fact is
+an ordinary `canon` hard constraint.
+
 ### 2.3 Reveals (circle expansion)
 
 A reveal is not a new mechanism — it is `record_knowledge` with `secret_of_fact_id` set and

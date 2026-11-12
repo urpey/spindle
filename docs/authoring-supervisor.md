@@ -68,14 +68,19 @@ on the Chapter artifact) and the scene value plan: primary and secondary Value
 Axes with opening/closing Charges, opposition, Gap, scene question, Inaction
 Cost, risk and the dilemma naming the tested contradiction. Those fields
 round-trip through the chapter plan (planning status, chapter briefing and the
-direct plan read all return them), but the supervisor and
-`authoring_prepare_run` do **not** read or enforce them yet. The value-chain
-blocking and advisory findings exist only at planning stage/acceptance time;
-drafting readiness does not re-check the chain, Sequence membership, Inaction
-Cost or climax dilemmas, so a run can start from a plan whose value chain is
-broken. Supervisor-side enforcement is follow-up work (#31/#32). Sequences may
-cross chapters; the supervisor never turns them into timeline events or
-canonical facts.
+direct plan read all return them). Writer-facing reads are narrower: a McKee
+briefing returns only the requested Scene's plan, earlier written Scenes of the
+chapter as summaries, and the current Scene's Character Design slice (tested
+contradiction, conscious desire, behaviour cues), and `get_scene_context`
+returns the same three slices. Later Scenes' plans are omitted, promise payoff
+placements are redacted, and a promise whose plant placement is after the cursor
+is not listed. The supervisor and `authoring_prepare_run` still do **not**
+re-check the value chain; the value-chain blocking and advisory findings exist
+only at planning stage/acceptance time, so drafting readiness does not re-check
+the chain, Sequence membership, Inaction Cost or climax dilemmas, and a run can
+start from a plan whose value chain is broken. Supervisor-side enforcement is
+follow-up work (#32). Sequences may cross chapters; the supervisor never turns
+them into timeline events or canonical facts.
 
 Subplot structure is likewise a planning-level check. A Chapter/Scene artifact
 whose Sequence belongs to a Subplot must land that Sequence's climax at or before
@@ -148,8 +153,19 @@ planned at the Series-Arc or Book level. Acceptance refuses a secret reveal with
 no earlier-planted promise paying off in that Scene, and a Turning Beat marked
 `information_dependent` that names no promise planted in an earlier Scene; both
 are the deus-ex-machina guard. A promise's payoff before its setup is already a
-hard blocking error. The drafting packet is unchanged by this ticket: Key Facts
-become hard constraints when a later ticket renders due facts from the plan.
+hard blocking error. The drafting packet now renders the plan: for a McKee
+project `prepare_scene` fills the scene card from the current planned Scene
+(Value Axis and Charge, opposition, Gap, Turning Beat, structured beats) and
+turns each **due Key Fact** — recognised by the reserved `key_fact.<kind>:`
+predicate namespace, placed at this Scene or chapter-level — into a `canon` hard
+constraint with its value and unique fact id, so the writer cannot omit or alter
+it. An ordinary planned fact is never a packet constraint. A due secret Key Fact
+ships only inside the `[SECRETS IN PLAY]` envelope when someone who knows it is
+present; otherwise its value is withheld and an explicit `due_key_facts`
+unavailable-pass entry records the omission. A promise planted or reinforced in
+the Scene appears by nature, never by payoff location. A Scene with no planned
+value plan yields an unavailable packet entry with a reason rather than
+placeholder text.
 
 `mining_policy` on `authoring_start_run` is optional and defaults to `disabled`
 (a run that never opts in behaves exactly as before). Set it to `propose_all`

@@ -204,6 +204,54 @@ model-verified tokenizer and is not exposed through authoring runs; legacy
 generation remains unchanged. See
 `docs/drafting-and-revision-design.md` for the staged integration and release gates.
 
+### McKee writer visibility and the filled packet
+
+Writer-facing reads for a McKee project return only what the current Scene
+needs. `get_chapter_briefing` filters `chapter_plan.scenes` to the requested
+Scene and marks the narrowing additively with `chapter_plan.scene_scope`
+(`mode: "current_scene_only"`, the resolved Scene, the planned count and the
+exposed count; the field is skipped for non-McKee projects). When `scene_order`
+is omitted the briefing resolves the writer cursor's next Scene in that chapter,
+so a later-Scene briefing does not silently fall back to Scene 1.
+`get_scene_context` and the briefing's bundled scene context expose
+`novel.planned_scene` (the current plan), `novel.realized_scenes` (earlier
+written Scenes of the chapter, as summaries for now) and
+`novel.character_design_slice` (the tested contradiction, conscious desire and
+planner-written behaviour cues). The slice type cannot represent the Character
+Design hidden layer, the unconscious desire, their secret fact ids or
+concealment notes, and every non-planning carrier still strips those secret
+facts. Later Scenes' plans are omitted. Promise reads apply one redaction rule
+(`spindle_core::promise_visibility`) to every writer-facing projection: the
+scene-context/briefing due list, `get_writer_state`, subject snapshots
+(`get_entity`, `get_character_snapshot`, continuity sheets) and the
+`bible://projects/{id}/narrative-promises` resource. The planned payoff
+placement, payoff Turning Beat, target Act and payoff-encoding notes never
+appear; promises not yet planted at the cursor are dropped from due lists; the
+promise's nature stays visible.
+
+`prepare_scene` fills the packet's scene card from the current planned Scene
+instead of legacy placeholders: primary Value Axis, opening and closing Charge,
+opposition, Gap, the Turning Beat and structured Beats as required beats.
+Additive `gap` and `turning_beat` fields carry the typed plan.
+`chapter.planned_scene_count` / `is_closer` are chapter-position metadata and
+`emotion.entry` keeps the POV's realised state, while `emotion.exit` honestly
+says `unchanged (no planned emotion shift)` (a McKee plan has no emotion field;
+the planned end state is the closing Charge in `value_shift.after`). Only due
+**Key Facts** (recognised by the reserved `key_fact.<kind>:` predicate
+namespace; a Scene is due when the placement's `scene_order` equals the Scene's
+or is a chapter-level `None`) become `canon` hard constraints with their value,
+with the unique fact id as the constraint id. A due **secret** Key Fact goes
+through the same circle-of-trust resolver as scene context: it ships only inside
+the `[SECRETS IN PLAY]` envelope when a circle member is present, and is
+withheld with an explicit `due_key_facts` unavailable-pass entry when nobody who
+knows it is present. An ordinary planned fact is never a packet constraint. A
+promise being planted or reinforced appears by nature, never by payoff location.
+A Scene with no planned value plan produces an unavailable packet entry with a
+reason, not placeholder text. Both the default (read-tools) path and the
+critique path see the same data. Unmarked projects keep their previous briefing,
+scene context and packet serialization; see
+[planning engine](planning-engine-design.md) for the field rules.
+
 ## Editorial controller, host tasks, and budget ledger
 
 `spindle_core::drafting::editorial` defines the opt-in editorial controller
@@ -1204,10 +1252,10 @@ closed turning set: `death`,
 stat change, a pull result or an arbitrary note can never enter the Key Fact
 path; those facts keep the existing mine-then-ratify canon flow unchanged. The
 input names a subject from the existing canonical-fact subject model (or no
-subject for a project-wide fact), a unique `key` (the canonical fact's
-predicate), a `value`, optional `context`, a story placement with a required
-`scene_order`, and an optional `planned_scene_id` naming the planned chapter
-plan that owns the Scene. The fact is **planned-and-pending**: the Scene it
+subject for a project-wide fact), a unique `key`, a `value`, optional `context`,
+a story placement with a required `scene_order`, and an optional
+`planned_scene_id` naming the planned chapter that owns the Scene. The fact is
+**planned-and-pending**: the Scene it
 names may still be unplanned, so a future placement accepts without a Scene row
 and binding happens later. Acceptance applies the existing planned-and-pending
 canonical-fact path (`scene_id: None`, placed by the Key Fact's book/chapter),
@@ -1216,7 +1264,14 @@ returns the canonical fact id, and leaves binding to the later
 project, Chapter/Scene acceptance records stage-recordable blocking findings
 when the placement is not a positive book/chapter/scene, when an explicit
 `planned_scene_id` cannot be resolved, or when the reference and the placement
-name different Scenes. A `revealed_secret` Key Fact needs a character subject
+name different Scenes. The **Key Fact marker** is the reserved canonical-fact
+predicate namespace `key_fact.<kind>:<author key>` written by the apply path
+(the same no-new-table pattern as the Character Design `character_design.*`
+namespace). Writer-facing text strips the prefix via
+`spindle_core::key_fact::canonical_fact_display_predicate`, and read paths
+recognise a Key Fact by the prefix, so ordinary planned facts keep the
+mine-then-ratify flow and are never treated as Key Facts. A `revealed_secret`
+Key Fact needs a character subject
 and is registered as a **secret** canonical fact (`secret = 1`) with that
 character in the initial circle of trust (one `knowledge_fact` row linked by
 `secret_of_fact_id`) and a concealment note explaining the planned reveal; the

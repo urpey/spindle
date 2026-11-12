@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+- Add **McKee writer visibility and the filled drafting packet**. For a
+  McKee-structured project, `get_chapter_briefing` returns only the requested
+  Scene's plan (`chapter_plan.scenes` is filtered to that Scene); the bundled
+  scene context carries `novel.planned_scene`, earlier written Scenes of the
+  chapter as summaries (`novel.realized_scenes`, a dedicated record so a
+  realized Value Turn can be added additively later) and the current Scene's
+  Character Design slice (`novel.character_design_slice`: tested contradiction,
+  conscious desire, behaviour cues). `get_scene_context` returns the same three
+  fields. Later Scenes' plans are omitted and the narrowing is marked additively
+  with `chapter_plan.scene_scope` (`current_scene_only`, resolved Scene, planned
+  and exposed counts; skipped for non-McKee projects). A placement-only briefing
+  resolves the writer cursor's next Scene, so a later-Scene briefing no longer
+  falls back to Scene 1. Promise reads now share one redaction rule
+  (`spindle_core::promise_visibility`) across `narrative_promises_due`,
+  continuity sheets, subject snapshots (`get_entity` /
+  `get_character_snapshot`), `get_writer_state` and the
+  `bible://projects/{id}/narrative-promises` resource: the planned payoff
+  placement, payoff Turning Beat, target Act and payoff-encoding notes never
+  appear, and a promise not yet planted at the cursor is not listed; the
+  promise's nature stays visible. `prepare_scene`'s `drafting_packet_v1` is
+  filled from the current planned Scene instead of the legacy placeholders —
+  primary Value Axis with opening/closing Charge (readable `positive` /
+  `negative (contrary)` / `negative (contradictory)` /
+  `negative (negation of the negation)`), opposition, additive typed `gap`,
+  Turning Beat (`turning_beat` plus the `turn` line), structured Beats as
+  `required_beats`, and an honest `emotion.exit` of
+  `unchanged (no planned emotion shift)` (a McKee plan has no emotion field).
+  Only due **Key Facts** become `canon` hard constraints: the reserved
+  `key_fact.<kind>:<author key>` predicate namespace marks them, the unique fact
+  id is the constraint id, and a chapter-level (`scene_order: None`) placement is
+  due in every Scene of the chapter. An ordinary planned fact is never a packet
+  constraint. A due secret Key Fact ships only inside the `[SECRETS IN PLAY]`
+  envelope when a circle member is present; otherwise its value is withheld and
+  an explicit `due_key_facts` unavailable-pass entry records the omission.
+  A Scene with no planned value plan reports an unavailable packet with a reason
+  instead of placeholder text. Both the default read-tool path and the critique
+  path see the same data, and the `scene-writer` skill tells the host to draft
+  through a packet-only subagent where the host allows it. Every new field is
+  additive, serde-defaulted and skipped when unset; jobs on non-McKee projects
+  keep byte-identical briefing, scene context and packet payloads.
+- Raise the **measured compatibility discovery ceilings** for the additive McKee
+  DTOs and record them here; regenerating the legacy schema inventory does not
+  itself authorize a raise. Measured UTF-8 tools/list bytes (outputs included)
+  before → after this ticket: `default` and `legacy-all` 793,333 → 833,541;
+  `minimal` 228,232 → 251,890; `write` 510,111 → 538,851; `import`
+  243,064 → 248,146; `authoring` 377,631 → 406,371. The growth is the additive
+  `GetChapterBriefingOutput.chapter_plan.scene_scope` and promise/Key-Fact DTO
+  documentation; tool names, inputs and the canonical acceptance ceilings are
+  untouched. The scene-writer core was also restored to its pre-ticket English
+  text (the compression is undone) and the detailed McKee brief moved to the
+  Traditional-Chinese `scene-writer/drafting-packets` reference (the already
+  duplicated anti-slop shelf list and on-demand reference descriptions now point
+  at the reference and manifest triggers that own them), keeping the core
+  comfortably under its 10,000-byte cap.
 - Add the **McKee gate profile** for planning sessions. Every session still
   starts all-human (ADR 0004); the profile is an **explicit author decision**
   made with `planning_advance(action = "set_policy")` (or `planning_begin`'s

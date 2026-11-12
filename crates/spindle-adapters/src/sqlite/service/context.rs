@@ -45,6 +45,7 @@ impl SqliteSpindleService {
             .unwrap_or(DEFAULT_WRITER_STATE_RECENT_ACTIVITY_LIMIT);
 
         let project = self.repository.get_project(&input.project_id).await?;
+        let mckee = project.mckee_structured;
         let active_branch = self.repository.get_active_branch(&project.id).await?;
 
         let branch = match input.branch_id.as_deref() {
@@ -385,7 +386,7 @@ impl SqliteSpindleService {
             Vec::new()
         };
 
-        let open_promises_due_now = if let Some(scene) = cursor_scene.as_ref() {
+        let mut open_promises_due_now = if let Some(scene) = cursor_scene.as_ref() {
             self.repository
                 .list_narrative_promises_by_project_and_branch(&project.id, &branch_id)
                 .await?
@@ -412,6 +413,14 @@ impl SqliteSpindleService {
         } else {
             Vec::new()
         };
+        if mckee {
+            // Writer visibility: a writer may know a promise's nature, never
+            // where it is planned to pay off or notes that encode it. The one
+            // rule lives in `spindle_core::promise_visibility`.
+            for promise in &mut open_promises_due_now {
+                spindle_core::promise_visibility::redact_writer_state_promise_payoff(promise);
+            }
+        }
 
         let active_overlays = self
             .repository
@@ -722,7 +731,8 @@ impl SqliteSpindleService {
             .or(input.token_budget)
             .unwrap_or(DEFAULT_CHAPTER_BRIEFING_BUDGET_TOKENS);
 
-        self.repository.get_project(&input.project_id).await?;
+        let project = self.repository.get_project(&input.project_id).await?;
+        let mckee = project.mckee_structured;
 
         let recent_limit = input
             .recent_chapter_limit
@@ -749,28 +759,119 @@ impl SqliteSpindleService {
         })
         .collect::<Vec<_>>();
 
-        let chapter_plan = self
+        let stored_chapter_plan = self
             .repository
             .list_chapter_plans_by_project(&input.project_id)
             .await?
             .into_iter()
             .find(|plan| {
                 plan.book_number == input.book_number && plan.chapter_number == input.chapter_number
-            })
-            .map(|plan| ChapterPlanBriefing {
-                synopsis: plan.synopsis,
-                pov_character_id: plan.pov_character_id,
-                target_theme_ids: plan.target_theme_ids,
-                target_conflict_ids: plan.target_conflict_ids,
-                target_plot_line_ids: plan.target_plot_line_ids,
-                scenes: plan
-                    .scenes
-                    .into_iter()
-                    .map(|scene| scene.into_core())
-                    .collect(),
             });
 
         let active_branch = self.repository.get_active_branch(&input.project_id).await?;
+
+        let branch_scenes = self
+            .repository
+            .list_scenes_by_project_and_branch(&input.project_id, &active_branch.id)
+            .await?;
+        let chapter_scene_orders = branch_scenes
+            .iter()
+            .filter(|scene| {
+                scene.book_number == input.book_number
+                    && scene.chapter_number == input.chapter_number
+            })
+            .map(|scene| scene.scene_order)
+            .collect::<Vec<_>>();
+        let planned_scene_orders = stored_chapter_plan
+            .as_ref()
+            .map(|plan| {
+                plan.scenes
+                    .iter()
+                    .map(|scene| scene.scene_order)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let resolved_scene_order = if let Some(scene_order) = input.scene_order {
+            Some(scene_order)
+        } else if mckee {
+            // McKee writer visibility: a placement-only briefing is for the
+            // Scene the writer is about to write, not Scene 1. Resolve the
+            // writer cursor (the same cursor `get_writer_state` and
+            // `prepare_scene` use): when the cursor Scene is in this chapter,
+            // prefer the next Scene of the chapter; otherwise fall back to the
+            // first planned (or first realized) Scene. Unmarked projects keep
+            // their previous `plan.scenes.first()` fallback byte-for-byte.
+            let writer_position = self
+                .repository
+                .get_writer_position(&input.project_id, &active_branch.id)
+                .await?;
+            let cursor_scene = writer_position
+                .as_ref()
+                .and_then(|position| position.scene_id.as_deref())
+                .and_then(|scene_id| branch_scenes.iter().find(|scene| scene.id == scene_id))
+                .or_else(|| branch_scenes.last());
+            let cursor_order = cursor_scene
+                .filter(|scene| {
+                    scene.book_number == input.book_number
+                        && scene.chapter_number == input.chapter_number
+                })
+                .map(|scene| scene.scene_order);
+            match cursor_order {
+                Some(cursor_order) => Some(
+                    chapter_scene_orders
+                        .iter()
+                        .chain(planned_scene_orders.iter())
+                        .copied()
+                        .filter(|order| *order > cursor_order)
+                        .min()
+                        .unwrap_or(cursor_order),
+                ),
+                None => planned_scene_orders
+                    .first()
+                    .copied()
+                    .or_else(|| chapter_scene_orders.first().copied()),
+            }
+        } else {
+            planned_scene_orders
+                .first()
+                .copied()
+                .or_else(|| chapter_scene_orders.first().copied())
+        };
+
+        let chapter_plan = stored_chapter_plan.as_ref().map(|plan| {
+            let scenes = plan
+                .scenes
+                .iter()
+                // McKee writer visibility: only the current Scene's plan
+                // is exposed. Later (and earlier) planned Scenes stay on
+                // the planning surface, so the writer cannot be steered by
+                // scenes it is not writing yet.
+                .filter(|scene| !mckee || Some(scene.scene_order) == resolved_scene_order)
+                .map(|scene| scene.clone().into_core())
+                .collect::<Vec<_>>();
+            ChapterPlanBriefing {
+                synopsis: plan.synopsis.clone(),
+                pov_character_id: plan.pov_character_id.clone(),
+                target_theme_ids: plan.target_theme_ids.clone(),
+                target_conflict_ids: plan.target_conflict_ids.clone(),
+                target_plot_line_ids: plan.target_plot_line_ids.clone(),
+                scenes,
+                // Additive, documented McKee marker (skipped for non-McKee
+                // projects): the narrowed list is deliberate, not a
+                // one-Scene plan.
+                scene_scope: mckee.then(|| spindle_core::models::ChapterPlanSceneScope {
+                    mode: "current_scene_only".to_string(),
+                    current_scene_order: resolved_scene_order,
+                    planned_scene_count: plan.scenes.len(),
+                    exposed_scene_count: plan
+                        .scenes
+                        .iter()
+                        .filter(|scene| Some(scene.scene_order) == resolved_scene_order)
+                        .count(),
+                }),
+            }
+        });
 
         // Hydrate the plan-targeted narrative threads (themes, conflicts, plot
         // lines, theme-connected motifs) at the briefing top level, mirroring
@@ -798,27 +899,6 @@ impl SqliteSpindleService {
             .await?,
         );
 
-        let chapter_scene_orders = self
-            .repository
-            .list_scenes_by_project_and_branch(&input.project_id, &active_branch.id)
-            .await?
-            .into_iter()
-            .filter(|scene| {
-                scene.book_number == input.book_number
-                    && scene.chapter_number == input.chapter_number
-            })
-            .map(|scene| scene.scene_order)
-            .collect::<Vec<_>>();
-
-        let resolved_scene_order = input
-            .scene_order
-            .or_else(|| {
-                chapter_plan
-                    .as_ref()
-                    .and_then(|plan| plan.scenes.first().map(|scene| scene.scene_order))
-            })
-            .or_else(|| chapter_scene_orders.first().copied());
-
         let resolved_character_ids = if !input.character_ids.is_empty() {
             input.character_ids.clone()
         } else if let Some(scene_order) = resolved_scene_order {
@@ -835,7 +915,22 @@ impl SqliteSpindleService {
             Vec::new()
         };
 
-        let resolved_location_id = input.location_id.clone();
+        let resolved_location_id = input.location_id.clone().or_else(|| {
+            // McKee writer visibility: the current planned Scene already names
+            // its setting, so a briefing requested by placement alone still
+            // gets the Scene Context (and therefore the plan/realized/design
+            // slices). Unmarked projects keep the previous explicit-only rule.
+            if mckee {
+                stored_chapter_plan.as_ref().and_then(|plan| {
+                    plan.scenes
+                        .iter()
+                        .find(|scene| Some(scene.scene_order) == resolved_scene_order)
+                        .and_then(|scene| scene.location_id.clone())
+                })
+            } else {
+                None
+            }
+        });
 
         let mut missing_fields = Vec::new();
         if resolved_scene_order.is_none() {
@@ -898,7 +993,7 @@ impl SqliteSpindleService {
         };
 
         // Continuity-sheet subjects: POV + requested characters + location.
-        let continuity_sheets = {
+        let mut continuity_sheets = {
             let placement = StoryPlacement {
                 book_number: input.book_number,
                 chapter_number: input.chapter_number,
@@ -944,6 +1039,12 @@ impl SqliteSpindleService {
                     .await?
             }
         };
+
+        if mckee {
+            // Writer visibility: continuity sheets keep a promise's nature but
+            // never its planned payoff placement.
+            crate::format::redact_snapshot_promise_payoffs(&mut continuity_sheets);
+        }
 
         let chapter_record = self
             .repository
@@ -1359,6 +1460,59 @@ impl SqliteSpindleService {
         (Some(digest), hooks.voice_samples, hooks.scene_negatives)
     }
 
+    /// Resolve the writer-facing Character Design slice for the current Scene.
+    ///
+    /// Only characters in the Scene's planned cast that own a Character Design
+    /// get a slice. Each slice carries the contradiction the Scene's dilemma
+    /// tests (when it names that character), the conscious desire and the
+    /// planner-written behaviour cues. The hidden layer and the unconscious
+    /// desire are never loaded here: the slice type cannot represent them.
+    async fn scene_character_design_slice(
+        &self,
+        project_id: &str,
+        branch_id: &str,
+        character_ids: &[String],
+        dilemma: Option<&spindle_core::scene_value::SceneDilemma>,
+    ) -> Result<Vec<spindle_core::character_design::SceneCharacterDesignSlice>> {
+        use spindle_core::character_design::{
+            CharacterDesignRedactedView, SceneCharacterDesignSlice,
+        };
+
+        let names: std::collections::BTreeMap<String, String> = self
+            .repository
+            .list_characters_by_project_and_branch(project_id, branch_id)
+            .await?
+            .into_iter()
+            .map(|character| (character.id, character.name))
+            .collect();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut slice = Vec::new();
+        for character_id in character_ids {
+            if !seen.insert(character_id.clone()) {
+                continue;
+            }
+            let Some(design) = self
+                .repository
+                .get_character_design_for_character(project_id, character_id)
+                .await?
+            else {
+                continue;
+            };
+            let tested_contradiction = dilemma
+                .filter(|dilemma| dilemma.character_id == *character_id)
+                .map(|dilemma| dilemma.contradiction.clone());
+            slice.push(SceneCharacterDesignSlice::from_design(
+                &CharacterDesignRedactedView::from_design(&design),
+                names
+                    .get(character_id)
+                    .cloned()
+                    .unwrap_or_else(|| character_id.clone()),
+                tested_contradiction,
+            ));
+        }
+        Ok(slice)
+    }
+
     pub async fn get_scene_context(
         &self,
         input: spindle_core::models::GetSceneContextInput,
@@ -1388,7 +1542,7 @@ impl SqliteSpindleService {
             system_overlay_summary, timeline_event_summary_at_or_before,
         };
         use spindle_core::models::{
-            CharacterStateSummary, ContextFormat, HardConstraint, LocationSummary,
+            CharacterStateSummary, ContextFormat, HardConstraint, LocationSummary, RealizedScene,
             RelationshipSummary, SceneContextBudgetMeta, SceneContextNovelLayer,
             SceneContextOutput, SceneContextSceneLayer, StoryPlacement, WorldRuleSummary,
             WorldStateSummary,
@@ -1468,6 +1622,72 @@ impl SqliteSpindleService {
             );
         }
         let input = normalized;
+
+        // ── McKee writer visibility ─────────────────────────────────────────
+        // A McKee project's writer sees the current Scene's plan and the
+        // earlier Scenes' realized results, never the rest of the chapter's
+        // plans. Both lists stay empty for non-McKee projects, so their
+        // payloads and markdown are unchanged.
+        let mckee = project.mckee_structured;
+        let planned_scene: Option<spindle_core::models::PlannedScene> = if mckee {
+            self.repository
+                .list_chapter_plans_by_project_and_branch(&input.project_id, &active_branch.id)
+                .await?
+                .into_iter()
+                .find(|plan| {
+                    plan.book_number == input.book_number
+                        && plan.chapter_number == input.chapter_number
+                })
+                .and_then(|plan| {
+                    plan.scenes
+                        .into_iter()
+                        .find(|scene| scene.scene_order == input.scene_order)
+                })
+                .map(|scene| scene.into_core())
+        } else {
+            None
+        };
+        let realized_scenes: Vec<RealizedScene> = if mckee {
+            let mut earlier = self
+                .repository
+                .list_scenes_by_project_and_branch(&input.project_id, &active_branch.id)
+                .await?
+                .into_iter()
+                .filter(|scene| {
+                    scene.book_number == input.book_number
+                        && scene.chapter_number == input.chapter_number
+                        && scene.scene_order < input.scene_order
+                })
+                .filter(|scene| !scene.summary.trim().is_empty())
+                .collect::<Vec<_>>();
+            earlier.sort_by_key(|scene| scene.scene_order);
+            earlier
+                .into_iter()
+                .map(|scene| RealizedScene {
+                    scene_order: scene.scene_order,
+                    summary: scene.summary,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let character_design_slice = if mckee {
+            let scene_character_ids = planned_scene
+                .as_ref()
+                .map(|scene| scene.character_ids.clone())
+                .unwrap_or_else(|| input.character_ids.clone());
+            self.scene_character_design_slice(
+                &input.project_id,
+                &active_branch.id,
+                &scene_character_ids,
+                planned_scene
+                    .as_ref()
+                    .and_then(|scene| scene.dilemma.as_ref()),
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
 
         let location = self.repository.get_location(&input.location_id).await?;
         if location.project_id != input.project_id {
@@ -1746,12 +1966,18 @@ impl SqliteSpindleService {
             None
         };
 
-        let narrative_promises_due = if want_narrative_promises_due {
+        let mut narrative_promises_due = if want_narrative_promises_due {
             self.repository
                 .list_narrative_promises_by_project_and_branch(&input.project_id, &active_branch.id)
                 .await?
                 .into_iter()
                 .filter(|promise| promise.status != "paid_off")
+                // Writer visibility: a promise planted in a later Scene is
+                // future plan the writer must not see.
+                .filter(|promise| {
+                    !mckee
+                        || crate::format::story_index_from_placement(&promise.planted_at) <= cursor
+                })
                 .map(|promise| {
                     narrative_promise_due_summary(
                         &promise,
@@ -1764,6 +1990,16 @@ impl SqliteSpindleService {
         } else {
             Vec::new()
         };
+        if mckee {
+            // Writer visibility: where a promise is planned to pay off (its
+            // placement, Turning Beat, target Act, payoff-derived notes) is
+            // author-only. The promise's nature — type, description, status —
+            // stays visible so a planted promise can be dramatised accurately.
+            // The one redaction rule lives in `spindle_core::promise_visibility`.
+            for promise in &mut narrative_promises_due {
+                spindle_core::promise_visibility::redact_due_promise_payoff(promise);
+            }
+        }
 
         // Raw, cursor-gated knowledge rows for the present cast. Kept as rows
         // (not yet mapped to briefing items) so the secret-knowledge gate can
@@ -2099,6 +2335,11 @@ impl SqliteSpindleService {
         // canonical_facts (one of the carriers §2.2 requires covering).
         let mut subjects_snapshots = subjects_snapshots;
         apply_secret_visibility(&secret_gate, &mut subjects_snapshots);
+        if mckee {
+            // Writer visibility: continuity subjects keep a promise's nature
+            // but never its planned payoff placement.
+            crate::format::redact_snapshot_promise_payoffs(&mut subjects_snapshots);
+        }
 
         // Knowledge briefing: build from the cursor-gated rows, dropping any row
         // linked to a gated secret (secret_of_fact_id ∈ gate) so a secret never
@@ -2334,6 +2575,9 @@ impl SqliteSpindleService {
             economy_briefing,
             active_threads,
             previous_scene_tail,
+            planned_scene,
+            realized_scenes,
+            character_design_slice,
         };
 
         let mut scene_layer = SceneContextSceneLayer {
@@ -2713,10 +2957,12 @@ impl SqliteSpindleService {
                 &named_decision,
                 fact.concealment_note.as_deref(),
             ) {
-                gate.envelope_blocks.push(HardConstraint {
+                let block = HardConstraint {
                     id: SECRETS_IN_PLAY_CONSTRAINT_ID.to_string(),
                     statement,
-                });
+                };
+                gate.envelope_blocks.push(block.clone());
+                gate.envelope_by_fact.insert(fact.id.clone(), block);
             }
         }
         Ok(gate)
@@ -2800,7 +3046,7 @@ impl SqliteSpindleService {
         use spindle_core::models::{CharacterSnapshotOutput, StoryPlacement};
         use spindle_core::subject::{Subject, SubjectTable};
 
-        self.repository.get_project(&input.project_id).await?;
+        let project = self.repository.get_project(&input.project_id).await?;
         let active_branch = self.repository.get_active_branch(&input.project_id).await?;
         let branch = match input.branch_id.as_deref() {
             Some(branch_id) => {
@@ -2845,9 +3091,14 @@ impl SqliteSpindleService {
 
         let subject = Subject::new(SubjectTable::Character, character.id.clone())
             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-        let snapshot = self
+        let mut snapshot = self
             .canon_routed_subject_snapshot(&input.project_id, &branch.id, &subject, &placement)
             .await?;
+        if project.mckee_structured {
+            // Writer visibility: open promises keep their nature and lose the
+            // planned payoff location, Turning Beat and target Act.
+            snapshot.redact_promise_payoffs();
+        }
         // Profile-like reads get the redacted design only. The hidden layer and
         // unconscious desire live in secret canonical facts that subject
         // snapshots already strip, so there is nothing to leak here.
@@ -2877,7 +3128,7 @@ impl SqliteSpindleService {
         use spindle_core::models::StoryPlacement;
         use spindle_core::subject::{Subject, SubjectTable};
 
-        self.repository.get_project(&input.project_id).await?;
+        let project = self.repository.get_project(&input.project_id).await?;
         let active_branch = self.repository.get_active_branch(&input.project_id).await?;
         let branch = match input.branch_id.as_deref() {
             Some(branch_id) => {
@@ -2922,8 +3173,15 @@ impl SqliteSpindleService {
                 note: None,
             });
 
-        self.canon_routed_subject_snapshot(&input.project_id, &branch.id, &subject, &placement)
-            .await
+        let mut snapshot = self
+            .canon_routed_subject_snapshot(&input.project_id, &branch.id, &subject, &placement)
+            .await?;
+        if project.mckee_structured {
+            // Writer visibility: a promise's nature may be read as an entity,
+            // its planned payoff location and payoff-derived notes may not.
+            snapshot.redact_promise_payoffs();
+        }
+        Ok(snapshot)
     }
 
     /// Route snapshot reads through the cutover mode: legacy remains the default,
@@ -2994,6 +3252,7 @@ impl SqliteSpindleService {
         };
 
         let project = self.repository.get_project(&input.project_id).await?;
+        let mckee = project.mckee_structured;
         let branch = match input
             .branch_id
             .as_deref()
@@ -3528,27 +3787,159 @@ impl SqliteSpindleService {
             PrepareSceneIntent::Draft => None,
         };
 
-        let mut drafting_packet_v1 = match build_drafting_packet_v1_for_prepare_scene(
-            &preparation_id,
-            &project.id,
-            &branch.id,
-            target_scene.as_ref(),
-            scene_version,
-            &placement,
-            &dependency_tokens,
-            &scene_purpose,
-            &scene_context,
-            &research,
-        ) {
-            Ok(packet) => Some(packet),
-            Err(reason) => {
-                unavailable_passes.push(PrepareSceneUnavailablePass {
-                    pass: "drafting_packet_v1".to_string(),
-                    reason,
-                });
-                None
-            }
+        // Due Key Facts (McKee). A Key Fact is a planned-and-pending canonical
+        // fact placed at its dramatising Scene. It is recognised by the reserved
+        // `key_fact.<kind>:` predicate namespace written by the `create_key_fact`
+        // apply path (see `spindle_core::key_fact`), so ordinary planned facts
+        // keep the mine-then-ratify flow and are never turned into "never omit or
+        // alter" constraints. A Scene is due when the fact's placement is the
+        // same book/chapter and its scene_order equals the Scene's, or is `None`
+        // (a chapter-level placement, due in every Scene of the chapter).
+        // Character Design secrets are excluded: they are author-only and are
+        // never a drafting constraint.
+        let due_key_facts = if mckee {
+            let current_index =
+                crate::format::story_index(book_number, chapter_number, scene_order);
+            self.repository
+                .list_canonical_facts_by_project_and_branch(&project.id, &branch.id)
+                .await?
+                .into_iter()
+                .filter(|fact| spindle_core::key_fact::is_key_fact_predicate(&fact.predicate))
+                .filter(|fact| !crate::format::is_planning_only_secret_fact(fact))
+                .filter(|fact| fact.superseded_by.is_none())
+                .filter(|fact| {
+                    fact.valid_from.as_ref().is_some_and(|from| {
+                        from.book_number == book_number
+                            && from.chapter_number == chapter_number
+                            && (from.scene_order.is_none() || from.scene_order == Some(scene_order))
+                    })
+                })
+                .filter(|fact| {
+                    fact.valid_until.as_ref().is_none_or(|until| {
+                        crate::format::story_index_from_placement(until) >= current_index
+                    })
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
         };
+
+        // Due Key Facts are hard canon constraints, but a secret one must
+        // respect the circle of trust: the same resolver scene context uses
+        // decides whether it ships enveloped (`[SECRETS IN PLAY]`) or is
+        // withheld. A secret with no circle member present is never leaked and
+        // never silently dropped: an explicit withheld-pass entry records the
+        // omission.
+        let mut due_key_constraints = Vec::new();
+        let mut withheld_due_key_facts = 0usize;
+        if mckee {
+            let canon_source = spindle_core::drafting::PacketSource {
+                branch_id: branch.id.clone(),
+                source_id: format!("canon:{}", project.id),
+                revision_hash: dependency_tokens.canon_snapshot_hash.clone(),
+            };
+            let secret_due_key_facts = due_key_facts
+                .iter()
+                .filter(|fact| fact.secret)
+                .cloned()
+                .collect::<Vec<_>>();
+            let due_key_secret_gate = if secret_due_key_facts.is_empty() {
+                SceneSecretGate::default()
+            } else {
+                let name_of: std::collections::BTreeMap<String, String> = self
+                    .repository
+                    .list_characters_by_project_and_branch(&project.id, &branch.id)
+                    .await?
+                    .into_iter()
+                    .map(|character| (character.id, character.name))
+                    .collect();
+                self.resolve_scene_secret_gate(
+                    &project.id,
+                    &branch.id,
+                    &secret_due_key_facts,
+                    &SceneSecretGateParams {
+                        scene_cast: &scene_purpose.character_ids,
+                        pov: scene_purpose.pov_character_id.as_deref(),
+                        cursor: crate::format::story_index(
+                            book_number,
+                            chapter_number,
+                            scene_order,
+                        ),
+                        name_of: &name_of,
+                    },
+                )
+                .await?
+            };
+            for fact in &due_key_facts {
+                if !fact.secret {
+                    due_key_constraints.push(spindle_core::drafting::PacketConstraint {
+                        // The record id is unique; the predicate rides in the
+                        // statement so two facts sharing a predicate never
+                        // collide.
+                        id: fact.id.clone(),
+                        kind: spindle_core::drafting::ConstraintKind::Canon,
+                        statement: format!(
+                            "{}: {} (due in this scene; render it exactly, never omit or alter it)",
+                            spindle_core::key_fact::canonical_fact_display_predicate(
+                                &fact.predicate
+                            ),
+                            crate::format::canonical_fact_value_display(fact)
+                        ),
+                        source: canon_source.clone(),
+                        scope: "scene".to_string(),
+                    });
+                } else if let Some(block) = due_key_secret_gate.envelope_by_fact.get(&fact.id) {
+                    due_key_constraints.push(spindle_core::drafting::PacketConstraint {
+                        id: crate::format::SECRETS_IN_PLAY_CONSTRAINT_ID.to_string(),
+                        kind: spindle_core::drafting::ConstraintKind::Canon,
+                        statement: block.statement.clone(),
+                        source: canon_source.clone(),
+                        scope: "scene".to_string(),
+                    });
+                } else {
+                    withheld_due_key_facts += 1;
+                }
+            }
+        }
+
+        if withheld_due_key_facts > 0 {
+            // A secret Key Fact due here has no circle member present, so its
+            // value cannot be drafted around safely. Withhold it (the value is
+            // never in the packet) and say so explicitly instead of pretending
+            // it was delivered.
+            unavailable_passes.push(PrepareSceneUnavailablePass {
+                pass: "due_key_facts".to_string(),
+                reason: format!(
+                    "withheld {withheld_due_key_facts} due secret Key Fact(s): no character who knows the secret is present in this Scene, so the value was not delivered"
+                ),
+            });
+        }
+
+        let mut drafting_packet_v1 =
+            match build_drafting_packet_v1_for_prepare_scene(DraftingPacketBuildInput {
+                preparation_id: &preparation_id,
+                project_id: &project.id,
+                branch_id: &branch.id,
+                target_scene: target_scene.as_ref(),
+                scene_version,
+                placement: &placement,
+                dependencies: &dependency_tokens,
+                purpose: &scene_purpose,
+                context: &scene_context,
+                mckee,
+                planned_scene: scene_context.novel.planned_scene.as_ref(),
+                chapter_scene_count: chapter_plan.as_ref().map(|plan| plan.scenes.len()),
+                due_key_constraints: &due_key_constraints,
+            }) {
+                Ok(packet) => Some(packet),
+                Err(reason) => {
+                    unavailable_passes.push(PrepareSceneUnavailablePass {
+                        pass: "drafting_packet_v1".to_string(),
+                        reason,
+                    });
+                    None
+                }
+            };
 
         let mut evidence_references = Vec::new();
         if let Some(scene) = target_scene.as_ref() {
@@ -4490,24 +4881,60 @@ fn scene_context_section_token_map(
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_drafting_packet_v1_for_prepare_scene(
-    preparation_id: &str,
-    project_id: &str,
-    branch_id: &str,
-    target_scene: Option<&crate::sqlite::records::Scene>,
+/// Honest `EmotionShift.exit` for a McKee packet. A McKee chapter plan has no
+/// emotion field; the planned end state is the closing Charge, carried by
+/// `value_shift.after`, so the emotion exit says there is no planned emotion
+/// shift rather than reusing a Charge label as if it were an emotion.
+const NO_PLANNED_EMOTION_SHIFT: &str = "unchanged (no planned emotion shift)";
+
+/// Everything `build_drafting_packet_v1_for_prepare_scene` needs, bundled so the
+/// builder takes one small struct instead of a dozen positional arguments.
+struct DraftingPacketBuildInput<'a> {
+    preparation_id: &'a str,
+    project_id: &'a str,
+    branch_id: &'a str,
+    target_scene: Option<&'a crate::sqlite::records::Scene>,
     scene_version: Option<i32>,
-    placement: &spindle_core::models::StoryPlacement,
-    dependencies: &spindle_core::models::ScenePreparationDependencies,
-    purpose: &spindle_core::models::PrepareScenePurpose,
-    context: &spindle_core::models::SceneContextOutput,
-    _research: &[spindle_core::models::PrepareSceneResearchItem],
+    placement: &'a spindle_core::models::StoryPlacement,
+    dependencies: &'a spindle_core::models::ScenePreparationDependencies,
+    purpose: &'a spindle_core::models::PrepareScenePurpose,
+    context: &'a spindle_core::models::SceneContextOutput,
+    /// Derived once by the caller (`projects.mckee_structured`); never
+    /// re-derived here.
+    mckee: bool,
+    planned_scene: Option<&'a spindle_core::models::PlannedScene>,
+    chapter_scene_count: Option<usize>,
+    /// Due Key Facts already projected into the exact packet constraints the
+    /// secret gate approved (plain or `[SECRETS IN PLAY]`); withheld facts are
+    /// absent and reported by the caller instead.
+    due_key_constraints: &'a [spindle_core::drafting::PacketConstraint],
+}
+
+fn build_drafting_packet_v1_for_prepare_scene(
+    input: DraftingPacketBuildInput<'_>,
 ) -> std::result::Result<spindle_core::drafting::DraftingPacketV1, String> {
     use spindle_core::drafting::{
         CraftRubric, DraftingPacketV1, EditorialMemory, EmotionShift, NarrativePerson,
-        NarrativeTense, PacketChapter, PacketContinuity, PacketLocation, PacketParticipant,
-        PacketPov, PacketSource, PacketVoice, SceneCardV1, TargetWords, ValueShift,
+        NarrativeTense, PacketChapter, PacketConstraint, PacketContinuity, PacketLocation,
+        PacketParticipant, PacketPov, PacketSource, PacketVoice, SceneCardV1, TargetWords,
+        ValueShift,
     };
+
+    let DraftingPacketBuildInput {
+        preparation_id,
+        project_id,
+        branch_id,
+        target_scene,
+        scene_version,
+        placement,
+        dependencies,
+        purpose,
+        context,
+        mckee,
+        planned_scene,
+        chapter_scene_count,
+        due_key_constraints,
+    } = input;
 
     let pov_character = if let Some(pov_id) = purpose.pov_character_id.as_deref() {
         context
@@ -4581,6 +5008,135 @@ fn build_drafting_packet_v1_for_prepare_scene(
         serde_json::to_string(&pov_char.emotional_state).unwrap_or_else(|_| "focused".to_string())
     };
 
+    // ── The filled McKee scene card ─────────────────────────────────────────
+    // A McKee packet never falls back to placeholder copy: the card is filled
+    // from the current planned Scene, and a Scene without a value plan is an
+    // explicit preparation failure (the packet is reported unavailable) rather
+    // than "Scene conflict" / "narrative" / "opening" -> "shifted".
+    let mut opposition = "Scene conflict".to_string();
+    let mut turn = turn;
+    let mut intended_outcome = goal.clone();
+    let mut value_shift = ValueShift {
+        axis: "narrative".to_string(),
+        before: "opening".to_string(),
+        after: "shifted".to_string(),
+    };
+    let mut emotion_exit = "changed".to_string();
+    let mut required_beats = purpose
+        .expected_beats
+        .iter()
+        .map(|b| truncate_chars(b, 120))
+        .collect::<Vec<_>>();
+    let mut promises_due = context
+        .novel
+        .narrative_promises_due
+        .iter()
+        .map(|p| truncate_chars(&p.description, 120))
+        .collect::<Vec<_>>();
+    let mut gap = None;
+    let mut turning_beat = None;
+    let mut planned_scene_count = None;
+    let mut is_closer = false;
+
+    if mckee {
+        let scene = planned_scene.ok_or_else(|| {
+            format!(
+                "McKee drafting packet requires the planned Scene at book {} chapter {} scene {}; plan the chapter before preparing drafting context",
+                placement.book_number,
+                placement.chapter_number,
+                placement.scene_order.unwrap_or(1)
+            )
+        })?;
+        let axis = scene.primary_value_axis.as_ref().ok_or_else(|| {
+            format!(
+                "McKee planned Scene {} has no primary Value Axis, so its scene card cannot be filled without placeholder text",
+                scene.scene_order
+            )
+        })?;
+        let opposition_text = scene
+            .opposition
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "McKee planned Scene {} has no opposition, so its scene card cannot be filled without placeholder text",
+                    scene.scene_order
+                )
+            })?;
+        let scene_gap = scene.gap.clone().ok_or_else(|| {
+            format!(
+                "McKee planned Scene {} has no Gap, so its scene card cannot be filled without placeholder text",
+                scene.scene_order
+            )
+        })?;
+        let beat = scene
+            .turning_beat
+            .and_then(|position| scene.beats.get((position as usize).saturating_sub(1)))
+            .filter(|beat| beat.kind.is_turn())
+            .ok_or_else(|| {
+                format!(
+                    "McKee planned Scene {} has no resolvable Turning Beat, so its scene card cannot be filled",
+                    scene.scene_order
+                )
+            })?;
+
+        opposition = opposition_text.to_string();
+        turn = truncate_chars(&crate::format::format_turning_beat_turn(beat), 240);
+        intended_outcome = if scene.purpose.trim().is_empty() {
+            goal.clone()
+        } else {
+            truncate_chars(&scene.purpose, 160)
+        };
+        value_shift = ValueShift {
+            axis: axis.axis.trim().to_string(),
+            before: crate::format::charge_label(&axis.opening),
+            after: crate::format::charge_label(&axis.closing),
+        };
+        // A McKee plan carries no emotion field: the planned end state is the
+        // closing Charge, which `value_shift.after` already carries. Do not
+        // misuse `EmotionShift` by copying a Charge into its `exit` string — the
+        // field keeps its emotion semantics and says honestly that no planned
+        // emotion shift exists. `entry` remains the POV's realised state.
+        emotion_exit = NO_PLANNED_EMOTION_SHIFT.to_string();
+        gap = Some(scene_gap);
+        turning_beat = Some(beat.clone());
+        required_beats = scene
+            .beats
+            .iter()
+            .map(crate::format::format_required_beat)
+            .collect();
+        promises_due = context
+            .novel
+            .narrative_promises_due
+            .iter()
+            .map(|promise| {
+                truncate_chars(
+                    &format!("{}: {}", promise.promise_type, promise.description),
+                    160,
+                )
+            })
+            .collect();
+        // The chapter position is metadata, not a constraint: `planned_scene_count`
+        // is the stored plan's Scene count and `is_closer` says the current
+        // Scene is the chapter's last one. Both are additive and skipped for
+        // non-McKee packets.
+        planned_scene_count = chapter_scene_count.map(|count| count.max(1) as u32);
+        is_closer = chapter_scene_count.is_some_and(|count| {
+            placement.scene_order.unwrap_or(1).max(1) as usize >= count.max(1)
+        });
+    }
+
+    // Due Key Facts are hard canon constraints: the writer cannot omit or alter
+    // the fact value. A secret Key Fact ships only through the secret gate's
+    // envelope (or not at all); the caller projected the approved constraints
+    // and reports any withheld fact explicitly, so nothing is fabricated here.
+    let hard_constraints: Vec<PacketConstraint> = if mckee {
+        due_key_constraints.to_vec()
+    } else {
+        Vec::new()
+    };
+
     Ok(DraftingPacketV1 {
         schema_version: "drafting_packet_v1".to_string(),
         packet_id: preparation_id.to_string(),
@@ -4602,24 +5158,22 @@ fn build_drafting_packet_v1_for_prepare_scene(
                 source: canon_source,
             },
             goal: goal.clone(),
-            opposition: "Scene conflict".to_string(),
+            opposition,
             turn,
-            intended_outcome: goal,
-            value_shift: ValueShift {
-                axis: "narrative".to_string(),
-                before: "opening".to_string(),
-                after: "shifted".to_string(),
-            },
+            intended_outcome,
+            value_shift,
+            gap,
+            turning_beat,
             emotion: EmotionShift {
                 entry: entry_emotion,
-                exit: "changed".to_string(),
+                exit: emotion_exit,
             },
             chapter: PacketChapter {
                 book_number: placement.book_number.max(1) as u32,
                 number: placement.chapter_number.max(1) as u32,
                 scene_index: placement.scene_order.unwrap_or(1).max(1) as u32,
-                planned_scene_count: None,
-                is_closer: false,
+                planned_scene_count,
+                is_closer,
             },
             target_words: TargetWords {
                 min: 800,
@@ -4634,20 +5188,16 @@ fn build_drafting_packet_v1_for_prepare_scene(
             rating: purpose.content_rating.clone(),
             tone: None,
             participants,
-            required_beats: purpose
-                .expected_beats
-                .iter()
-                .map(|b| truncate_chars(b, 120))
-                .collect(),
-            promises_due: context
-                .novel
-                .narrative_promises_due
-                .iter()
-                .map(|p| truncate_chars(&p.description, 120))
-                .collect(),
+            required_beats,
+            promises_due,
             prohibited_outcomes: Vec::new(),
         },
-        hard_constraints: Vec::new(),
+        character_design_slice: if mckee {
+            context.novel.character_design_slice.clone()
+        } else {
+            Vec::new()
+        },
+        hard_constraints,
         continuity: PacketContinuity::default(),
         voice: PacketVoice::default(),
         editorial_memory: EditorialMemory::default(),

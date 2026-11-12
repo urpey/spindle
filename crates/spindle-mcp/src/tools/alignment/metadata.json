@@ -488,8 +488,10 @@
           "workflow-authoring",
           "workflow-write"
         ],
-        "tools": [],
-        "trigger": "Load for the typed drafting-packet rollout boundary."
+        "tools": [
+          "prepare_scene"
+        ],
+        "trigger": "Load for the McKee filled-packet writer brief and the drafting-packet rollout boundary."
       },
       {
         "name": "scene-writer/offloaded-generation",

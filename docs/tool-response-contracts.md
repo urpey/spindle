@@ -30,6 +30,15 @@ may refine v1; a breaking result-envelope change requires a new contract major
 version and the planned compatibility adapter. Merely omitting discovery schema
 metadata never changes a result envelope.
 
+Additive v1 refinement (McKee only): `GetChapterBriefingOutput.chapter_plan`
+gained an optional `scene_scope` object. It is present only for a McKee
+project, where `scenes` is deliberately narrowed to the current Scene, and
+carries `mode` (`current_scene_only`), `current_scene_order`,
+`planned_scene_count` and `exposed_scene_count`. The field is skipped entirely
+for non-McKee projects (their `chapter_plan` bytes are unchanged), so the
+existing v1 contract is refined additively rather than replaced. No other output
+shape changed.
+
 The projection is cached for direct routers and idempotent for secondary proxies.
 Receipts retain their schemas, all non-description input keywords remain exact,
 and other tool metadata stays intact. Generated `research_query` describes the

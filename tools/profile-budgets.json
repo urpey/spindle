@@ -4,7 +4,7 @@
     "default": {
       "tools": 181,
       "input_bytes": 180181,
-      "full_bytes": 793333
+      "full_bytes": 833541
     },
     "new-book": {
       "tools": 14,
@@ -14,22 +14,22 @@
     "minimal": {
       "tools": 22,
       "input_bytes": 30863,
-      "full_bytes": 228232
+      "full_bytes": 251890
     },
     "write": {
       "tools": 122,
       "input_bytes": 124044,
-      "full_bytes": 510111
+      "full_bytes": 538851
     },
     "import": {
       "tools": 40,
       "input_bytes": 21665,
-      "full_bytes": 243064
+      "full_bytes": 248146
     },
     "authoring": {
       "tools": 78,
       "input_bytes": 96813,
-      "full_bytes": 377631
+      "full_bytes": 406371
     },
     "planning": {
       "tools": 38,
@@ -84,7 +84,7 @@
     "legacy-all": {
       "tools": 181,
       "input_bytes": 180181,
-      "full_bytes": 793333
+      "full_bytes": 833541
     },
     "mckee": {
       "tools": 11,

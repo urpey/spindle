@@ -875,7 +875,14 @@ impl SqliteSpindleService {
                         context: resolved.context,
                         subject_table: resolved.subject_table,
                         subject_id: resolved.subject_id,
-                        predicate: Some(resolved.key),
+                        // The reserved `key_fact.<kind>:` predicate namespace is
+                        // the durable Key Fact marker (see
+                        // `spindle_core::key_fact`). The author key is preserved
+                        // verbatim after it; ordinary facts never carry it.
+                        predicate: Some(spindle_core::key_fact::key_fact_predicate(
+                            resolved.kind,
+                            &resolved.key,
+                        )),
                         value_kind: Some("string".to_string()),
                         value_text: Some(resolved.value),
                         value_number: None,

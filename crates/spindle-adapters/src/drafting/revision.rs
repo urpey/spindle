@@ -1574,6 +1574,7 @@ mod tests {
             canon_snapshot_hash: "canon-hash-1".into(),
             plan_revision: "plan-1".into(),
             source_versions: vec![source.clone()],
+            character_design_slice: vec![],
             scene_card: SceneCardV1 {
                 source: source.clone(),
                 pov: PacketPov {
@@ -1592,6 +1593,8 @@ mod tests {
                     before: "concealed".into(),
                     after: "exposed".into(),
                 },
+                gap: None,
+                turning_beat: None,
                 emotion: EmotionShift {
                     entry: "wary".into(),
                     exit: "resolute".into(),

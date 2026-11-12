@@ -2813,6 +2813,9 @@ mod tests {
                 economy_briefing: Vec::new(),
                 active_threads,
                 previous_scene_tail: None,
+                planned_scene: None,
+                realized_scenes: Vec::new(),
+                character_design_slice: Vec::new(),
             },
             scene: SceneContextSceneLayer {
                 location: LocationSummary {

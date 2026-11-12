@@ -104,6 +104,15 @@ pub struct SceneCardV1 {
     pub turn: String,
     pub intended_outcome: String,
     pub value_shift: ValueShift,
+    /// The planned Gap (expected versus actual result), for McKee projects
+    /// only. Additive and skipped when unset, so an existing project's packet
+    /// JSON is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap: Option<crate::scene_value::SceneGap>,
+    /// The Scene's Turning Beat (the structured Beat of kind `turn`), for
+    /// McKee projects only. Additive and skipped when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turning_beat: Option<crate::beats::PlannedBeat>,
     pub emotion: EmotionShift,
     pub chapter: PacketChapter,
     pub target_words: TargetWords,
@@ -212,6 +221,12 @@ pub struct DraftingPacketV1 {
     pub plan_revision: String,
     pub source_versions: Vec<PacketSource>,
     pub scene_card: SceneCardV1,
+    /// The Character Design slice the writer may see for this Scene (tested
+    /// contradiction, conscious desire, behaviour cues), for McKee projects
+    /// only. Additive and skipped when empty; it never carries the hidden
+    /// layer or the unconscious desire.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub character_design_slice: Vec<crate::character_design::SceneCharacterDesignSlice>,
     pub hard_constraints: Vec<PacketConstraint>,
     pub continuity: PacketContinuity,
     pub voice: PacketVoice,

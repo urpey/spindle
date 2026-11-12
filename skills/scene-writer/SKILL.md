@@ -25,6 +25,8 @@ Save only manuscript prose in the draft text (no assistant prefaces, beat outlin
 3. Use `get_writer_state`, `get_chapter_briefing`, `get_scene_context`, `get_character_snapshot`, `find_scenes_referencing`, `list_chapter_scenes`, or `list_book_chapters` when inspecting individual slices outside `prepare_scene`.
 4. Before offloading to a server-side route, check `bible://config/routing` (`caller_should_send_brief`, `adapter_kind`) and load `get_reference(name="scene-writer/offloaded-generation")`.
 
+**McKee 結構專案：** `drafting_packet_v1` 即完整寫作簡報；只讓看到該 packet 的子代理動筆，其餘場景計畫、隱藏層與回收位置不得進入上下文。細節見 `get_reference(name="scene-writer/drafting-packets")`。
+
 ## Step 2: Enforce Canon, Voice, and Constraints
 
 - **Project Style Requirements (`novel.style_directive`)**: Obey `reader_contract.promise`, `style_notes`, `boundaries`, `[STYLE DIRECTIVE]` world rules, and `narrator_voice` (`emotional_register`, `pacing_feel`, `comedy_density`, `interiority_ratio`, `chapter_ending_style`).
@@ -53,7 +55,7 @@ Preflight with `commit_scene` (`dry_run: true`) using the payload you intend to 
 2. **Step 5a — Genre & Style Gate**: Verify tone match, `narrator_voice` delivery, genre payload density, active co-leads, `chapter_ending_style`, and cadence. Rewrite and re-save if any check fails.
 3. **Step 5b — Fiction Anti-Slop & Craft Gate**: Check `anti_slop` against `compact_shelf_digest`, `voice_samples`, and `scene_negatives` (full 12-shelf catalog at `bible://references/anti-slop`):
    - **Hard shelves**: `contrast_not_x_but_y` (<=1/chapter), `emotion_cocktail` (0), `fishing_ending` (0).
-   - **Soft shelves** (advisory; `said_bookism` is soft-only by default at <=2 non-`said` tags/chapter): `said_bookism`, `body_reactions`, `eye_department`, `gesture_rack`, `atmosphere_prefabs`, `naming_watchlist`, `rhythm_cadence`, `triadic_listing`, `solitary_fade`.
+   - **Soft shelves**: advisory against the digest; the full 12-shelf catalog and per-shelf limits are at `bible://references/anti-slop`.
    - When a shelf hits, rewrite from the scene beat in 1–2 passes (never synonym-swap) and re-save.
 4. **Consistency & Review**: Run `check_consistency` (`canonical_fact_prose_drift`, `world_rule_semantic_drift`, `voice_drift`, `retcon_reachability`, `style_compliance`, `temporal_coherence`, `chronology`, `knowledge_timing`; with `deep_check: true`, inspect `audit_coverage` and `next_offset`). Use `run_dual_persona_review` for Craft Technician, Literary Critic, and Target Reader evaluation.
 
@@ -67,14 +69,12 @@ Call `commit_scene` once with `full_text`, `summary`, `content_rating`, `authors
 
 ## On-Demand References (Load Only When Triggered)
 
-Never read every reference before drafting; call `get_reference` only when needed:
+Never read every reference before drafting; call `get_reference` only when needed. Each
+manifest trigger names when to load it:
 
-- `scene-writer/offloaded-generation`: Explicit-rating offload, `generation_id` receipts, and `bible://config/routing` (`caller_should_send_brief` / `adapter_kind`).
-- `scene-writer/craft-and-voice`: Swain's Scene/Sequel framework, MRU/dialogue/POV craft, and common failure modes.
-- `scene-writer/research-and-sources`: Scene research packs, read-only canon recon subagents, and local file sync.
-- `scene-writer/authoring-runs`: Supervised authoring run drafting and post-commit canon mining.
-- `scene-writer/drafting-packets`: Typed drafting-packet rollout boundary.
-- `anti-slop`: Full 12-shelf fiction anti-slop catalog.
+- `scene-writer/offloaded-generation`, `scene-writer/craft-and-voice`,
+  `scene-writer/research-and-sources`, `scene-writer/authoring-runs`,
+  `scene-writer/drafting-packets` (McKee packet brief), `anti-slop`.
 
 <!-- tool: annotate_scene_beats -->
 <!-- tool: check_consistency -->

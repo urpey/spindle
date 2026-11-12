@@ -84,6 +84,41 @@ canon or silently resolve contradictory author locks. P3 can later provide the
 same card. `is_closer` is explicit even when final chapter length is unknown.
 Person/tense may inherit an author-approved project default, with provenance.
 
+### The filled McKee scene card
+
+For a McKee-structured project the card is not provisional: `prepare_scene`
+fills it from the current planned Scene. `value_shift` carries the primary Value
+Axis and its opening/closing Charge rendered readably (`positive`,
+`negative (contrary)`, `negative (contradictory)`,
+`negative (negation of the negation)`); `opposition` and the additive `gap`
+field carry the planned opposition and the expected-versus-actual Gap; `turn`
+and the additive `turning_beat` field carry the structured Beat of kind `turn`
+(tactic, said, wanted, per-Beat Gap); `required_beats` are the planned
+structured Beats; `emotion.entry` keeps the POV's realised state and
+`emotion.exit` says `unchanged (no planned emotion shift)` because a McKee plan
+has no emotion field (the planned end state is the closing Charge in
+`value_shift.after`); and
+`chapter.planned_scene_count` / `is_closer` come from the chapter plan as
+chapter-position metadata, not constraints. A
+`character_design_slice` on the packet carries only the tested contradiction,
+conscious desire and behaviour cues. Every additive field is serde-defaulted and
+skipped when unset, so a non-McKee packet serializes byte-identically.
+
+Due Key Facts become hard constraints: a fact is due when the reserved
+`key_fact.<kind>:` predicate marks it and its valid-from placement is this
+book/chapter with the same `scene_order` (or a chapter-level `None`). It appears
+with kind `canon`, its value and the unique fact id as the constraint id — the
+predicate alone can collide — so a Key Fact cannot be omitted or altered. An
+ordinary planned fact is not a packet constraint. A due secret Key Fact ships
+only inside the `[SECRETS IN PLAY]` envelope when a circle member is present;
+otherwise the value is withheld and an explicit `due_key_facts` unavailable-pass
+entry records the omission. Character Design secrets are never a
+constraint. `promises_due` carries a promise's nature (type and description) for
+a promise planted or reinforced in the Scene; the planned payoff placement,
+payoff Turning Beat and target Act never enter the packet. A McKee Scene with no
+planned value plan (no plan, primary axis, opposition, Gap or Turning Beat)
+produces an unavailable packet entry with a reason, never placeholder text.
+
 Only approved prose excerpts enter `exemplars`; existing do-rules remain rules.
 If none exist, say `exemplars=[]`. Never manufacture a “voice sample.” Default
 memory covers the previous eight accepted scenes plus the current chapter:
