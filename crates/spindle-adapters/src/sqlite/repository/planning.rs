@@ -869,7 +869,7 @@ fn check_refs(
             for (key, v) in m {
                 let field_type = match key.as_str() {
                     "character_id" | "character_a_id" | "character_b_id" | "character_ids"
-                    | "pov_character_id" => Some("character"),
+                    | "pov_character_id" | "actor_character_id" => Some("character"),
                     "location_id" => Some("location"),
                     "connected_theme_ids" | "target_theme_ids" | "theme_ids" => Some("theme"),
                     "connected_conflict_ids" | "target_conflict_ids" => Some("conflict"),
@@ -988,6 +988,11 @@ const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "scene_missing_inaction_cost",
     "scene_climax_missing_dilemma",
     "scene_dilemma_unknown_contradiction",
+    "scene_beats_missing",
+    "scene_missing_turning_beat",
+    "scene_turning_beat_out_of_range",
+    "scene_turning_beat_not_turn",
+    "scene_multiple_turn_beats",
 ];
 
 /// One blocking finding rendered for a caller-facing error string. The path
@@ -1241,7 +1246,7 @@ fn collect_ref_findings(
             for (key, child) in m {
                 let field_type = match key.as_str() {
                     "character_id" | "character_a_id" | "character_b_id" | "character_ids"
-                    | "pov_character_id" => Some("character"),
+                    | "pov_character_id" | "actor_character_id" => Some("character"),
                     "location_id" => Some("location"),
                     "connected_theme_ids" | "target_theme_ids" | "theme_ids" => Some("theme"),
                     "connected_conflict_ids" | "target_conflict_ids" => Some("conflict"),
@@ -5583,6 +5588,22 @@ impl Repository {
                                         scene_order: sc.scene_order,
                                         summary: sc.summary,
                                         beat_structure: sc.beat_structure,
+                                        beats: sc
+                                            .beats
+                                            .into_iter()
+                                            .map(|beat| PlanningBeat {
+                                                kind: beat.kind,
+                                                actor_character_id: beat
+                                                    .actor_character_id
+                                                    .map(PlanningRef::ExistingRecordId),
+                                                tactic: beat.tactic,
+                                                said: beat.said,
+                                                wanted: beat.wanted,
+                                                gap: beat.gap,
+                                                swain_label: beat.swain_label,
+                                            })
+                                            .collect(),
+                                        turning_beat: sc.turning_beat,
                                         character_ids: sc
                                             .character_ids
                                             .into_iter()

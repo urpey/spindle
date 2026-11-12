@@ -405,6 +405,26 @@ Gap or dilemma) before persisting; the planning validator records the same
 shapes as findings at the operation path. Unmarked projects are not judged by
 the McKee shape rules: their optional value fields are stored exactly as sent.
 
+Structured Beats replace string beats for McKee projects. A planned Scene
+carries `beats`, an ordered list of typed Beats — a closed `kind` (`action`,
+`reaction`, `turn`), an optional `actor_character_id` (a planning reference in
+the artifact, a record id in the stored plan), `tactic`, `said`, `wanted` and a
+per-Beat `gap` (expected versus actual) — plus `swain_label`, a free-text label
+that never becomes a structural kind (ADR 0007). The actor key is spelled out
+so planning's generic `*_id` reference resolution does not mistake another
+operation's `actor` field for a Beat character. `turning_beat` names the Scene's
+Turning Beat as a 1-based position in `beats`; a Scene therefore numbers no Beat
+of its own and the reference cannot drift from the array. The same fields are
+additive and serde-defaulted on `PlanChapterSceneInput` / `PlannedScene` and on
+the stored chapter-plan JSON, so existing plans keep their exact output, while
+`beat_structure: Vec<String>` stays readable for every project. For a McKee
+project the value-chain pass also records stage-recordable blocking findings for
+a Scene with no Beats, no Turning Beat reference, a reference outside the array,
+a referenced Beat that is not of kind turn, and more than one Turn Beat. These
+findings use the same JSON-pointer paths as the value findings
+(`.../scenes/{j}/beats`, `.../scenes/{j}/turning_beat`). Unmarked projects get
+no Beat findings; there is no migration because chapter plans are JSON.
+
 For McKee projects the artifact's own `schedule.sequences` is validated at every
 planning level (a non-empty list outside Chapter is `sequence_wrong_level`) and
 the value-chain pass runs at Chapter and Scene acceptance. It builds the ordered

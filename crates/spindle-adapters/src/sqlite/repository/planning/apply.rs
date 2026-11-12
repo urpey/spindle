@@ -22,6 +22,9 @@ pub(crate) fn resolve_operation(
                     if matches!(key.as_str(), "emotional_state" | "base_emotions") {
                         continue;
                     }
+                    // A structured Beat's character is `actor_character_id`, so
+                    // the generic `_id` suffix covers it; no bare `actor` special
+                    // case is needed (or wanted) here.
                     if key.ends_with("_id") || key.ends_with("_ids") || key == "controlling_faction"
                     {
                         fn one(v: &mut Value, refs: &BTreeMap<String, String>) -> Result<()> {
@@ -699,6 +702,9 @@ fn scope_guard(
                     ) {
                         continue;
                     }
+                    // A structured Beat's character is `actor_character_id`, so
+                    // the generic `_id` suffix covers it; no bare `actor` special
+                    // case is needed (or wanted) here.
                     if key.ends_with("_id") || key.ends_with("_ids") || key == "controlling_faction"
                     {
                         let ids: Vec<&str> = if let Some(a) = v.as_array() {

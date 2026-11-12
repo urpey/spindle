@@ -461,6 +461,8 @@ mod plan_ratify {
             scene_order: order,
             summary: summary.to_string(),
             beat_structure: Vec::new(),
+            beats: Vec::new(),
+            turning_beat: None,
             character_ids: Vec::new(),
             location_id: None,
             content_rating: None,
@@ -498,6 +500,38 @@ mod plan_ratify {
         }
     }
 
+    /// Action plus one Turn Beat for the McKee amendment fixtures.
+    fn value_beats() -> Vec<spindle_core::beats::PlannedBeat> {
+        use spindle_core::beats::{BeatKind, PlannedBeat};
+        use spindle_core::scene_value::SceneGap;
+        vec![
+            PlannedBeat {
+                kind: BeatKind::Action,
+                actor_character_id: Some("character:alice".into()),
+                tactic: "Ask for the sealed ledger".into(),
+                said: "Show me the ledger.".into(),
+                wanted: "The truth of the forged seal".into(),
+                gap: SceneGap {
+                    expected: "The ledger clears her".into(),
+                    actual: "A page is missing".into(),
+                },
+                swain_label: None,
+            },
+            PlannedBeat {
+                kind: BeatKind::Turn,
+                actor_character_id: Some("character:alice".into()),
+                tactic: "Name the forger before the hall".into(),
+                said: "Then the hall forged its own record.".into(),
+                wanted: "A truth the hall cannot bury".into(),
+                gap: SceneGap {
+                    expected: "The hall hears her".into(),
+                    actual: "The hall orders her silence".into(),
+                },
+                swain_label: None,
+            },
+        ]
+    }
+
     /// A scene carrying a complete, shape-valid McKee value plan.
     fn value_scene(
         order: i32,
@@ -509,6 +543,8 @@ mod plan_ratify {
             scene_order: order,
             summary: summary.to_string(),
             beat_structure: vec!["turn".into()],
+            beats: value_beats(),
+            turning_beat: Some(2),
             character_ids: vec!["character:alice".to_string()],
             location_id: Some("location:hall".to_string()),
             content_rating: Some(spindle_core::models::ContentRating::General),
@@ -739,6 +775,77 @@ mod plan_ratify {
             "insert_at renumbers the spine 1..n"
         );
         assert_eq!(after.plan_revision, Some(1));
+    }
+
+    #[tokio::test]
+    async fn apply_scene_add_carries_structured_beats() {
+        let (_tmp, svc) = fresh_service_local().await;
+        let project = project_with_future_chapter(
+            &svc,
+            "PA add beats",
+            5,
+            vec![scene(1, "first")],
+            Vec::new(),
+        )
+        .await;
+        // A non-McKee project may still carry structured Beats; `scene_add`
+        // must insert the Beat list and the 1-based Turning Beat instead of
+        // defaulting them away.
+        let id = stage(
+            &svc,
+            &project.project_id,
+            "scene_add",
+            Some(5),
+            serde_json::json!({
+                "scene_order": 99,
+                "summary": "inserted with beats",
+                "purpose": "carry structured Beats through scene_add",
+                "character_ids": ["character:alice"],
+                "insert_at": 2,
+                "beats": [
+                    {
+                        "kind": "action",
+                        "actor_character_id": "character:alice",
+                        "tactic": "Ask for the sealed ledger",
+                        "said": "Show me the ledger.",
+                        "wanted": "The truth of the forged seal",
+                        "gap": {"expected": "The ledger clears her", "actual": "A page is missing"}
+                    },
+                    {
+                        "kind": "turn",
+                        "actor_character_id": "character:alice",
+                        "tactic": "Name the forger before the hall",
+                        "said": "Then the hall forged its own record.",
+                        "wanted": "A truth the hall cannot bury",
+                        "gap": {"expected": "The hall hears her", "actual": "The hall orders her silence"},
+                        "swain_label": "conflict"
+                    }
+                ],
+                "turning_beat": 2
+            }),
+        )
+        .await;
+        let out = apply_one(&svc, &project.project_id, &id).await;
+        assert_eq!(out.results[0].outcome, "applied", "{out:?}");
+
+        let after = plan_of(&svc, &project.project_id, 5).await;
+        let inserted = after
+            .scenes
+            .iter()
+            .find(|scene| scene.summary == "inserted with beats")
+            .expect("the inserted scene is stored");
+        assert_eq!(inserted.scene_order, 2);
+        assert_eq!(
+            inserted.beats.len(),
+            2,
+            "scene_add must not drop a non-McKee project's structured Beats"
+        );
+        assert_eq!(inserted.beats[1].kind, spindle_core::beats::BeatKind::Turn);
+        assert_eq!(
+            inserted.beats[0].actor_character_id.as_deref(),
+            Some("character:alice")
+        );
+        assert_eq!(inserted.turning_beat, Some(2), "the Turning Beat is kept");
     }
 
     #[tokio::test]
@@ -1356,6 +1463,8 @@ mod plan_ratify {
                     scene_order: 1,
                     summary: "scene one".to_string(),
                     beat_structure: Vec::new(),
+                    beats: Vec::new(),
+                    turning_beat: None,
                     character_ids: vec!["character:alice".to_string()],
                     location_id: Some("location:hall".to_string()),
                     content_rating: Some(ContentRating::General),
@@ -1376,6 +1485,8 @@ mod plan_ratify {
                     scene_order: 2,
                     summary: "scene two".to_string(),
                     beat_structure: Vec::new(),
+                    beats: Vec::new(),
+                    turning_beat: None,
                     character_ids: vec!["character:bob".to_string()],
                     location_id: Some("location:courtyard".to_string()),
                     content_rating: Some(ContentRating::Teen),

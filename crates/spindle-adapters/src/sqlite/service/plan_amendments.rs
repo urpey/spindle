@@ -611,6 +611,8 @@ impl SqliteSpindleService {
                         scene_order: s.scene_order,
                         summary: s.summary.clone(),
                         beat_structure: s.beat_structure.clone(),
+                        beats: s.beats.clone(),
+                        turning_beat: s.turning_beat,
                         character_ids: s.character_ids.clone(),
                         location_id: s.location_id.clone(),
                         content_rating: s.content_rating.clone(),
@@ -693,6 +695,24 @@ impl SqliteSpindleService {
                     .get("content_rating")
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .or_else(|| neighbor.and_then(|nb| nb.content_rating.clone()));
+                // Structured Beats are part of the planned-Scene shape, so a
+                // non-McKee `scene_add` carries them through instead of dropping
+                // them on the `..Default::default()` boundary. A malformed Beats
+                // payload fails the amendment rather than silently losing Beats.
+                let beats = match payload.get("beats") {
+                    None | Some(serde_json::Value::Null) => Vec::new(),
+                    Some(value) => serde_json::from_value::<Vec<spindle_core::beats::PlannedBeat>>(
+                        value.clone(),
+                    )
+                    .context("scene_add has invalid structured beats")?,
+                };
+                let turning_beat = match payload.get("turning_beat") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(value) => Some(
+                        serde_json::from_value::<u32>(value.clone())
+                            .context("scene_add has an invalid turning_beat")?,
+                    ),
+                };
                 let new_scene = PlanChapterSceneInput {
                     scene_order: 0, // renumbered below
                     summary: payload
@@ -709,6 +729,8 @@ impl SqliteSpindleService {
                                 .collect()
                         })
                         .unwrap_or_default(),
+                    beats,
+                    turning_beat,
                     character_ids,
                     location_id,
                     content_rating,
@@ -741,9 +763,11 @@ impl SqliteSpindleService {
                 if let Some((_, target)) = scenes.iter_mut().find(|(_, s)| s.scene_order == order) {
                     // Deliberately only prose/cast/place edits. The value plan
                     // (primary and secondary axes, opposition, Gap, scene
-                    // question, Inaction Cost, risk, dilemma) is carried through
-                    // untouched, so a replacement can never drop a McKee Scene
-                    // out of the value chain or its Sequence membership.
+                    // question, Inaction Cost, risk, dilemma) and the structured
+                    // Beats (`beats` plus the `turning_beat` reference) are
+                    // carried through untouched, so a replacement can never drop
+                    // a McKee Scene out of the value chain or its Sequence
+                    // membership.
                     target.summary = payload
                         .get("summary")
                         .and_then(|v| v.as_str())

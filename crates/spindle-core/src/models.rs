@@ -1036,6 +1036,16 @@ pub struct PlannedScene {
     pub summary: String,
     #[serde(default)]
     pub beat_structure: Vec<String>,
+    /// The Scene's structured Beats in story order (McKee projects).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beats: Vec<crate::beats::PlannedBeat>,
+    /// 1-based position in `beats` of the Scene's Turning Beat.
+    ///
+    /// `0` is never a valid position; the generated schema advertises the
+    /// 1-based minimum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub turning_beat: Option<u32>,
     #[serde(default)]
     pub character_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5279,6 +5289,16 @@ pub struct PlanChapterSceneInput {
     pub summary: String,
     #[serde(default)]
     pub beat_structure: Vec<String>,
+    /// The Scene's structured Beats in story order (McKee projects).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beats: Vec<crate::beats::PlannedBeat>,
+    /// 1-based position in `beats` of the Scene's Turning Beat.
+    ///
+    /// `0` is never a valid position; the generated schema advertises the
+    /// 1-based minimum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub turning_beat: Option<u32>,
     #[serde(default)]
     pub character_ids: Vec<String>,
     /// Record id returned by create_location (e.g. "location:xyz789").

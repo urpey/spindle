@@ -306,6 +306,10 @@ pub struct StoredPlannedScene {
     pub summary: String,
     #[serde(default)]
     pub beat_structure: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beats: Vec<spindle_core::beats::PlannedBeat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turning_beat: Option<u32>,
     #[serde(default)]
     pub character_ids: Vec<String>,
     #[serde(default)]
@@ -343,6 +347,8 @@ impl StoredPlannedScene {
             scene_order: self.scene_order,
             summary: self.summary,
             beat_structure: self.beat_structure,
+            beats: self.beats,
+            turning_beat: self.turning_beat,
             character_ids: self.character_ids,
             location_id: self.location_id,
             content_rating: self.content_rating,
@@ -368,6 +374,8 @@ impl From<core::PlannedScene> for StoredPlannedScene {
             scene_order: value.scene_order,
             summary: value.summary,
             beat_structure: value.beat_structure,
+            beats: value.beats,
+            turning_beat: value.turning_beat,
             character_ids: value.character_ids,
             location_id: value.location_id,
             content_rating: value.content_rating,

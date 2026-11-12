@@ -24,3 +24,17 @@ path = "references/value-turns.md"
 trigger = "Load when judging or repairing a Value Turn, a Charge, a Gap, a broken value chain, or whether a Scene, Sequence or Act actually turns the Spine Axis, including Act climax Charges, depth progression and the reserved Act climax placeholder."
 profiles = ["default"]
 tools = []
+
+[[references]]
+name = "scene-design"
+path = "references/scene-design.md"
+trigger = "Load when designing or repairing a planned Scene: its Value Axis pressure, opposition, Scene Question, Gap, Turning Beat, Inaction Cost and structured Beats."
+profiles = ["default"]
+tools = []
+
+[[references]]
+name = "dialogue-tactics"
+path = "references/dialogue-tactics.md"
+trigger = "Load when designing or repairing dialogue as action: tactic, said versus wanted (subtext), Beats inside dialogue, the Turning Beat's line, and Swain labels as optional labels only."
+profiles = ["default"]
+tools = []
