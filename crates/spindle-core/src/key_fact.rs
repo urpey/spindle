@@ -10,13 +10,15 @@
 //! `create_key_fact` accepts nothing outside it, so a non-turning fact type can
 //! never be smuggled through the Key Fact path. The operation wraps the
 //! existing planned-and-pending canonical fact registration (`scene_id: None`,
-//! placed by book/chapter/scene), and the fact is attached to the scene later,
-//! once the scene row exists, through `bind_canonical_fact_to_scene`.
+//! placed by book/chapter/scene): the Scene may still be unplanned, and the
+//! fact is attached to the scene later, once the scene row exists, through
+//! `bind_canonical_fact_to_scene`.
 //!
-//! Whether a revealed secret is registered as a *secret* canonical fact is a
-//! separate, explicit decision: a Key Fact records that the secret is revealed
-//! (an event), so the fact itself is registered public and per-character
-//! knowledge is recorded through the existing knowledge/secret-of-fact path.
+//! A `revealed_secret` Key Fact is registered as a **secret** canonical fact:
+//! its subject character becomes the initial holder (one `knowledge_fact` row
+//! linked by `secret_of_fact_id`) and a concealment note explains the planned
+//! reveal. The circle expands only at the dramatised reveal, through
+//! `record_knowledge` with `secret_of_fact_id`, never at planning time.
 //!
 //! Variants deliberately carry no individual doc comments so schemars keeps
 //! emitting a plain closed enum instead of a `oneOf` of const objects (the same

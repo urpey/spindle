@@ -1002,7 +1002,9 @@ pub struct PlanningCreateNarrativePromiseInput {
     pub planned_payoff: Option<PlanningStoryPlacement>,
     /// The 1-based position in the payoff Scene's `beats` where the payoff
     /// lands, ideally its Turning Beat (the same numbering as the Scene's
-    /// `turning_beat`). Only meaningful with `planned_payoff`.
+    /// `turning_beat`). Requires `planned_payoff`: a Beat position without the
+    /// Scene that owns it is a stage-recordable blocking finding, and the
+    /// direct write refuses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
     pub planned_payoff_turning_beat: Option<i32>,
@@ -1021,9 +1023,11 @@ pub struct PlanningCreateNarrativePromiseInput {
 /// Only the closed [`KeyFactKind`] set is accepted, so a non-turning fact type
 /// is rejected at deserialization and can never enter the Key Fact path. The
 /// operation wraps the existing planned-and-pending canonical fact registration
-/// (`scene_id: None`, placed by `placement`); acceptance returns the canonical
-/// fact id, which is bound to the dramatising scene later with
-/// `bind_canonical_fact_to_scene` once the scene row exists.
+/// (`scene_id: None`, placed by `placement`); the Scene it names may still be
+/// unplanned. Acceptance returns the canonical fact id, which is bound to the
+/// dramatising scene later with `bind_canonical_fact_to_scene` once the scene
+/// row exists. A `revealed_secret` Key Fact is registered as a secret fact with
+/// its subject character in the initial circle of trust.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlanningCreateKeyFactInput {
@@ -1047,11 +1051,11 @@ pub struct PlanningCreateKeyFactInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
     /// The planned Scene that must dramatise the fact. `scene_order` is
-    /// required: the fact is placed on that scene position.
+    /// required; the Scene may be planned later (planned-and-pending).
     pub placement: PlanningStoryPlacement,
-    /// Optional reference to the upfront planned Scene's chapter plan (a
+    /// Optional reference to the planned Scene's chapter plan (a
     /// `plan_chapter` output proposal reference or an existing `chapter_plan`
-    /// record id). When present it must agree with `placement`.
+    /// record id). When present it must resolve and agree with `placement`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planned_scene_id: Option<PlanningRef>,
 }

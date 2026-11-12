@@ -27,7 +27,6 @@
 use super::values::{SceneGateEntry, evaluated_gate_scenes_in_conn};
 use super::*;
 use spindle_core::beats::BeatKind;
-use spindle_core::key_fact::KeyFactKind;
 use spindle_core::models::PlannedScene;
 use spindle_core::planning::{PlannedPromiseAction, PlanningOperationItem};
 use spindle_core::subject::SubjectTable;
@@ -83,7 +82,7 @@ pub(super) fn validate_mckee_promises(
 
     let promises = merged_promise_gates(input, ctx);
     validate_information_dependent_turning_beats(&scenes, &promises, ctx, findings);
-    validate_key_facts(conn, input, &scenes, &promises, findings)?;
+    validate_key_facts(conn, input, &promises, findings)?;
     Ok(())
 }
 
@@ -244,7 +243,6 @@ fn merged_promise_gates(
             PlannedPromiseAction::Payoff if !gate.pays_off_at(&event.placement) => {
                 gate.payoffs.push(event.placement.clone());
             }
-            PlannedPromiseAction::Payoff => {}
             _ => {}
         }
     }
@@ -338,10 +336,14 @@ fn validate_information_dependent_turning_beats(
 // Key Facts
 // ---------------------------------------------------------------------------
 
+/// Validate Key Facts. A Key Fact is planned-and-pending: its placement names
+/// the Scene that must dramatise it, but that Scene may still be unplanned, so
+/// the placement only has to be structurally valid. When explicit
+/// `planned_scene_id` is supplied it must resolve to a chapter plan that agrees
+/// with the placement; a plan whose Scene does not exist yet cannot disagree.
 fn validate_key_facts(
     conn: &rusqlite::Connection,
     input: &StagePlanningInput,
-    scenes: &[SceneGateEntry],
     promises: &BTreeMap<String, PromiseGate>,
     findings: &mut Vec<PlanningFinding>,
 ) -> Result<()> {
@@ -385,7 +387,7 @@ fn validate_key_facts(
                 vec![item.output_ref.clone()],
                 "positive book_number, chapter_number and a 1-based scene_order".to_string(),
                 format!("{placement:?}"),
-                "A Key Fact names the planned Scene that must dramatise it, so all three placement coordinates are required.",
+                "A Key Fact names the planned Scene that must dramatise it, so all three placement coordinates are required. The Scene itself may be planned later.",
             ));
         }
 
@@ -430,27 +432,21 @@ fn validate_key_facts(
         if !placement_shape_ok {
             continue;
         }
-        if scenes
-            .iter()
-            .all(|scene| !same_scene(&scene.placement(), placement))
-        {
-            findings.push(planning_finding(
-                "key_fact_placement_not_planned_scene",
-                PlanningFindingSeverity::Blocking,
-                format!("{path}/placement"),
-                vec![item.output_ref.clone()],
-                "a planned Scene in the merged planned range (accepted plans, staged ancestors, this artifact)".to_string(),
-                format!(
-                    "no planned Scene at book {} chapter {} scene {}",
-                    placement.book_number,
-                    placement.chapter_number,
-                    placement.scene_order.unwrap_or_default()
-                ),
-                "Plan the Scene in this artifact or an accepted/staged Chapter plan first; a Key Fact must name a Scene that will dramatise it.",
-            ));
-            continue;
-        }
-        if key_fact.kind == KeyFactKind::RevealedSecret {
+        if key_fact.kind.is_secret_reveal() {
+            if !secret_reveal_subject_is_character(conn, input, key_fact) {
+                findings.push(planning_finding(
+                    "key_fact_secret_reveal_requires_character_subject",
+                    PlanningFindingSeverity::Blocking,
+                    format!("{path}/subject_table"),
+                    vec![item.output_ref.clone()],
+                    "a 'character' subject_table with a character subject_id".to_string(),
+                    format!(
+                        "subject_table={:?}, subject_id={:?}",
+                        key_fact.subject_table, key_fact.subject_id
+                    ),
+                    "A revealed_secret Key Fact is registered as a secret canonical fact whose initial holder is its subject character; name that character, or keep the secret in the existing secret-knowledge flow.",
+                ));
+            }
             let promised = promises
                 .values()
                 .any(|promise| promise.planted_before(placement) && promise.pays_off_at(placement));
@@ -468,6 +464,29 @@ fn validate_key_facts(
         }
     }
     Ok(())
+}
+
+/// Whether a secret-reveal Key Fact's subject is a character.
+///
+/// A proposal reference that is not resolvable yet (a staged-ancestor
+/// `create_character`) is accepted here: the resolved record id is checked
+/// again when the proposal applies.
+fn secret_reveal_subject_is_character(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    key_fact: &PlanningCreateKeyFactInput,
+) -> bool {
+    if key_fact.subject_table.as_deref() != Some("character") {
+        return false;
+    }
+    match key_fact.subject_id.as_ref() {
+        Some(PlanningRef::ExistingRecordId(id)) => id.starts_with("character:"),
+        Some(PlanningRef::ProposalRef(key)) => apply::refs_in_conn(conn, &input.session_id)
+            .ok()
+            .and_then(|refs| refs.get(key).cloned())
+            .is_none_or(|id| id.starts_with("character:")),
+        None => false,
+    }
 }
 
 fn validate_key_fact_subject(

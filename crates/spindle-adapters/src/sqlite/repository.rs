@@ -842,42 +842,35 @@ impl Repository {
     /// Execute a multi-step canon unit-of-work inside a single SQLite writer
     /// transaction. If `f` returns `Err`, the transaction rolls back and zero
     /// writes are persisted.
+    ///
+    /// Called inside the bounded planning **application transaction**
+    /// (`SqlitePool::application_transaction`), SQLite already has a transaction
+    /// open on the pinned writer, so a nested `BEGIN` would be illegal. The
+    /// unit then nests through a savepoint instead: the outer transaction keeps
+    /// ownership of the atomic boundary and a nested failure rolls back only
+    /// the savepoint. The mode comes from the pool's task-local application
+    /// signal, not from probing `conn.is_autocommit()`: outside that signal the
+    /// writer gate guarantees no other transaction can be open here.
     pub async fn with_transaction<F, R>(&self, f: F) -> Result<R>
     where
         F: FnOnce(&mut CanonTransaction<'_>) -> Result<R> + Send + 'static,
         R: Send + 'static,
     {
+        let nested = self.inner.pool.in_application_transaction();
         self.inner
             .pool
             .write(move |conn| {
                 Ok((|| -> Result<R> {
-                    // Outside an application transaction this is a real
-                    // transaction. Inside one (planning apply pins the writer)
-                    // a nested BEGIN is illegal, so nest through a savepoint:
-                    // the outer transaction still owns the atomic boundary.
-                    if conn.is_autocommit() {
-                        let tx = conn.transaction()?;
-                        let mut unit = CanonTransaction {
-                            tx: CanonTxOwner::Transaction(tx),
-                        };
-                        let out = f(&mut unit)?;
-                        match unit.tx {
-                            CanonTxOwner::Transaction(tx) => tx.commit()?,
-                            CanonTxOwner::Savepoint(savepoint) => savepoint.commit()?,
-                        }
-                        Ok(out)
-                    } else {
-                        let savepoint = conn.savepoint()?;
-                        let mut unit = CanonTransaction {
-                            tx: CanonTxOwner::Savepoint(savepoint),
-                        };
-                        let out = f(&mut unit)?;
-                        match unit.tx {
-                            CanonTxOwner::Transaction(tx) => tx.commit()?,
-                            CanonTxOwner::Savepoint(savepoint) => savepoint.commit()?,
-                        }
-                        Ok(out)
-                    }
+                    let mut unit = CanonTransaction {
+                        tx: if nested {
+                            CanonTxOwner::Savepoint(conn.savepoint()?)
+                        } else {
+                            CanonTxOwner::Transaction(conn.transaction()?)
+                        },
+                    };
+                    let out = f(&mut unit)?;
+                    unit.commit()?;
+                    Ok(out)
                 })())
             })
             .await?
@@ -1783,10 +1776,12 @@ impl CanonTransaction<'_> {
         }
     }
 
-    /// Borrow the underlying write connection so sibling repositories can add
-    /// their own in-transaction statements without opening a second connection.
-    pub(crate) fn raw_tx(&self) -> &rusqlite::Connection {
-        self.conn()
+    /// Commit this unit of work, consuming the owned transaction or savepoint.
+    fn commit(self) -> rusqlite::Result<()> {
+        match self.tx {
+            CanonTxOwner::Transaction(tx) => tx.commit(),
+            CanonTxOwner::Savepoint(savepoint) => savepoint.commit(),
+        }
     }
 
     pub fn get_character(&self, id: &str) -> Result<Character> {

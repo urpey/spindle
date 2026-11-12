@@ -1021,13 +1021,13 @@ const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "key_fact_empty_key",
     "key_fact_empty_value",
     "key_fact_invalid_placement",
-    "key_fact_placement_not_planned_scene",
     "key_fact_scene_reference_unknown",
     "key_fact_scene_reference_mismatch",
     "key_fact_unknown_subject_table",
     "key_fact_subject_incomplete",
     "key_fact_subject_mismatch",
     "key_fact_secret_reveal_without_promise",
+    "key_fact_secret_reveal_requires_character_subject",
     "turning_beat_information_dependent_without_promise",
     "turning_beat_promise_unknown",
     "turning_beat_promise_not_planted_earlier",
@@ -3477,6 +3477,29 @@ fn validate_stage_input_in_conn_excluding(
                             co.book_number, co.chapter_number
                         ),
                         repair_hint: "Use positive 1-based book and chapter numbers.".to_string(),
+                    });
+                }
+            }
+            // Key Facts are available only to projects created through the
+            // planning root, the same capability gate as Story Spines and
+            // Character Designs. This is a hard staging error rather than a
+            // stage-recordable finding: an existing project cannot opt into
+            // the planning behaviour, and the author should see the error as
+            // soon as the operation is proposed.
+            PlanningOperation::CreateKeyFact(_) => {
+                if let Some(scope) = s.scope.as_ref()
+                    && !project_is_mckee_in_conn(conn, &scope.project_id)?
+                {
+                    findings.push(PlanningFinding {
+                        code: "key_fact_requires_mckee_project".to_string(),
+                        severity: PlanningFindingSeverity::Blocking,
+                        path: format!("{item_path}/operation"),
+                        related_refs: vec![item.output_ref.clone()],
+                        expected: "McKee-structured project".to_string(),
+                        actual: "project was not created through the planning root".to_string(),
+                        repair_hint:
+                            "Key Facts are available only to projects created through the new-book planning flow; existing projects cannot opt in."
+                                .to_string(),
                     });
                 }
             }

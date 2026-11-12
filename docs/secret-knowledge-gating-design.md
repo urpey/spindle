@@ -137,6 +137,13 @@ a consistency finding never echoes their text, predicate or fact id.
 A reveal is not a new mechanism — it is `record_knowledge` with `secret_of_fact_id` set and
 `learned_at` = the reveal scene's placement. Three paths produce one:
 
+Planning's `revealed_secret` Key Fact is the *planned* form of a reveal, not a fourth path: it is
+registered as a secret canonical fact (`secret = 1`) with its subject character in the initial
+circle (one `knowledge_fact` row linked by `secret_of_fact_id`) and a concealment note explaining
+the planned reveal, and it stays planned-and-pending until the Scene exists. It never expands the
+circle itself; the dramatised reveal still expands it through `record_knowledge` with
+`secret_of_fact_id` and `learned_at` at the reveal scene.
+
 1. **Manual:** the author calls `record_knowledge` (works today, minus the link column).
 2. **Draft-time:** the scene-writer skill instructs the drafter to flag an on-page reveal in the
    continuity package via `knowledge_learned` entries on `save_scene_draft` (added by the NEXT

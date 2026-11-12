@@ -158,6 +158,16 @@ impl SqliteSpindleService {
         input: CreateNarrativePromiseInput,
     ) -> Result<CreateNarrativePromiseOutput> {
         self.repository.get_project(&input.project_id).await?;
+        // The payoff Turning Beat is a position inside the planned payoff
+        // Scene, so it cannot stand without that Scene. The planning gate
+        // records this as a stage-recordable finding; the direct write has no
+        // proposal to stage, so it refuses with the same rule as a readable
+        // error. This is a structural rule and applies to every project.
+        if input.planned_payoff_turning_beat.is_some() && input.planned_payoff.is_none() {
+            anyhow::bail!(
+                "planned_payoff_turning_beat requires a planned_payoff placement naming the Scene that owns the Beat"
+            );
+        }
         let promise = self.repository.create_narrative_promise(&input).await?;
         self.refresh_entity_index(
             &promise.project_id,

@@ -13,7 +13,7 @@ impl CanonTransaction<'_> {
         let id = mint_id("term");
         let normalized = normalize_name(&item.term_text);
         let now = timestamp_to_micros(chrono::Utc::now());
-        self.raw_tx().execute(
+        self.conn().execute(
             "INSERT INTO term (id, project_id, branch_id, term_text, normalized_term, \
              pronunciation, definition, usage_context, origin, notes, archived_at, \
              created_at, updated_at) \
@@ -45,7 +45,7 @@ impl CanonTransaction<'_> {
         let connected_theme_json = serde_json::to_string(&item.connected_theme_ids)
             .context("serializing connected_theme_ids")?;
         let now = timestamp_to_micros(chrono::Utc::now());
-        self.raw_tx().execute(
+        self.conn().execute(
             "INSERT INTO motif (id, project_id, branch_id, name, normalized_name, \
              description, max_uses_per_chapter, connected_theme_ids, notes, \
              archived_at, created_at, updated_at) \
@@ -77,7 +77,7 @@ impl CanonTransaction<'_> {
         let forbidden_words = serde_json::to_string(&profile.forbidden_words)?;
         let example_lines = serde_json::to_string(&profile.example_lines)?;
         let now = timestamp_to_micros(chrono::Utc::now());
-        self.raw_tx().execute(
+        self.conn().execute(
             "INSERT INTO character_voice_profile (id, character_id, vocabulary, \
              sentence_structure, tics, forbidden_words, example_lines, tone, \
              established_in_scene_id, created_at, updated_at) \

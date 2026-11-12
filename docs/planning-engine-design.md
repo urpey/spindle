@@ -434,21 +434,28 @@ every non-turning fact keeps the existing mine-then-ratify flow. The input
 carries the subject (the existing canonical-fact subject model, or none for a
 project-wide fact), a unique `key` (the predicate), a `value`, optional
 `context`, a story placement with a required `scene_order`, and an optional
-`planned_scene_id` naming the planned chapter plan that owns the Scene.
-Acceptance applies `scene_id: None` with the Key Fact's book/chapter, returns
-the canonical fact id, and leaves scene binding to
-`bind_canonical_fact_to_scene` once the row exists. Stage-recordable blocking
-findings cover a placement that is not a positive book/chapter/scene, a
-placement that names no planned Scene in the merged range, an unresolvable
-planned-Scene reference, and a reference/placement pair naming different
-Scenes. The merged planned-Scene list is the same one the value-chain pass
-builds, so the two gates cannot disagree. V0060 adds no table: a Key Fact is a
-`canonical_fact` row.
+`planned_scene_id` naming the planned chapter plan that owns the Scene. The
+fact is **planned-and-pending**, which is the point of the operation: the Scene
+may still be unplanned, so a well-formed future placement accepts without an
+existing Scene row and is bound later. Acceptance applies `scene_id: None` with
+the Key Fact's book/chapter, returns the canonical fact id, and leaves scene
+binding to `bind_canonical_fact_to_scene` once the row exists. Stage-recordable
+blocking findings cover a placement that is not a positive
+book/chapter/scene, an unresolvable explicit planned-Scene reference, and a
+reference/placement pair naming different Scenes. A `revealed_secret` Key Fact
+needs a character subject and is registered as a secret canonical fact
+(`secret = 1`) with that character in the initial circle of trust (one
+`knowledge_fact` row linked by `secret_of_fact_id`) and a concealment note
+explaining the planned reveal; the circle expands later through
+`record_knowledge` at the dramatised reveal. Key Facts are available only to
+projects created through the planning root; an existing project gets a readable
+`key_fact_requires_mckee_project` staging error. V0060 adds no table: a Key Fact
+is a `canonical_fact` row.
 
 **Narrative promises.** `PlanningCreateNarrativePromiseInput` and the direct
 `CreateNarrativePromiseInput` gain `planned_payoff_turning_beat` (the 1-based
 payoff Beat position in the planned payoff Scene, the same numbering as the
-Scene's `turning_beat`, meaningful only with `planned_payoff`) and `target_act`
+Scene's `turning_beat`, requiring `planned_payoff`) and `target_act`
 (the 1-based order of the Act the promise pays off in). V0060 adds the two
 nullable columns; row mapping, subject snapshots, promise reads and the typed
 export emit them only when set, so unset rows and existing projects stay
@@ -456,10 +463,14 @@ byte-identical. A promise planned at the Series-Arc or Book level is long-range
 and must name a `target_act` present in the accepted/merged Act list; missing or
 unknown Acts are stage-recordable blocking findings. A Chapter/Scene placement
 may omit it. The pre-existing ordering rule is unchanged and still a hard
-blocking error: a payoff placement before its setup, a payoff Turning Beat
-outside the payoff Scene's Beat list, or a payoff Turning Beat that is not a
-Turn Beat. The Beat reference is optional when the payoff is not on the Turning
-Beat or its Scene is outside the current horizon.
+blocking error: a payoff placement before its setup. The payoff-Beat checks are
+stage-recordable Blocking findings instead: a payoff Turning Beat outside the
+payoff Scene's Beat list (`promise_payoff_turning_beat_out_of_range`) or naming
+a Beat that is not a Turn (`promise_payoff_turning_beat_not_turn`) stages with
+the finding, and only acceptance is refused. The Beat reference is optional
+when the payoff is not on the Turning Beat or its Scene is outside the current
+horizon. The direct `create_narrative_promise` write refuses a Beat reference
+with no `planned_payoff` as a readable error.
 
 **Deus-ex-machina guard.** On a McKee project a `revealed_secret` Key Fact needs
 an earlier-planted promise whose planned payoff lands in that Scene
@@ -474,7 +485,9 @@ promise planted in the same or a later Scene
 guards read the merged promise view (accepted branch-visible rows, staged
 ancestors, the current artifact, plus the merged promise schedule's plant and
 payoff events) with the same deterministic precedence as the Act and Sequence
-gates. Unmarked projects are exempt and their payloads are unchanged.
+gates. Unmarked projects keep the additive promise fields as plain optional
+data and their payloads are unchanged; they cannot use Key Facts at all (the
+staging error above).
 
 For McKee projects the artifact's own `schedule.sequences` is validated at every
 planning level (a non-empty list outside Chapter is `sequence_wrong_level`) and

@@ -1026,25 +1026,59 @@ async fn all_human_fixture_applies_allowlist_and_reads_six_complete_manifests() 
         .cloned()
         .expect("the Key Fact operation returns its canonical fact id");
     let mut count = 0;
-    for receipt in report.operations {
-        let Some(PlanningAppliedOutput::PlanChapter(_)) = receipt.result.as_ref() else {
-            continue;
-        };
-        let id = receipt.returned_ids.values().next().unwrap();
-        let plan = svc.repository.get_chapter_plan(id).await.unwrap();
-        assert_eq!(plan.project_id, scope.project_id);
-        assert_eq!(plan.scenes.len(), 2);
-        count += plan.scenes.len();
-        for scene in &plan.scenes {
-            assert_eq!(scene.character_ids.len(), 2);
-            assert!(scene.location_id.is_some());
-            assert!(scene.content_rating.is_some());
-            assert!(!scene.purpose.is_empty());
+    let mut plan_receipts = 0;
+    let mut key_fact_receipts = 0;
+    for receipt in &report.operations {
+        assert_eq!(
+            receipt.outcome,
+            PlanningOperationOutcome::Applied,
+            "every fixture operation applies: {:?}",
+            receipt.error
+        );
+        assert!(
+            receipt.result.is_some(),
+            "an applied receipt carries its output"
+        );
+        match receipt.result.as_ref().unwrap() {
+            PlanningAppliedOutput::PlanChapter(_) => {
+                plan_receipts += 1;
+                assert_eq!(
+                    receipt.returned_ids.len(),
+                    1,
+                    "a plan returns exactly its chapter_plan id"
+                );
+                let id = receipt
+                    .returned_ids
+                    .values()
+                    .next()
+                    .expect("the plan's chapter_plan id");
+                let plan = svc.repository.get_chapter_plan(id).await.unwrap();
+                assert_eq!(plan.project_id, scope.project_id);
+                assert_eq!(plan.scenes.len(), 2);
+                count += plan.scenes.len();
+                for scene in &plan.scenes {
+                    assert_eq!(scene.character_ids.len(), 2);
+                    assert!(scene.location_id.is_some());
+                    assert!(scene.content_rating.is_some());
+                    assert!(!scene.purpose.is_empty());
+                }
+                assert_eq!(plan.scenes[0].research_required, Some(true));
+                assert!(!receipt.prior_state.as_object().unwrap().is_empty());
+            }
+            PlanningAppliedOutput::CreateKeyFact(out) => {
+                key_fact_receipts += 1;
+                assert_eq!(
+                    receipt.returned_ids.get("key:seal"),
+                    Some(&out.canonical_fact_id),
+                    "the Key Fact returns its canonical fact id"
+                );
+                assert_eq!(receipt.returned_ids.len(), 1);
+            }
+            other => panic!("unexpected receipt kind in the all-human fixture: {other:?}"),
         }
-        assert_eq!(plan.scenes[0].research_required, Some(true));
-        assert!(!receipt.prior_state.as_object().unwrap().is_empty());
-        assert!(receipt.result.is_some());
     }
+    assert_eq!(plan_receipts, 3);
+    assert_eq!(key_fact_receipts, 1);
     assert_eq!(count, 6);
     // The Key Fact is a planned-and-pending canonical fact placed at the
     // planned Scene; it is not prose and it has no bound scene yet.
@@ -1399,6 +1433,78 @@ async fn failed_character_design_receipt_rolls_back_its_own_design() {
         secret_facts, 4,
         "retry creates the rolled-back design facts exactly once"
     );
+}
+
+#[tokio::test]
+async fn nested_savepoint_rolls_back_a_failed_unit_inside_the_application_transaction() {
+    use crate::sqlite::repository::CreateCanonicalFactParams;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, _root) = accepted_root(&svc).await;
+    let scope = session.scope.clone().unwrap();
+    let repo = svc.repository.clone();
+    let pool = svc.repository.pool().clone();
+
+    async fn fact_count(pool: &crate::sqlite::SqlitePool, project_id: &str) -> i64 {
+        let project_id = project_id.to_string();
+        pool.read(move |conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM canonical_fact WHERE project_id=?1",
+                [&project_id],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .unwrap()
+    }
+
+    let before = fact_count(&pool, &scope.project_id).await;
+    let project = scope.project_id.clone();
+    let branch = scope.branch_id.clone();
+    pool.application_transaction(true, || async {
+        let nested_repo = repo.clone();
+        let nested_project = project.clone();
+        let nested_branch = branch.clone();
+        // The Planning application transaction has already pinned the writer
+        // and opened a transaction, so this unit must nest through a savepoint.
+        let error: anyhow::Result<()> = nested_repo
+            .with_transaction(move |tx| {
+                tx.create_canonical_fact(CreateCanonicalFactParams {
+                    project_id: nested_project.clone(),
+                    branch_id: nested_branch.clone(),
+                    scene_id: None,
+                    book_number: 1,
+                    chapter_number: 1,
+                    subject_table: "project".into(),
+                    subject_id: None,
+                    predicate: "nested:savepoint".into(),
+                    value_kind: "string".into(),
+                    value_text: Some("rolled back".into()),
+                    value_number: None,
+                    unit: None,
+                    value_json: None,
+                    aliases: Vec::new(),
+                    scope: "invariant".into(),
+                    valid_from: None,
+                    valid_until: None,
+                    legacy_untyped: false,
+                    secret: false,
+                    concealment_note: None,
+                })?;
+                anyhow::bail!("nested unit failed after its write");
+            })
+            .await;
+        assert!(error.is_err(), "the nested unit reports its failure");
+        assert_eq!(
+            fact_count(&pool, &project).await,
+            before,
+            "the savepoint rolls the nested write back while the outer transaction is open"
+        );
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(fact_count(&pool, &project).await, before);
 }
 
 #[tokio::test]
@@ -13023,6 +13129,28 @@ async fn mckee_key_fact_stages_applies_and_binds_as_a_planned_and_pending_fact()
         value_place(1, 2, 1),
         Some(PlanningRef::ProposalRef(plan_ref)),
     ));
+
+    // A revealed secret needs a character subject: it becomes the initial
+    // holder of the secret fact. A project-wide reveal is stage-recordable
+    // Blocking, not a silent public fact.
+    let mut bad_subject = value_scene_artifact(
+        &fixture.session,
+        &[&fixture.cast, &fixture.series, &fixture.chapters, &promises],
+        vec![(2, value_chapter_two_scenes())],
+    );
+    bad_subject.operations.push(plain_key_fact_op(
+        "key:no-subject",
+        spindle_core::key_fact::KeyFactKind::RevealedSecret,
+        value_place(1, 2, 1),
+    ));
+    let bad_subject = fixture.svc.stage_planning(bad_subject).await.unwrap();
+    assert!(
+        value_codes(&bad_subject).contains("key_fact_secret_reveal_requires_character_subject"),
+        "{:?}",
+        bad_subject.findings
+    );
+    reject_planning(&fixture.svc, &fixture.session, &bad_subject).await;
+
     let scene_proposal = fixture.svc.stage_planning(scene_input).await.unwrap();
     assert!(
         scene_proposal.findings.is_empty(),
@@ -13056,6 +13184,48 @@ async fn mckee_key_fact_stages_applies_and_binds_as_a_planned_and_pending_fact()
             .as_ref()
             .and_then(|placement| placement.scene_order),
         Some(1)
+    );
+
+    // A revealed_secret Key Fact is a secret canonical fact whose initial
+    // circle of trust is its subject character. The reveal still reads back
+    // through planning; the circle expands only at the dramatised reveal.
+    let subject_id = fact.subject_id.clone().expect("the subject character id");
+    let (secret, concealment_note, holders): (i64, Option<String>, i64) = fixture
+        .svc
+        .repository
+        .pool()
+        .read({
+            let fact_id = fact_id.clone();
+            let subject_id = subject_id.clone();
+            move |conn| {
+                let secret = conn.query_row(
+                    "SELECT secret FROM canonical_fact WHERE id=?1",
+                    [&fact_id],
+                    |row| row.get(0),
+                )?;
+                let note = conn.query_row(
+                    "SELECT concealment_note FROM canonical_fact WHERE id=?1",
+                    [&fact_id],
+                    |row| row.get(0),
+                )?;
+                let holders = conn.query_row(
+                    "SELECT COUNT(*) FROM knowledge_fact WHERE secret_of_fact_id=?1 AND character_id=?2",
+                    rusqlite::params![&fact_id, &subject_id],
+                    |row| row.get(0),
+                )?;
+                Ok((secret, note, holders))
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(secret, 1, "a revealed_secret fact is a secret fact");
+    assert!(
+        concealment_note.is_some_and(|note| note.contains("Planned reveal")),
+        "the planned reveal is explained in the concealment note"
+    );
+    assert_eq!(
+        holders, 1,
+        "the subject character is in the initial circle of trust"
     );
 
     // The fact is bindable once the scene row exists.
@@ -13095,32 +13265,59 @@ async fn mckee_key_fact_stages_applies_and_binds_as_a_planned_and_pending_fact()
 }
 
 #[tokio::test]
-async fn mckee_key_fact_placement_must_name_a_planned_scene_and_agree_with_its_reference() {
+async fn mckee_key_fact_future_placement_is_planned_and_pending_and_references_still_agree() {
     let fixture = value_chain_fixture().await;
 
-    // A placement with no planned Scene in the merged range is Blocking.
-    let missing_scene = bundle(
+    // The placement names a Scene that is not planned yet: the Key Fact is
+    // planned-and-pending, so it stages and applies without the Scene row.
+    let future = bundle(
         &fixture.svc,
         &fixture.session,
         PlanningLevel::Chapter,
         &[&fixture.cast, &fixture.chapters],
         vec![key_fact_op(
-            "key:nowhere",
+            "key:future",
             spindle_core::key_fact::KeyFactKind::Death,
-            value_place(9, 9, 1),
+            value_place(1, 3, 1),
             None,
         )],
     )
     .await;
     assert!(
-        value_codes(&missing_scene).contains("key_fact_placement_not_planned_scene"),
-        "{:?}",
-        missing_scene.findings
+        future
+            .findings
+            .iter()
+            .all(|finding| !finding.code.starts_with("key_fact_")),
+        "a future placement must not be a Key Fact finding: {:?}",
+        future.findings
     );
-    reject_planning(&fixture.svc, &fixture.session, &missing_scene).await;
+    let report = accept(&fixture.svc, &fixture.session, &future).await;
+    let fact_id = report
+        .operations
+        .iter()
+        .find_map(|receipt| receipt.returned_ids.get("key:future"))
+        .cloned()
+        .expect("the future Key Fact returns its canonical fact id");
+    let fact = fixture
+        .svc
+        .repository
+        .get_canonical_fact(&fact_id)
+        .await
+        .expect("planned-and-pending key fact");
+    assert!(
+        fact.scene_id.is_none(),
+        "the future Scene does not exist yet"
+    );
+    assert_eq!((fact.book_number, fact.chapter_number), (1, 3));
+    assert_eq!(
+        fact.valid_from
+            .as_ref()
+            .and_then(|placement| placement.scene_order),
+        Some(1)
+    );
 
-    // The placement names an accepted Scene but the planned-scene reference
-    // names a different chapter plan: the two disagree.
+    // An explicit planned-scene reference still has to agree with the
+    // placement: a chapter plan for chapter 2 cannot own a chapter-1 Scene.
     let mut scene_input = value_scene_artifact(
         &fixture.session,
         &[&fixture.cast, &fixture.series, &fixture.chapters],
@@ -13304,7 +13501,7 @@ async fn mckee_information_dependent_turning_beat_needs_an_earlier_planted_promi
 }
 
 #[tokio::test]
-async fn non_mckee_projects_are_exempt_from_promise_and_key_fact_gates() {
+async fn non_mckee_projects_keep_promises_additive_and_cannot_use_key_facts() {
     let (_tmp, svc) = fresh_service_local().await;
     let (session, root) = accepted_non_mckee_project(&svc).await;
     let promise = bundle(
@@ -13330,33 +13527,24 @@ async fn non_mckee_projects_are_exempt_from_promise_and_key_fact_gates() {
     );
     accept(&svc, &session, &promise).await;
 
-    // A reveal Key Fact with no planned promise is not gated on an unmarked
-    // project either; it applies through the same canonical-fact path.
-    let key_fact = bundle(
-        &svc,
-        &session,
-        PlanningLevel::Chapter,
-        &[&root],
-        vec![plain_key_fact_op(
-            "key:plain",
-            spindle_core::key_fact::KeyFactKind::RevealedSecret,
-            value_place(1, 1, 1),
-        )],
-    )
-    .await;
+    // A Key Fact is a new planning capability, not an additive field: an
+    // existing project cannot opt into it. This follows the `story_spine_*` /
+    // `character_design_requires_mckee_project` precedent: a readable hard
+    // staging error, not a proposal that stages and then fails acceptance.
+    let mut key_fact = artifact(&session, "unused");
+    key_fact.level = PlanningLevel::Chapter;
+    key_fact
+        .parents
+        .insert(root.id.clone(), root.payload_hash.clone());
+    key_fact.operations = vec![plain_key_fact_op(
+        "key:plain",
+        spindle_core::key_fact::KeyFactKind::RevealedSecret,
+        value_place(1, 1, 1),
+    )];
+    let error = svc.stage_planning(key_fact).await.unwrap_err().to_string();
     assert!(
-        key_fact.findings.is_empty(),
-        "non-McKee Key Facts are not judged by the McKee guards: {:?}",
-        key_fact.findings
-    );
-    let report = accept(&svc, &session, &key_fact).await;
-    let fact_id = report.operations[0]
-        .returned_ids
-        .get("key:plain")
-        .expect("canonical fact id");
-    assert!(
-        svc.repository.get_canonical_fact(fact_id).await.is_ok(),
-        "the existing planned-and-pending path still applies"
+        error.contains("key_fact_requires_mckee_project"),
+        "existing projects cannot opt into Key Facts: {error}"
     );
 }
 

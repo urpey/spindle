@@ -5026,9 +5026,9 @@ pub struct CreateNarrativePromiseInput {
     pub planted_at: StoryPlacement,
     pub planned_payoff: Option<StoryPlacement>,
     /// The 1-based position in the payoff Scene's `beats` where the payoff
-    /// lands, ideally its Turning Beat. Only meaningful with `planned_payoff`.
-    /// Additive and serde-defaulted so pre-#28 callers and stored rows keep
-    /// their exact payload.
+    /// lands, ideally its Turning Beat. Requires `planned_payoff`; a Beat
+    /// position without its Scene is refused. Additive and serde-defaulted so
+    /// pre-#28 callers and stored rows keep their exact payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
     pub planned_payoff_turning_beat: Option<i32>,
