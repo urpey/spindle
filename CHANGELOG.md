@@ -4,19 +4,20 @@
 
 - Replace beat strings with structured **Beats** for McKee-structured projects.
   A planned Scene now carries `beats` — a closed `kind` (`action` / `reaction` /
-  `turn`), an optional `actor`, the `tactic`, what is `said`, what is `wanted`
-  (the subtext) and a per-Beat `gap` (expected versus actual) — plus an optional
-  free-text `swain_label`. Swain categories stay optional labels and never
-  become structural kinds or validation (ADR 0007). The same fields are
+  `turn`), an optional `actor_character_id`, the `tactic`, what is `said`, what
+  is `wanted` (the subtext) and a per-Beat `gap` (expected versus actual) — plus
+  an optional free-text `swain_label`. Swain categories stay optional labels and
+  never become structural kinds or validation (ADR 0007). The same fields are
   additive and serde-defaulted on the planning operation input (with a planning
-  reference for `actor`), the stored planned Scene, the chapter-plan JSON and
-  the briefing read path, so existing plans serialize exactly as before and
-  there is no migration (chapter plans are JSON).
+  reference for `actor_character_id`), the stored planned Scene, the chapter-plan
+  JSON and the briefing read path, so existing plans serialize exactly as before
+  and there is no migration (chapter plans are JSON).
 - Add the Turning Beat: `turning_beat` names the Beat whose Gap turns the
-  Scene's primary Value Axis, as the 1-based position of that Beat in `beats`.
-  For McKee projects a Scene with no Beats, no Turning Beat reference, a
-  reference outside the Beat list, a referenced Beat that is not of kind `turn`,
-  or more than one Turn Beat is blocked at Chapter/Scene acceptance with
+  Scene's primary Value Axis, as the 1-based position of that Beat in `beats`;
+  the generated schema advertises that `minimum: 1`. For McKee projects a Scene
+  with no Beats, no Turning Beat reference, a reference outside the Beat list, a
+  referenced Beat that is not of kind `turn`, or more than one Turn Beat is
+  blocked at Chapter/Scene acceptance with
   stage-recordable findings on JSON-pointer paths. Unmarked projects get no Beat
   findings.
 - Keep legacy `beat_structure` strings readable for every project, McKee and

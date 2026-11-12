@@ -512,12 +512,12 @@ fn planned_act(
 
 /// Three structured Beats for a fixture Scene: one action, one reaction and
 /// exactly one turn, with the Scene's Turning Beat pointing at the turn.
-/// `actor` and `opponent` are planning reference values.
+/// `actor_character_id` and `opponent` are planning reference values.
 fn scene_beats_for(actor: serde_json::Value, opponent: serde_json::Value) -> serde_json::Value {
     serde_json::json!([
         {
             "kind": "action",
-            "actor": actor.clone(),
+            "actor_character_id": actor.clone(),
             "tactic": "Press for the tide log",
             "said": "Show me the log.",
             "wanted": "A clean record that clears her name",
@@ -525,7 +525,7 @@ fn scene_beats_for(actor: serde_json::Value, opponent: serde_json::Value) -> ser
         },
         {
             "kind": "reaction",
-            "actor": opponent.clone(),
+            "actor_character_id": opponent.clone(),
             "tactic": "Stall behind procedure",
             "said": "The log is sealed until the assizes.",
             "wanted": "Time to remove his name",
@@ -534,7 +534,7 @@ fn scene_beats_for(actor: serde_json::Value, opponent: serde_json::Value) -> ser
         },
         {
             "kind": "turn",
-            "actor": actor,
+            "actor_character_id": actor,
             "tactic": "Wager the signet",
             "said": "Then take the signet as surety.",
             "wanted": "Ben's testimony",
@@ -553,7 +553,7 @@ fn solo_scene_beats(actor: &str) -> serde_json::Value {
     serde_json::json!([
         {
             "kind": "action",
-            "actor": reference(actor),
+            "actor_character_id": reference(actor),
             "tactic": "Test the tower door",
             "said": "The bell rang.",
             "wanted": "A reason she can name",
@@ -561,7 +561,7 @@ fn solo_scene_beats(actor: &str) -> serde_json::Value {
         },
         {
             "kind": "reaction",
-            "actor": reference(actor),
+            "actor_character_id": reference(actor),
             "tactic": "Talk herself out of it",
             "said": "Fog moves like that.",
             "wanted": "To stay safe",
@@ -569,7 +569,7 @@ fn solo_scene_beats(actor: &str) -> serde_json::Value {
         },
         {
             "kind": "turn",
-            "actor": reference(actor),
+            "actor_character_id": reference(actor),
             "tactic": "Climb to the lantern room",
             "said": "Then I'll look.",
             "wanted": "The truth of the bell",
@@ -10959,7 +10959,7 @@ fn value_beats() -> Vec<PlanningBeat> {
     vec![
         PlanningBeat {
             kind: BeatKind::Action,
-            actor: Some(PlanningRef::ProposalRef("cast:hero".into())),
+            actor_character_id: Some(PlanningRef::ProposalRef("cast:hero".into())),
             tactic: "Ask for the ledger".into(),
             said: "Show me the ledger.".into(),
             wanted: "Proof that the seal was forged".into(),
@@ -10968,7 +10968,7 @@ fn value_beats() -> Vec<PlanningBeat> {
         },
         PlanningBeat {
             kind: BeatKind::Reaction,
-            actor: Some(PlanningRef::ProposalRef("cast:hero".into())),
+            actor_character_id: Some(PlanningRef::ProposalRef("cast:hero".into())),
             tactic: "Test the seal against the light".into(),
             said: "The wax is still warm.".into(),
             wanted: "A witness she can trust".into(),
@@ -10977,7 +10977,7 @@ fn value_beats() -> Vec<PlanningBeat> {
         },
         PlanningBeat {
             kind: BeatKind::Turn,
-            actor: Some(PlanningRef::ProposalRef("cast:hero".into())),
+            actor_character_id: Some(PlanningRef::ProposalRef("cast:hero".into())),
             tactic: "Wager her post on the forgery".into(),
             said: "Then the harbor forged its own record.".into(),
             wanted: "The truth, whatever it costs".into(),
@@ -11297,11 +11297,11 @@ async fn mckee_value_chain_passes_and_round_trips_scene_value_fields() {
     assert_eq!(first.beats[1].swain_label.as_deref(), Some("conflict"));
     assert!(
         first.beats[0]
-            .actor
+            .actor_character_id
             .as_deref()
             .is_some_and(|actor| actor.starts_with("character:")),
         "planning apply resolves the Beat actor to a record id: {:?}",
-        first.beats[0].actor
+        first.beats[0].actor_character_id
     );
     assert_eq!(first.opposition.as_deref(), Some("The rival"));
     assert_eq!(first.gap.as_ref().unwrap().expected, "a welcome");
@@ -12321,7 +12321,7 @@ async fn mckee_structured_beats_stage_persist_and_read_back() {
     );
     assert!(
         first.beats.iter().all(|beat| beat
-            .actor
+            .actor_character_id
             .as_deref()
             .is_some_and(|id| id.starts_with("character:"))),
         "every Beat actor is resolved to a record id: {:?}",

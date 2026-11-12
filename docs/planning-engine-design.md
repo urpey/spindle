@@ -407,10 +407,12 @@ the McKee shape rules: their optional value fields are stored exactly as sent.
 
 Structured Beats replace string beats for McKee projects. A planned Scene
 carries `beats`, an ordered list of typed Beats — a closed `kind` (`action`,
-`reaction`, `turn`), an optional `actor` (a planning reference in the artifact,
-a record id in the stored plan), `tactic`, `said`, `wanted` and a per-Beat
-`gap` (expected versus actual) — plus `swain_label`, a free-text label that
-never becomes a structural kind (ADR 0007). `turning_beat` names the Scene's
+`reaction`, `turn`), an optional `actor_character_id` (a planning reference in
+the artifact, a record id in the stored plan), `tactic`, `said`, `wanted` and a
+per-Beat `gap` (expected versus actual) — plus `swain_label`, a free-text label
+that never becomes a structural kind (ADR 0007). The actor key is spelled out
+so planning's generic `*_id` reference resolution does not mistake another
+operation's `actor` field for a Beat character. `turning_beat` names the Scene's
 Turning Beat as a 1-based position in `beats`; a Scene therefore numbers no Beat
 of its own and the reference cannot drift from the array. The same fields are
 additive and serde-defaulted on `PlanChapterSceneInput` / `PlannedScene` and on

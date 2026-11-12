@@ -2860,7 +2860,7 @@ fn replan_output_contract() -> &'static str {
      `rationale` is mandatory and cites realized ids/events only — NO prose quotes.\n\
      Per-class payload fields (use EXACTLY these keys):\n\
      - synopsis_update: synopsis\n\
-     - scene_add: scene_order, summary, purpose, character_ids[], location_id?, content_rating?, beat_structure?[], insert_at\n\
+     - scene_add: scene_order, summary, purpose, character_ids[], location_id?, content_rating?, beat_structure?[], beats?[], turning_beat?, insert_at\n\
      - scene_drop: scene_order\n\
      - scene_replace: scene_order, summary, purpose, character_ids[], location_id?, content_rating?\n\
      - scene_reorder: new_order (array of existing scene_orders, a permutation)\n\
@@ -2940,7 +2940,7 @@ fn parse_replan_output(output: &str) -> anyhow::Result<Vec<RawPlanAmendment>> {
 ///   * `scene_add` — the full planned-scene shape plus an insert point:
 ///     `{scene_order: i32, summary: String, purpose: String, character_ids: [String],
 ///       location_id?: String, content_rating?: String, beat_structure?: [String],
-///       insert_at: i32}`
+///       beats?: [PlannedBeat], turning_beat?: u32, insert_at: i32}`
 ///   * `scene_drop` — `{scene_order: i32}`
 ///   * `scene_replace` — the mutable planned-scene fields keyed by order:
 ///     `{scene_order: i32, summary: String, purpose: String, character_ids: [String],

@@ -1119,12 +1119,17 @@ pub struct PlanningPlanChapterSceneInput {
     /// The Scene's structured Beats in story order (McKee projects).
     ///
     /// The stored [`crate::models::PlannedScene`] carries the same Beats with
-    /// `actor` resolved to a record id; this planning twin keeps the proposal
-    /// reference so a Scene can act a character created in the same batch.
+    /// `actor_character_id` resolved to a record id; this planning twin keeps
+    /// the proposal reference so a Scene can act a character created in the
+    /// same batch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub beats: Vec<PlanningBeat>,
     /// 1-based position in `beats` of the Scene's Turning Beat.
+    ///
+    /// `0` is never a valid position; the generated schema advertises the
+    /// 1-based minimum.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
     pub turning_beat: Option<u32>,
     #[serde(default)]
     pub character_ids: Vec<PlanningRef>,
@@ -1182,7 +1187,8 @@ pub struct PlanningSceneDilemma {
 /// A structured Beat inside a planning artifact.
 ///
 /// The stored form is [`crate::beats::PlannedBeat`]: the two differ only in the
-/// actor, which is a planning reference here and a resolved record id there.
+/// `actor_character_id`, which is a planning reference here and a resolved
+/// record id there.
 /// Every other field shares the McKee contract, including the optional
 /// free-text Swain label (a label, never a structural kind).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -1191,8 +1197,12 @@ pub struct PlanningBeat {
     /// Structural kind of this Beat.
     pub kind: crate::beats::BeatKind,
     /// Character who takes this Beat, as a planning reference.
+    ///
+    /// Spelled out rather than named `actor` because planning payloads resolve
+    /// `*_id` keys generically; a bare `actor` key would collide with the
+    /// human decision actor and any future operation field of that name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub actor: Option<PlanningRef>,
+    pub actor_character_id: Option<PlanningRef>,
     /// The tactic the actor uses to get something.
     pub tactic: String,
     /// What is said out loud on this Beat (empty for a silent Beat).
@@ -2278,9 +2288,9 @@ mod tests {
             "summary": "Ada follows the ledger",
             "purpose": "Discover the forged seal",
             "beats": [
-                {"kind":"action","actor":{"kind":"proposal_ref","value":"cast:ada"},"tactic":"Ask for the log","said":"Show me the tide log.","wanted":"A clean record","gap":{"expected":"The log clears her","actual":"A page is missing"}},
-                {"kind":"reaction","actor":{"kind":"proposal_ref","value":"cast:ben"},"tactic":"Stall","said":"Sealed until the assizes.","wanted":"Time","gap":{"expected":"Procedure buys a day","actual":"Ada offers her signet"}},
-                {"kind":"turn","actor":{"kind":"proposal_ref","value":"cast:ada"},"tactic":"Wager the signet","said":"Take the signet as surety.","wanted":"Ben's testimony","gap":{"expected":"Ben will testify","actual":"Ben asks for the signet first"},"swain_label":"conflict"}
+                {"kind":"action","actor_character_id":{"kind":"proposal_ref","value":"cast:ada"},"tactic":"Ask for the log","said":"Show me the tide log.","wanted":"A clean record","gap":{"expected":"The log clears her","actual":"A page is missing"}},
+                {"kind":"reaction","actor_character_id":{"kind":"proposal_ref","value":"cast:ben"},"tactic":"Stall","said":"Sealed until the assizes.","wanted":"Time","gap":{"expected":"Procedure buys a day","actual":"Ada offers her signet"}},
+                {"kind":"turn","actor_character_id":{"kind":"proposal_ref","value":"cast:ada"},"tactic":"Wager the signet","said":"Take the signet as surety.","wanted":"Ben's testimony","gap":{"expected":"Ben will testify","actual":"Ben asks for the signet first"},"swain_label":"conflict"}
             ],
             "turning_beat": 3
         }))
@@ -2292,7 +2302,7 @@ mod tests {
         let json = serde_json::to_value(&structured).unwrap();
         assert_eq!(json["beats"][0]["kind"], "action");
         assert_eq!(
-            json["beats"][0]["actor"],
+            json["beats"][0]["actor_character_id"],
             json!({"kind":"proposal_ref","value":"cast:ada"})
         );
         assert!(json["beats"][0].get("swain_label").is_none());

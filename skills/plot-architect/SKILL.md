@@ -49,7 +49,7 @@ Plant `chekhov_gun`, `foreshadowing`, `setup`, and `question_raised` promises (o
 - To start a new book in an existing series, call `create_book` and `create_chapter` after reading `get_writer_state`.
 
 ### 6. Chapter Scene Plans (`plan_chapter`)
-Every chapter should change the reader's understanding of the story. Specify chapter `pov`, `synopsis`, active themes/conflicts/plot lines, and each scene's `summary`, beat structure, characters, `location_id`, `content_rating`, and `purpose`.
+Every chapter should change the reader's understanding of the story. Specify chapter `pov`, `synopsis`, active themes/conflicts/plot lines, and each scene's `summary`, beat structure, characters, `location_id`, `content_rating`, and `purpose`. On a McKee-structured project each scene also carries structured `beats` (action/reaction/turn) and a 1-based `turning_beat` pointing at its single `turn` beat; acceptance blocks a scene without them.
 
 ## Initial Planning Rollout Boundary
 

@@ -22,12 +22,12 @@ generated profiles are opt-in:
 
 | Profile | Enabled work | Tools | Input bytes | Full bytes |
 | --- | --- | ---: | ---: | ---: |
-| workflow-write | Scene-writer core + craft/packet/research refs + setup | 44 | 63,473 | 118,587 |
-| workflow-authoring | Scene-writer (all refs) + authoring-supervisor + setup | 74 | 92,074 | 187,403 |
+| workflow-write | Scene-writer core + craft/packet/research refs + setup | 44 | 63,777 | 118,891 |
+| workflow-authoring | Scene-writer (all refs) + authoring-supervisor + setup | 74 | 92,378 | 187,707 |
 | workflow-import | Manuscript importer and source sync | 20 | 12,306 | 30,943 |
 | revision | Branch/revision/history workflow | 34 | 23,079 | 58,512 |
 | worldbuilding | Worldbuilder + character creator | 50 | 49,431 | 85,116 |
-| planning | Plot architect | 38 | 39,237 | 70,631 |
+| planning | Plot architect | 38 | 39,541 | 70,935 |
 | new-book | New-book entry: planning sessions, human gates and handoff | 14 | 20,204 | 26,730 |
 | mckee | Story-structure core + Story Spine, Character Design, Value Turns, Scene Design and Dialogue Tactics references | 11 | 18,462 | 22,860 |
 | research | Researcher | 15 | 7,584 | 20,247 |

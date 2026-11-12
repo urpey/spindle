@@ -15,11 +15,11 @@
 //! in the Scene.
 //!
 //! This module owns the typed contract and the write-time shape rules. It holds
-//! the resolved form (actor as a record id) shared by the model DTOs and the
-//! stored chapter plan; the planning artifact carries the same contract with
-//! proposal references and lives in [`crate::planning::PlanningBeat`]. The
-//! planning validator (adapters) maps these rules to stage-recordable Blocking
-//! findings.
+//! the resolved form (`actor_character_id` as a record id) shared by the model
+//! DTOs and the stored chapter plan; the planning artifact carries the same
+//! contract with proposal references and lives in
+//! [`crate::planning::PlanningBeat`]. The planning validator (adapters) maps
+//! these rules to stage-recordable Blocking findings.
 //!
 //! `beat_structure: Vec<String>` predates this module and stays exactly as it
 //! was: every project can still deserialize it, but for a McKee project the
@@ -82,8 +82,12 @@ pub struct PlannedBeat {
     /// Structural kind of this Beat.
     pub kind: BeatKind,
     /// Character record id that takes this Beat, when the Beat has an actor.
+    ///
+    /// Spelled out rather than named `actor` because planning payloads are
+    /// resolved generically: a bare `actor` key would collide with the human
+    /// decision actor and any future operation field of that name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub actor: Option<String>,
+    pub actor_character_id: Option<String>,
     /// The tactic the actor uses to get something.
     pub tactic: String,
     /// What is said out loud on this Beat (empty for a silent Beat).
@@ -216,10 +220,10 @@ mod tests {
     }
 
     #[test]
-    fn a_beat_round_trips_with_an_optional_actor_and_swain_label() {
+    fn a_beat_round_trips_with_an_optional_actor_character_id_and_swain_label() {
         let beat = PlannedBeat {
             kind: BeatKind::Turn,
-            actor: Some("character:ada".into()),
+            actor_character_id: Some("character:ada".into()),
             tactic: "Wager the signet".into(),
             said: "Then take the signet as surety.".into(),
             wanted: "Ben's testimony".into(),
@@ -227,15 +231,15 @@ mod tests {
             swain_label: Some("conflict".into()),
         };
         let json = serde_json::to_value(&beat).unwrap();
-        assert_eq!(json["actor"], "character:ada");
+        assert_eq!(json["actor_character_id"], "character:ada");
         assert_eq!(serde_json::from_value::<PlannedBeat>(json).unwrap(), beat);
         let anonymous = PlannedBeat {
-            actor: None,
+            actor_character_id: None,
             swain_label: None,
             ..beat
         };
         let json = serde_json::to_value(&anonymous).unwrap();
-        assert!(json.get("actor").is_none());
+        assert!(json.get("actor_character_id").is_none());
         assert!(json.get("swain_label").is_none());
 
         // Unknown fields fail closed, so a Swain category can never sneak in as

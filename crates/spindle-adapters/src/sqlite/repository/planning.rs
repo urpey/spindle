@@ -869,7 +869,7 @@ fn check_refs(
             for (key, v) in m {
                 let field_type = match key.as_str() {
                     "character_id" | "character_a_id" | "character_b_id" | "character_ids"
-                    | "pov_character_id" | "actor" => Some("character"),
+                    | "pov_character_id" | "actor_character_id" => Some("character"),
                     "location_id" => Some("location"),
                     "connected_theme_ids" | "target_theme_ids" | "theme_ids" => Some("theme"),
                     "connected_conflict_ids" | "target_conflict_ids" => Some("conflict"),
@@ -1246,7 +1246,7 @@ fn collect_ref_findings(
             for (key, child) in m {
                 let field_type = match key.as_str() {
                     "character_id" | "character_a_id" | "character_b_id" | "character_ids"
-                    | "pov_character_id" | "actor" => Some("character"),
+                    | "pov_character_id" | "actor_character_id" => Some("character"),
                     "location_id" => Some("location"),
                     "connected_theme_ids" | "target_theme_ids" | "theme_ids" => Some("theme"),
                     "connected_conflict_ids" | "target_conflict_ids" => Some("conflict"),
@@ -5593,8 +5593,8 @@ impl Repository {
                                             .into_iter()
                                             .map(|beat| PlanningBeat {
                                                 kind: beat.kind,
-                                                actor: beat
-                                                    .actor
+                                                actor_character_id: beat
+                                                    .actor_character_id
                                                     .map(PlanningRef::ExistingRecordId),
                                                 tactic: beat.tactic,
                                                 said: beat.said,

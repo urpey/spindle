@@ -229,10 +229,16 @@ fn plan_chapter_scene_schema_advertises_structured_beats() {
     };
 
     // The Scene names its Turning Beat with a 1-based position in `beats`.
+    // `0` is always rejected as out-of-range, so the advertised schema must
+    // not tell a client that 0 is allowed.
     let turning = scene
         .get("turning_beat")
         .expect("plan_chapter scene schema is missing turning_beat");
     assert_eq!(turning["type"], "integer");
+    assert_eq!(
+        turning["minimum"], 1,
+        "turning_beat is 1-based; the schema must advertise minimum 1"
+    );
 
     let beats = scene
         .get("beats")
@@ -249,7 +255,7 @@ fn plan_chapter_scene_schema_advertises_structured_beats() {
     };
     for field in [
         "kind",
-        "actor",
+        "actor_character_id",
         "tactic",
         "said",
         "wanted",

@@ -9260,18 +9260,16 @@ async fn planning_advance_and_accept(
     decided
 }
 
-// Scenario brief used by the new-book entry flow: a harbor mystery with one
-// POV character, one location, one world rule, a planted promise, and a
-// two-chapter / four-scene near horizon.
 /// Three structured Beats for a McKee scene fixture: action, reaction and one
-/// turn, with the Turning Beat pointing at the turn. `actor` is a proposal
-/// reference key (e.g. `cast:mara`), so apply must resolve it to a record id.
+/// turn, with the Turning Beat pointing at the turn. `actor_character_id` is a
+/// proposal reference (e.g. `cast:mara`), so apply must resolve it to a record
+/// id.
 fn mckee_scene_beats(actor: &str) -> serde_json::Value {
     let actor = || serde_json::json!({"kind": "proposal_ref", "value": actor});
     serde_json::json!([
         {
             "kind": "action",
-            "actor": actor(),
+            "actor_character_id": actor(),
             "tactic": "Press the watch for an answer",
             "said": "Who rang the bell?",
             "wanted": "A name she can act on",
@@ -9279,7 +9277,7 @@ fn mckee_scene_beats(actor: &str) -> serde_json::Value {
         },
         {
             "kind": "reaction",
-            "actor": actor(),
+            "actor_character_id": actor(),
             "tactic": "Test the cut rope against the salt line",
             "said": "The cut is fresh.",
             "wanted": "Proof that the warning is deliberate",
@@ -9288,7 +9286,7 @@ fn mckee_scene_beats(actor: &str) -> serde_json::Value {
         },
         {
             "kind": "turn",
-            "actor": actor(),
+            "actor_character_id": actor(),
             "tactic": "Choose the harbor warning over the archive",
             "said": "Then the archive waits.",
             "wanted": "The harbor safe, whatever it costs",
@@ -9297,6 +9295,9 @@ fn mckee_scene_beats(actor: &str) -> serde_json::Value {
     ])
 }
 
+// Scenario brief used by the new-book entry flow: a harbor mystery with one
+// POV character, one location, one world rule, a planted promise, and a
+// two-chapter / four-scene near horizon.
 /// Phase F's scene submission: two chapter plans whose value chain continues
 /// across chapters and whose climax Scene names Mara's other contradiction.
 fn phase_f_scene_submission(session_id: &str, range: &serde_json::Value) -> serde_json::Value {
