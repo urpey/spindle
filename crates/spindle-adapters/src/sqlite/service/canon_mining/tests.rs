@@ -20,6 +20,9 @@ async fn mine_scene_canon_stages_fact_and_payoff_candidate() {
             },
             planned_payoff: None,
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();

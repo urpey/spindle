@@ -30,6 +30,46 @@ use spindle_core::scene_value::{
 use spindle_core::sequences::{merge_planned_sequences, placement_is_member, same_scene_position};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// One structured Beat as the promise gates read it: kind, whether its Gap is
+/// information-dependent, and the promise it pays off (a planning reference
+/// before resolution, a record id after).
+#[derive(Debug, Clone)]
+pub(super) struct SceneGateBeat {
+    pub kind: BeatKind,
+    pub information_dependent: bool,
+    pub promise: Option<PlanningRef>,
+}
+
+/// One planned Scene as the promise / Key Fact gates read it: its placement,
+/// its Beats, its Turning Beat, and where to point a finding.
+#[derive(Debug, Clone)]
+pub(super) struct SceneGateEntry {
+    pub book_number: i32,
+    pub chapter_number: i32,
+    pub scene_order: i32,
+    pub turning_beat: Option<u32>,
+    pub beats: Vec<SceneGateBeat>,
+    pub path: String,
+    pub repair_hint: String,
+}
+
+impl SceneGateEntry {
+    pub(super) fn placement(&self) -> PlanningStoryPlacement {
+        PlanningStoryPlacement {
+            book_number: self.book_number,
+            chapter_number: self.chapter_number,
+            scene_order: Some(self.scene_order),
+            note: None,
+        }
+    }
+
+    /// The Turning Beat itself, when the reference resolves.
+    pub(super) fn turning_beat_entry(&self) -> Option<&SceneGateBeat> {
+        let index = self.turning_beat?.checked_sub(1)? as usize;
+        self.beats.get(index)
+    }
+}
+
 /// One planned Scene with the value fields the chain rules read, plus the
 /// finding path and repair hint for the plan that owns it.
 #[derive(Debug, Clone)]
@@ -37,7 +77,7 @@ struct SceneValueEntry {
     book_number: i32,
     chapter_number: i32,
     scene_order: i32,
-    beat_kinds: Vec<BeatKind>,
+    beats: Vec<SceneGateBeat>,
     turning_beat: Option<u32>,
     primary: Option<SceneValueAxis>,
     secondary: Vec<SceneValueAxis>,
@@ -61,7 +101,15 @@ impl SceneValueEntry {
             book_number,
             chapter_number,
             scene_order: scene.scene_order,
-            beat_kinds: scene.beats.iter().map(|beat| beat.kind).collect(),
+            beats: scene
+                .beats
+                .iter()
+                .map(|beat| SceneGateBeat {
+                    kind: beat.kind,
+                    information_dependent: beat.information_dependent,
+                    promise: beat.promise_id.clone().map(PlanningRef::ExistingRecordId),
+                })
+                .collect(),
             turning_beat: scene.turning_beat,
             primary: scene.primary_value_axis.clone(),
             secondary: scene.secondary_value_axes.clone(),
@@ -74,12 +122,63 @@ impl SceneValueEntry {
         }
     }
 
+    fn from_planning_scene(
+        book_number: i32,
+        chapter_number: i32,
+        scene: &PlanningPlanChapterSceneInput,
+        path: String,
+        repair_hint: String,
+    ) -> Self {
+        Self {
+            book_number,
+            chapter_number,
+            scene_order: scene.scene_order,
+            beats: scene
+                .beats
+                .iter()
+                .map(|beat| SceneGateBeat {
+                    kind: beat.kind,
+                    information_dependent: beat.information_dependent,
+                    promise: beat.promise_id.clone(),
+                })
+                .collect(),
+            turning_beat: scene.turning_beat,
+            primary: scene.primary_value_axis.clone(),
+            secondary: scene.secondary_value_axes.clone(),
+            gap: scene.gap.clone(),
+            inaction_cost: scene.inaction_cost.clone(),
+            risk: scene.risk,
+            dilemma: scene.dilemma.as_ref().map(|dilemma| SceneDilemma {
+                character_id: normalized_ref(&dilemma.character_id),
+                contradiction: dilemma.contradiction.clone(),
+            }),
+            path,
+            repair_hint,
+        }
+    }
+
+    fn beat_kinds(&self) -> Vec<BeatKind> {
+        self.beats.iter().map(|beat| beat.kind).collect()
+    }
+
     fn placement(&self) -> PlanningStoryPlacement {
         PlanningStoryPlacement {
             book_number: self.book_number,
             chapter_number: self.chapter_number,
             scene_order: Some(self.scene_order),
             note: None,
+        }
+    }
+
+    fn gate_entry(&self) -> SceneGateEntry {
+        SceneGateEntry {
+            book_number: self.book_number,
+            chapter_number: self.chapter_number,
+            scene_order: self.scene_order,
+            turning_beat: self.turning_beat,
+            beats: self.beats.clone(),
+            path: self.path.clone(),
+            repair_hint: self.repair_hint.clone(),
         }
     }
 }
@@ -475,26 +574,17 @@ fn evaluated_scene_values_in_conn(
                 (plan.book_number, plan.chapter_number),
                 plan.scenes
                     .iter()
-                    .map(|scene| SceneValueEntry {
-                        book_number: plan.book_number,
-                        chapter_number: plan.chapter_number,
-                        scene_order: scene.scene_order,
-                        beat_kinds: scene.beats.iter().map(|beat| beat.kind).collect(),
-                        turning_beat: scene.turning_beat,
-                        primary: scene.primary_value_axis.clone(),
-                        secondary: scene.secondary_value_axes.clone(),
-                        gap: scene.gap.clone(),
-                        inaction_cost: scene.inaction_cost.clone(),
-                        risk: scene.risk,
-                        dilemma: scene.dilemma.as_ref().map(|dilemma| SceneDilemma {
-                            character_id: normalized_ref(&dilemma.character_id),
-                            contradiction: dilemma.contradiction.clone(),
-                        }),
-                        path: format!(
-                            "/staged_scenes/{}/{}/{}",
-                            plan.book_number, plan.chapter_number, scene.scene_order
-                        ),
-                        repair_hint: repair_hint.clone(),
+                    .map(|scene| {
+                        SceneValueEntry::from_planning_scene(
+                            plan.book_number,
+                            plan.chapter_number,
+                            scene,
+                            format!(
+                                "/staged_scenes/{}/{}/{}",
+                                plan.book_number, plan.chapter_number, scene.scene_order
+                            ),
+                            repair_hint.clone(),
+                        )
                     })
                     .collect(),
             );
@@ -509,23 +599,14 @@ fn evaluated_scene_values_in_conn(
             plan.scenes
                 .iter()
                 .enumerate()
-                .map(|(scene_index, scene)| SceneValueEntry {
-                    book_number: plan.book_number,
-                    chapter_number: plan.chapter_number,
-                    scene_order: scene.scene_order,
-                    beat_kinds: scene.beats.iter().map(|beat| beat.kind).collect(),
-                    turning_beat: scene.turning_beat,
-                    primary: scene.primary_value_axis.clone(),
-                    secondary: scene.secondary_value_axes.clone(),
-                    gap: scene.gap.clone(),
-                    inaction_cost: scene.inaction_cost.clone(),
-                    risk: scene.risk,
-                    dilemma: scene.dilemma.as_ref().map(|dilemma| SceneDilemma {
-                        character_id: normalized_ref(&dilemma.character_id),
-                        contradiction: dilemma.contradiction.clone(),
-                    }),
-                    path: format!("/operations/{index}/operation/input/scenes/{scene_index}"),
-                    repair_hint: "Repair this scene batch.".to_string(),
+                .map(|(scene_index, scene)| {
+                    SceneValueEntry::from_planning_scene(
+                        plan.book_number,
+                        plan.chapter_number,
+                        scene,
+                        format!("/operations/{index}/operation/input/scenes/{scene_index}"),
+                        "Repair this scene batch.".to_string(),
+                    )
                 })
                 .collect(),
         );
@@ -539,6 +620,20 @@ fn evaluated_scene_values_in_conn(
         ))
     });
     Ok(scenes)
+}
+
+/// The same evaluated planned-Scene list, projected to the fields the promise
+/// and Key Fact gates read. It is built from one merge, so the value chain and
+/// the promise gates can never disagree about which plan is in force.
+pub(super) fn evaluated_gate_scenes_in_conn(
+    conn: &rusqlite::Connection,
+    input: &StagePlanningInput,
+    scope: &PlanningScope,
+) -> Result<Vec<SceneGateEntry>> {
+    Ok(evaluated_scene_values_in_conn(conn, input, scope)?
+        .iter()
+        .map(SceneValueEntry::gate_entry)
+        .collect())
 }
 
 fn accepted_repair_hint(book_number: i32, chapter_number: i32) -> String {
@@ -742,7 +837,7 @@ fn validate_scene_value_shapes(scenes: &[SceneValueEntry], findings: &mut Vec<Pl
 /// substitute for structured Beats.
 fn validate_scene_beats(scenes: &[SceneValueEntry], findings: &mut Vec<PlanningFinding>) {
     for scene in scenes {
-        for error in scene_beat_errors(&scene.beat_kinds, scene.turning_beat) {
+        for error in scene_beat_errors(&scene.beat_kinds(), scene.turning_beat) {
             let (code, path, expected) = match &error {
                 SceneBeatError::NoBeats => (
                     "scene_beats_missing",

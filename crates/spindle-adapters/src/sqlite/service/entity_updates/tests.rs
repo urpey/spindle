@@ -264,6 +264,9 @@ async fn update_entity_on_narrative_promise_planned_payoff_now_allowlisted() {
                 note: None,
             }),
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();

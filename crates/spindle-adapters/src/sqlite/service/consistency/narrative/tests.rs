@@ -1056,6 +1056,9 @@ async fn deep_check_caps_promise_scan_and_reports_unscanned() {
                 note: None,
             }),
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();

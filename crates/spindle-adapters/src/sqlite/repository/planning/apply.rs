@@ -198,7 +198,16 @@ pub(super) fn operation_state(
                 "book",
                 "chapter",
                 "faction",
-                "story_spine"
+                "story_spine",
+                // Key Fact subjects (existing canonical-fact subject model) and
+                // the planned chapter plan named by `planned_scene_id`.
+                "religion",
+                "economy",
+                "term",
+                "system_overlay",
+                "timeline_event",
+                "scene",
+                "chapter_plan"
             ]
             .contains(&table),
             "unsupported planning record type"
@@ -725,7 +734,17 @@ fn scope_guard(
                                     "book",
                                     "chapter",
                                     "faction",
-                                    "story_spine"
+                                    "story_spine",
+                                    // A structured Beat's promise reference and a
+                                    // Key Fact's planned-Scene / subject refs.
+                                    "narrative_promise",
+                                    "chapter_plan",
+                                    "religion",
+                                    "economy",
+                                    "term",
+                                    "system_overlay",
+                                    "timeline_event",
+                                    "scene"
                                 ]
                                 .contains(&table),
                                 "unsupported planning reference type"
@@ -830,14 +849,29 @@ fn scope_guard(
                 );
                 actual
             } else {
+                // A Key Fact names its planned Scene in a nested placement, not
+                // with top-level chapter-plan locators; the placement supplies
+                // the same book/chapter the scope check needs.
                 input["book_number"]
                     .as_i64()
+                    .or_else(|| {
+                        input
+                            .get("placement")
+                            .and_then(|placement| placement.get("book_number"))
+                            .and_then(Value::as_i64)
+                    })
                     .context("planning requires explicit book selection")?
             };
             (
                 book,
                 input["chapter_number"]
                     .as_i64()
+                    .or_else(|| {
+                        input
+                            .get("placement")
+                            .and_then(|placement| placement.get("chapter_number"))
+                            .and_then(Value::as_i64)
+                    })
                     .context("planning requires explicit positive chapter_number")?,
             )
         };

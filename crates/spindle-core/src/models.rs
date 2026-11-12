@@ -5025,6 +5025,19 @@ pub struct CreateNarrativePromiseInput {
     pub description: String,
     pub planted_at: StoryPlacement,
     pub planned_payoff: Option<StoryPlacement>,
+    /// The 1-based position in the payoff Scene's `beats` where the payoff
+    /// lands, ideally its Turning Beat. Requires `planned_payoff`; a Beat
+    /// position without its Scene is refused. Additive and serde-defaulted so
+    /// pre-#28 callers and stored rows keep their exact payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub planned_payoff_turning_beat: Option<i32>,
+    /// The 1-based order of the Act (in the project's merged Act list) this
+    /// promise must pay off in. Required for long-range promises planned at the
+    /// Series-Arc or Book level; optional otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub target_act: Option<i32>,
     #[serde(default)]
     pub notes: Vec<String>,
 }

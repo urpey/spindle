@@ -107,6 +107,21 @@ prose and is not changed by scene planning. `authoring_prepare_run` still accept
 that encoded `location:` / `rating:` in summary text as a legacy fallback, but
 new supervisor flows should not depend on that parsing convention.
 
+On a McKee project the plan also fixes turning canon before prose. A
+`create_key_fact` planning operation (closed turning set: death, revealed
+secret, relationship turn, item or power gained or lost) registers the fact as a
+planned-and-pending canonical fact at its planned Scene; it is not prose and no
+Scene row exists yet, so the fact is bound later with
+`bind_canonical_fact_to_scene` once the Scene is written. The planner also
+records promise payoff intent: `planned_payoff` plus the optional 1-based
+`planned_payoff_turning_beat`, and a `target_act` for every long-range promise
+planned at the Series-Arc or Book level. Acceptance refuses a secret reveal with
+no earlier-planted promise paying off in that Scene, and a Turning Beat marked
+`information_dependent` that names no promise planted in an earlier Scene; both
+are the deus-ex-machina guard. A promise's payoff before its setup is already a
+hard blocking error. The drafting packet is unchanged by this ticket: Key Facts
+become hard constraints when a later ticket renders due facts from the plan.
+
 `mining_policy` on `authoring_start_run` is optional and defaults to `disabled`
 (a run that never opts in behaves exactly as before). Set it to `propose_all`
 to insert an automatic `mine canon` step between `commit scene changes` and

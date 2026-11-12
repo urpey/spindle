@@ -7,6 +7,7 @@ pub mod charge;
 pub mod context_bundle;
 pub mod drafting;
 pub mod embeddings;
+pub mod key_fact;
 pub mod memory;
 pub mod model_output;
 pub mod models;

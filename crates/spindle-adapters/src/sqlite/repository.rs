@@ -842,19 +842,34 @@ impl Repository {
     /// Execute a multi-step canon unit-of-work inside a single SQLite writer
     /// transaction. If `f` returns `Err`, the transaction rolls back and zero
     /// writes are persisted.
+    ///
+    /// Called inside the bounded planning **application transaction**
+    /// (`SqlitePool::application_transaction`), SQLite already has a transaction
+    /// open on the pinned writer, so a nested `BEGIN` would be illegal. The
+    /// unit then nests through a savepoint instead: the outer transaction keeps
+    /// ownership of the atomic boundary and a nested failure rolls back only
+    /// the savepoint. The mode comes from the pool's task-local application
+    /// signal, not from probing `conn.is_autocommit()`: outside that signal the
+    /// writer gate guarantees no other transaction can be open here.
     pub async fn with_transaction<F, R>(&self, f: F) -> Result<R>
     where
         F: FnOnce(&mut CanonTransaction<'_>) -> Result<R> + Send + 'static,
         R: Send + 'static,
     {
+        let nested = self.inner.pool.in_application_transaction();
         self.inner
             .pool
             .write(move |conn| {
                 Ok((|| -> Result<R> {
-                    let tx = conn.transaction()?;
-                    let mut unit = CanonTransaction { tx };
+                    let mut unit = CanonTransaction {
+                        tx: if nested {
+                            CanonTxOwner::Savepoint(conn.savepoint()?)
+                        } else {
+                            CanonTxOwner::Transaction(conn.transaction()?)
+                        },
+                    };
                     let out = f(&mut unit)?;
-                    unit.tx.commit()?;
+                    unit.commit()?;
                     Ok(out)
                 })())
             })
@@ -1442,7 +1457,7 @@ fn mint_id_local(table: &str) -> String {
 /// old name was added as an alias. Collision handling mirrors the project-wide
 /// unique index `idx_character_project_name(project_id, normalized_name)`.
 fn rename_character_in_tx(
-    tx: &rusqlite::Transaction<'_>,
+    tx: &rusqlite::Connection,
     character_id: &str,
     new_name: &str,
 ) -> anyhow::Result<(Character, bool)> {
@@ -1515,7 +1530,7 @@ fn rename_character_in_tx(
 /// saves racing for one receipt cannot both win: SQLite serializes the write
 /// transactions, so the loser sees the winner's claim and bails.
 fn claim_generation_receipt_in_tx(
-    tx: &rusqlite::Transaction<'_>,
+    tx: &rusqlite::Connection,
     receipt_id: &str,
     scene_key: &str,
 ) -> anyhow::Result<()> {
@@ -1741,20 +1756,37 @@ pub(crate) fn resolve_character_state_for_branch_in_conn(
 /// Used by multi-step canon write operations (`commit_scene_changes`,
 /// `commit_character_state`, `register_canonical_fact`, `record_knowledge`) so
 /// any mid-way failure rolls back the entire batch with zero partial writes.
+enum CanonTxOwner<'a> {
+    Transaction(rusqlite::Transaction<'a>),
+    Savepoint(rusqlite::Savepoint<'a>),
+}
+
 pub struct CanonTransaction<'a> {
-    tx: rusqlite::Transaction<'a>,
+    tx: CanonTxOwner<'a>,
 }
 
 impl CanonTransaction<'_> {
-    /// Borrow the underlying write transaction so sibling repositories can add
-    /// their own in-transaction statements without opening a second connection.
-    pub(crate) fn raw_tx(&self) -> &rusqlite::Transaction<'_> {
-        &self.tx
+    /// The write connection this unit of work runs on. A transaction outside an
+    /// application transaction, a savepoint when planning already pinned the
+    /// writer; both deref to the same connection.
+    pub(crate) fn conn(&self) -> &rusqlite::Connection {
+        match &self.tx {
+            CanonTxOwner::Transaction(tx) => tx,
+            CanonTxOwner::Savepoint(savepoint) => savepoint,
+        }
+    }
+
+    /// Commit this unit of work, consuming the owned transaction or savepoint.
+    fn commit(self) -> rusqlite::Result<()> {
+        match self.tx {
+            CanonTxOwner::Transaction(tx) => tx.commit(),
+            CanonTxOwner::Savepoint(savepoint) => savepoint.commit(),
+        }
     }
 
     pub fn get_character(&self, id: &str) -> Result<Character> {
         let sql = format!("SELECT {CHARACTER_COLUMNS} FROM character WHERE id = ?1");
-        let mut stmt = self.tx.prepare_cached(&sql)?;
+        let mut stmt = self.conn().prepare_cached(&sql)?;
         stmt.query_row([id], |r| Character::try_from(r))
             .optional_inner()?
             .ok_or_else(|| anyhow!("character not found"))
@@ -1762,7 +1794,7 @@ impl CanonTransaction<'_> {
 
     pub fn get_scene(&self, id: &str) -> Result<Scene> {
         let sql = format!("SELECT {SCENE_COLUMNS} FROM scene WHERE id = ?1");
-        let mut stmt = self.tx.prepare_cached(&sql)?;
+        let mut stmt = self.conn().prepare_cached(&sql)?;
         stmt.query_row([id], |r| Scene::try_from(r))
             .optional_inner()?
             .ok_or_else(|| anyhow!("scene not found"))
@@ -1770,7 +1802,7 @@ impl CanonTransaction<'_> {
 
     pub fn get_canonical_fact(&self, id: &str) -> Result<CanonicalFact> {
         let sql = format!("SELECT {CANONICAL_FACT_COLUMNS} FROM canonical_fact WHERE id = ?1");
-        let mut stmt = self.tx.prepare_cached(&sql)?;
+        let mut stmt = self.conn().prepare_cached(&sql)?;
         stmt.query_row([id], |r| CanonicalFact::try_from(r))
             .optional_inner()?
             .ok_or_else(|| anyhow!("canonical_fact not found"))
@@ -1785,7 +1817,7 @@ impl CanonTransaction<'_> {
         scene_order: i32,
     ) -> Result<Option<CharacterState>> {
         Ok(resolve_character_state_for_branch_in_conn(
-            &self.tx,
+            self.conn(),
             branch_id,
             character_id,
             book_number,
@@ -1808,7 +1840,7 @@ impl CanonTransaction<'_> {
         let notes_json = serde_json::to_string(&params.patch.notes.unwrap_or_default())
             .context("serializing notes")?;
         let now = timestamp_to_micros(chrono::Utc::now());
-        self.tx.execute(
+        self.conn().execute(
             "INSERT INTO character_state (id, project_id, branch_id, character_id, \
              scene_id, book_number, chapter_number, scene_order, emotional_state, \
              goals, status, notes, source_summary, created_at) \
@@ -1831,7 +1863,7 @@ impl CanonTransaction<'_> {
             ],
         )?;
         let sql = format!("SELECT {CHARACTER_STATE_COLUMNS} FROM character_state WHERE id = ?1");
-        let mut stmt = self.tx.prepare_cached(&sql)?;
+        let mut stmt = self.conn().prepare_cached(&sql)?;
         stmt.query_row([&id], |r| CharacterState::try_from(r))
             .optional_inner()?
             .ok_or_else(|| anyhow!("character_state vanished after insert"))
@@ -1849,7 +1881,7 @@ impl CanonTransaction<'_> {
             None => None,
         };
         let created_at = timestamp_to_micros(params.created_at);
-        self.tx.execute(
+        self.conn().execute(
             "INSERT INTO progression_event (id, project_id, branch_id, subject_table, \
              subject_id, overlay_id, kind, delta_json, source_scene_id, placement, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -1869,7 +1901,7 @@ impl CanonTransaction<'_> {
         )?;
         let sql =
             format!("SELECT {PROGRESSION_EVENT_COLUMNS} FROM progression_event WHERE id = ?1");
-        let mut stmt = self.tx.prepare_cached(&sql)?;
+        let mut stmt = self.conn().prepare_cached(&sql)?;
         stmt.query_row([&id], |r| ProgressionEvent::try_from(r))
             .optional_inner()?
             .ok_or_else(|| anyhow!("progression_event not found"))
@@ -1897,7 +1929,7 @@ impl CanonTransaction<'_> {
         };
         let now = timestamp_to_micros(chrono::Utc::now());
         let secret_flag = if params.secret { 1 } else { 0 };
-        self.tx.execute(
+        self.conn().execute(
             "INSERT INTO canonical_fact (id, project_id, branch_id, scene_id, \
              source_scene_id, book_number, chapter_number, subject_table, subject_id, \
              predicate, value_kind, value_number, value_text, value_json, unit, aliases, \
@@ -1939,7 +1971,7 @@ impl CanonTransaction<'_> {
         new_fact_id: &str,
     ) -> Result<()> {
         let old_branch: Option<String> = self
-            .tx
+            .conn()
             .query_row(
                 "SELECT branch_id FROM canonical_fact WHERE id = ?1",
                 [old_fact_id],
@@ -1951,18 +1983,18 @@ impl CanonTransaction<'_> {
         };
         if old_branch_id == branch_id {
             let now = timestamp_to_micros(chrono::Utc::now());
-            self.tx.execute(
+            self.conn().execute(
                 "UPDATE canonical_fact SET superseded_by = ?1, updated_at = ?2 WHERE id = ?3",
                 rusqlite::params![new_fact_id, now, old_fact_id],
             )?;
         } else {
-            let lineage = resolve_branch_lineage_in_conn(&self.tx, None, branch_id)?;
+            let lineage = resolve_branch_lineage_in_conn(self.conn(), None, branch_id)?;
             anyhow::ensure!(
                 lineage.iter().any(|b| b == &old_branch_id),
                 "superseded canonical_fact '{old_fact_id}' does not belong to branch '{branch_id}' or its ancestors"
             );
         }
-        self.tx.execute(
+        self.conn().execute(
             "UPDATE canonical_fact SET supersedes_fact_id = ?1 WHERE id = ?2 AND branch_id = ?3",
             rusqlite::params![old_fact_id, new_fact_id, branch_id],
         )?;
@@ -1973,7 +2005,7 @@ impl CanonTransaction<'_> {
         let now = timestamp_to_micros(chrono::Utc::now());
         let tags_json = serde_json::to_string::<Vec<String>>(&Vec::new())?;
         let existing_id: Option<String> = self
-            .tx
+            .conn()
             .query_row(
                 "SELECT id FROM knowledge_fact \
                  WHERE project_id = ?1 AND branch_id = ?2 AND character_id = ?3 \
@@ -1990,7 +2022,7 @@ impl CanonTransaction<'_> {
 
         let linked_id = match existing_id {
             Some(id) => {
-                self.tx.execute(
+                self.conn().execute(
                     "UPDATE knowledge_fact \
                      SET secret_of_fact_id = ?1, updated_at = ?2 WHERE id = ?3",
                     rusqlite::params![&params.secret_of_fact_id, now, &id],
@@ -1999,7 +2031,7 @@ impl CanonTransaction<'_> {
             }
             None => {
                 let id = mint_id_local("knowledge_fact");
-                self.tx.execute(
+                self.conn().execute(
                     "INSERT INTO knowledge_fact (id, project_id, branch_id, character_id, \
                      fact, normalized_fact, source_summary, learned_at, confidence, tags, \
                      reader_visible, source_import_session_id, created_at, updated_at, \
@@ -2022,7 +2054,7 @@ impl CanonTransaction<'_> {
             }
         };
         let sql = format!("SELECT {KNOWLEDGE_FACT_COLUMNS} FROM knowledge_fact WHERE id = ?1");
-        let mut stmt = self.tx.prepare_cached(&sql)?;
+        let mut stmt = self.conn().prepare_cached(&sql)?;
         stmt.query_row([&linked_id], |r| KnowledgeFact::try_from(r))
             .optional_inner()?
             .ok_or_else(|| anyhow!("knowledge_fact not found"))
@@ -2041,7 +2073,7 @@ impl CanonTransaction<'_> {
         let tags_json = serde_json::to_string(&params.tags)?;
         let now = timestamp_to_micros(chrono::Utc::now());
         let reader_visible = if params.reader_visible { 1 } else { 0 };
-        self.tx.execute(
+        self.conn().execute(
             "DELETE FROM knowledge_fact \
              WHERE project_id = ?1 AND branch_id = ?2 AND character_id = ?3 \
                AND normalized_fact = ?4",
@@ -2052,7 +2084,7 @@ impl CanonTransaction<'_> {
                 &params.normalized_fact
             ],
         )?;
-        self.tx.execute(
+        self.conn().execute(
             "INSERT INTO knowledge_fact (id, project_id, branch_id, character_id, \
              fact, normalized_fact, source_summary, learned_at, confidence, tags, \
              reader_visible, source_import_session_id, created_at, updated_at, \
@@ -2076,7 +2108,7 @@ impl CanonTransaction<'_> {
             ],
         )?;
         let sql = format!("SELECT {KNOWLEDGE_FACT_COLUMNS} FROM knowledge_fact WHERE id = ?1");
-        let mut stmt = self.tx.prepare_cached(&sql)?;
+        let mut stmt = self.conn().prepare_cached(&sql)?;
         stmt.query_row([&id], |r| KnowledgeFact::try_from(r))
             .optional_inner()?
             .ok_or_else(|| anyhow!("knowledge_fact not found"))
@@ -2090,7 +2122,7 @@ impl CanonTransaction<'_> {
         };
         let now = timestamp_to_micros(chrono::Utc::now());
         let reader_visible = if params.reader_visible { 1 } else { 0 };
-        self.tx.execute(
+        self.conn().execute(
             "INSERT INTO knows (in_id, out_id, project_id, branch_id, source_summary, \
              learned_at, confidence, reader_visible, source_import_session_id, \
              created_at, updated_at) \
@@ -2119,7 +2151,7 @@ impl CanonTransaction<'_> {
             "SELECT {KNOWS_COLUMNS} FROM knows \
              WHERE branch_id = ?1 AND in_id = ?2 AND out_id = ?3"
         );
-        let mut stmt = self.tx.prepare_cached(&sql)?;
+        let mut stmt = self.conn().prepare_cached(&sql)?;
         stmt.query_row(
             rusqlite::params![
                 &params.branch_id,
@@ -2147,7 +2179,7 @@ impl CanonTransaction<'_> {
         let now = timestamp_to_micros(chrono::Utc::now());
 
         let scene_pos: Option<(String, i32, i32, i32)> = self
-            .tx
+            .conn()
             .query_row(
                 "SELECT project_id, book_number, chapter_number, scene_order \
                  FROM scene WHERE id = ?1",
@@ -2163,11 +2195,11 @@ impl CanonTransaction<'_> {
             )
             .optional_inner()?;
         let project_id_hint = scene_pos.as_ref().map(|(pid, _, _, _)| pid.as_str());
-        let chain = resolve_branch_lineage_in_conn(&self.tx, project_id_hint, branch_id)?;
+        let chain = resolve_branch_lineage_in_conn(self.conn(), project_id_hint, branch_id)?;
 
         // Check for an existing row on `branch_id` first.
         let existing_local: Option<(String, String)> = self
-            .tx
+            .conn()
             .query_row(
                 "SELECT in_id, out_id FROM relates_to \
                  WHERE branch_id = ?1 \
@@ -2189,7 +2221,7 @@ impl CanonTransaction<'_> {
         if existing_local.is_none() {
             for ancestor_branch_id in chain.iter().skip(1) {
                 if let Some((anc_in, anc_out, rel_type, base_trust, base_tension, dynamics)) = self
-                    .tx
+                    .conn()
                     .query_row(
                         "SELECT in_id, out_id, relationship_type, trust, tension, dynamics \
                          FROM relates_to \
@@ -2224,13 +2256,13 @@ impl CanonTransaction<'_> {
             }
 
             if let Some((ref anc_branch_id, ref anc_in, ref anc_out, ..)) = inherited_ancestor {
-                self.tx.execute(
+                self.conn().execute(
                     "DELETE FROM relationship_scene_delta \
                      WHERE branch_id = ?1 \
                        AND ((in_id = ?2 AND out_id = ?3) OR (in_id = ?3 AND out_id = ?2))",
                     rusqlite::params![branch_id, anc_in, anc_out],
                 )?;
-                self.tx.execute(
+                self.conn().execute(
                     "INSERT OR REPLACE INTO relationship_scene_delta ( \
                         branch_id, in_id, out_id, scene_id, source, \
                         book_number, chapter_number, scene_order, \
@@ -2245,7 +2277,7 @@ impl CanonTransaction<'_> {
                     rusqlite::params![branch_id, anc_branch_id, anc_in, anc_out],
                 )?;
             } else {
-                self.tx.execute(
+                self.conn().execute(
                     "DELETE FROM relationship_scene_delta \
                      WHERE branch_id = ?1 \
                        AND ((in_id = ?2 AND out_id = ?3) OR (in_id = ?3 AND out_id = ?2))",
@@ -2261,7 +2293,7 @@ impl CanonTransaction<'_> {
         let prior_delta: Option<(i32, i32)> = if let Some((_, book_num, chap_num, sc_order)) =
             &scene_pos
         {
-            self.tx
+            self.conn()
                     .query_row(
                         "SELECT trust_delta, tension_delta FROM relationship_scene_delta \
                          WHERE branch_id = ?1 \
@@ -2276,7 +2308,7 @@ impl CanonTransaction<'_> {
                     )
                     .optional_inner()?
         } else {
-            self.tx
+            self.conn()
                 .query_row(
                     "SELECT trust_delta, tension_delta FROM relationship_scene_delta \
                          WHERE branch_id = ?1 \
@@ -2294,7 +2326,7 @@ impl CanonTransaction<'_> {
         let net_tension = tension_delta - prior_tension;
 
         let (in_id, out_id) = if let Some((in_id, out_id)) = existing_local {
-            self.tx.execute(
+            self.conn().execute(
                 "UPDATE relates_to SET \
                     trust = trust + ?1, \
                     tension = tension + ?2, \
@@ -2317,7 +2349,7 @@ impl CanonTransaction<'_> {
         } else if let Some((_, anc_in, anc_out, rel_type, base_trust, base_tension, dynamics)) =
             inherited_ancestor
         {
-            self.tx.execute(
+            self.conn().execute(
                 "INSERT INTO relates_to (in_id, out_id, branch_id, \
                  relationship_type, trust, tension, dynamics, reason, last_scene_id, \
                  updated_at) \
@@ -2337,7 +2369,7 @@ impl CanonTransaction<'_> {
             )?;
             (anc_in, anc_out)
         } else {
-            self.tx.execute(
+            self.conn().execute(
                 "INSERT INTO relates_to (in_id, out_id, branch_id, \
                  relationship_type, trust, tension, dynamics, reason, last_scene_id, \
                  updated_at) \
@@ -2358,7 +2390,7 @@ impl CanonTransaction<'_> {
 
         // Replace any prior delta row on `branch_id` for this pair + scene.
         if let Some((_, book_num, chap_num, sc_order)) = &scene_pos {
-            self.tx.execute(
+            self.conn().execute(
                 "DELETE FROM relationship_scene_delta \
                  WHERE branch_id = ?1 \
                    AND ((in_id = ?2 AND out_id = ?3) OR (in_id = ?3 AND out_id = ?2)) \
@@ -2368,7 +2400,7 @@ impl CanonTransaction<'_> {
                     branch_id, &in_id, &out_id, scene_id, book_num, chap_num, sc_order
                 ],
             )?;
-            self.tx.execute(
+            self.conn().execute(
                 "INSERT INTO relationship_scene_delta \
                  (branch_id, in_id, out_id, scene_id, source, book_number, chapter_number, \
                   scene_order, trust_delta, tension_delta, reason, updated_at) \
@@ -2389,14 +2421,14 @@ impl CanonTransaction<'_> {
                 ],
             )?;
         } else {
-            self.tx.execute(
+            self.conn().execute(
                 "DELETE FROM relationship_scene_delta \
                  WHERE branch_id = ?1 \
                    AND ((in_id = ?2 AND out_id = ?3) OR (in_id = ?3 AND out_id = ?2)) \
                    AND scene_id = ?4",
                 rusqlite::params![branch_id, &in_id, &out_id, scene_id],
             )?;
-            self.tx.execute(
+            self.conn().execute(
                 "INSERT INTO relationship_scene_delta \
                  (branch_id, in_id, out_id, scene_id, source, book_number, chapter_number, \
                   scene_order, trust_delta, tension_delta, reason, updated_at) \
@@ -2419,7 +2451,7 @@ impl CanonTransaction<'_> {
             "SELECT {RELATES_TO_COLUMNS} FROM relates_to \
              WHERE branch_id = ?1 AND in_id = ?2 AND out_id = ?3"
         );
-        let mut stmt = self.tx.prepare_cached(&sql)?;
+        let mut stmt = self.conn().prepare_cached(&sql)?;
         stmt.query_row(rusqlite::params![branch_id, &in_id, &out_id], |r| {
             RelatesTo::try_from(r)
         })
@@ -2437,7 +2469,7 @@ impl CanonTransaction<'_> {
         scene_branch_id: &str,
     ) -> Result<String> {
         Ok(resolve_effective_scene_branch_in_conn(
-            &self.tx,
+            self.conn(),
             project_id,
             scene_branch_id,
         )?)
@@ -2471,7 +2503,7 @@ impl CanonTransaction<'_> {
             .collect();
 
         let scene_pos: Option<(String, i32, i32, i32)> = self
-            .tx
+            .conn()
             .query_row(
                 "SELECT project_id, book_number, chapter_number, scene_order \
                  FROM scene WHERE id = ?1",
@@ -2487,7 +2519,7 @@ impl CanonTransaction<'_> {
             )
             .optional_inner()?;
         let project_id_hint = scene_pos.as_ref().map(|(pid, _, _, _)| pid.as_str());
-        let chain = resolve_branch_lineage_in_conn(&self.tx, project_id_hint, branch_id)?;
+        let chain = resolve_branch_lineage_in_conn(self.conn(), project_id_hint, branch_id)?;
 
         // Collect all candidate pairs that have a `continuity_package` delta at
         // this scene/position on `branch_id` or any ancestor in `chain`.
@@ -2502,7 +2534,7 @@ impl CanonTransaction<'_> {
                 sc_order,
             )) = &scene_pos
             {
-                let mut stmt = self.tx.prepare_cached(
+                let mut stmt = self.conn().prepare_cached(
                         "SELECT DISTINCT in_id, out_id FROM relationship_scene_delta \
                          WHERE branch_id = ?1 AND source = 'continuity_package' \
                            AND (scene_id = ?2 \
@@ -2514,7 +2546,7 @@ impl CanonTransaction<'_> {
                 )?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()?
             } else {
-                let mut stmt = self.tx.prepare_cached(
+                let mut stmt = self.conn().prepare_cached(
                     "SELECT DISTINCT in_id, out_id FROM relationship_scene_delta \
                          WHERE branch_id = ?1 AND source = 'continuity_package' \
                            AND scene_id = ?2",
@@ -2535,7 +2567,7 @@ impl CanonTransaction<'_> {
 
         for (a, b) in candidate_pairs {
             let existing_local: Option<(String, String)> = self
-                .tx
+                .conn()
                 .query_row(
                     "SELECT in_id, out_id FROM relates_to \
                      WHERE branch_id = ?1 \
@@ -2568,7 +2600,7 @@ impl CanonTransaction<'_> {
                 let mut inherited: Option<InheritedRel> = None;
                 for ancestor_branch_id in chain.iter().skip(1) {
                     if let Some(row) = self
-                        .tx
+                        .conn()
                         .query_row(
                             "SELECT in_id, out_id, relationship_type, trust, tension, dynamics, \
                                     reason, last_scene_id \
@@ -2613,7 +2645,7 @@ impl CanonTransaction<'_> {
                     continue;
                 };
 
-                self.tx.execute(
+                self.conn().execute(
                     "INSERT INTO relates_to (in_id, out_id, branch_id, \
                      relationship_type, trust, tension, dynamics, reason, last_scene_id, \
                      updated_at) \
@@ -2631,13 +2663,13 @@ impl CanonTransaction<'_> {
                         now,
                     ],
                 )?;
-                self.tx.execute(
+                self.conn().execute(
                     "DELETE FROM relationship_scene_delta \
                      WHERE branch_id = ?1 \
                        AND ((in_id = ?2 AND out_id = ?3) OR (in_id = ?3 AND out_id = ?2))",
                     rusqlite::params![branch_id, &anc_in, &anc_out],
                 )?;
-                self.tx.execute(
+                self.conn().execute(
                     "INSERT OR REPLACE INTO relationship_scene_delta ( \
                         branch_id, in_id, out_id, scene_id, source, \
                         book_number, chapter_number, scene_order, \
@@ -2661,7 +2693,7 @@ impl CanonTransaction<'_> {
                 sc_order,
             )) = &scene_pos
             {
-                self.tx
+                self.conn()
                         .query_row(
                             "SELECT source, trust_delta, tension_delta \
                              FROM relationship_scene_delta \
@@ -2683,7 +2715,7 @@ impl CanonTransaction<'_> {
                         )
                         .optional_inner()?
             } else {
-                self.tx
+                self.conn()
                     .query_row(
                         "SELECT source, trust_delta, tension_delta \
                              FROM relationship_scene_delta \
@@ -2706,7 +2738,7 @@ impl CanonTransaction<'_> {
             if let Some((active_source, prior_trust, prior_tension)) = active_delta
                 && active_source == "continuity_package"
             {
-                self.tx.execute(
+                self.conn().execute(
                     "UPDATE relates_to SET \
                         trust = trust - ?1, \
                         tension = tension - ?2, \
@@ -2715,7 +2747,7 @@ impl CanonTransaction<'_> {
                     rusqlite::params![prior_trust, prior_tension, now, branch_id, &in_id, &out_id],
                 )?;
                 if let Some((_, book_num, chap_num, sc_order)) = &scene_pos {
-                    self.tx.execute(
+                    self.conn().execute(
                         "DELETE FROM relationship_scene_delta \
                          WHERE branch_id = ?1 AND source = 'continuity_package' \
                            AND ((in_id = ?2 AND out_id = ?3) OR (in_id = ?3 AND out_id = ?2)) \
@@ -2726,7 +2758,7 @@ impl CanonTransaction<'_> {
                         ],
                     )?;
                 } else {
-                    self.tx.execute(
+                    self.conn().execute(
                         "DELETE FROM relationship_scene_delta \
                          WHERE branch_id = ?1 AND source = 'continuity_package' \
                            AND ((in_id = ?2 AND out_id = ?3) OR (in_id = ?3 AND out_id = ?2)) \
@@ -2747,7 +2779,7 @@ impl CanonTransaction<'_> {
         validator_id: &str,
     ) -> Result<usize> {
         let now = timestamp_to_micros(chrono::Utc::now());
-        Ok(self.tx.execute(
+        Ok(self.conn().execute(
             "UPDATE validator_finding SET resolved_at = ?1 \
              WHERE project_id = ?2 AND branch_id = ?3 \
                AND validator_id = ?4 AND resolved_at IS NULL",
@@ -2779,7 +2811,7 @@ impl CanonTransaction<'_> {
         for id in scene_ids {
             params.push(id);
         }
-        Ok(self.tx.execute(&sql, &params[..])?)
+        Ok(self.conn().execute(&sql, &params[..])?)
     }
 }
 
@@ -3143,6 +3175,8 @@ fn batch_subject_kind(
                         .planned_payoff
                         .clone()
                         .map(StoredStoryPlacement::into_core),
+                    planned_payoff_turning_beat: promise.planned_payoff_turning_beat,
+                    target_act: promise.target_act,
                 }),
                 placement_provenance(&promise.planted_at.clone().into_core()),
             ))
@@ -3474,6 +3508,8 @@ fn batch_open_promise_summaries(
                 .planned_payoff
                 .clone()
                 .map(StoredStoryPlacement::into_core),
+            planned_payoff_turning_beat: promise.planned_payoff_turning_beat,
+            target_act: promise.target_act,
             provenance: placement_provenance(&promise.planted_at.clone().into_core()),
         })
         .collect())

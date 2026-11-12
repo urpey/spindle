@@ -927,6 +927,15 @@ pub struct NarrativePromiseDetails {
     pub description: String,
     pub status: String,
     pub planned_payoff: Option<StoryPlacement>,
+    /// The 1-based Beat position where the planned payoff lands (McKee).
+    /// Additive and skipped when unset, so pre-#28 snapshots and unset rows
+    /// serialize exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_payoff_turning_beat: Option<i32>,
+    /// The 1-based order of the Act the promise pays off in (McKee long-range
+    /// promises). Additive and skipped when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_act: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1092,6 +1101,12 @@ pub struct NarrativePromiseSummary {
     pub description: String,
     pub status: String,
     pub planned_payoff: Option<StoryPlacement>,
+    /// The 1-based Beat position where the planned payoff lands (McKee).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_payoff_turning_beat: Option<i32>,
+    /// The 1-based order of the Act the promise pays off in (McKee).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_act: Option<i32>,
     pub provenance: Provenance,
 }
 
@@ -1315,6 +1330,8 @@ mod tests {
                 description: "Who betrayed the convoy?".to_string(),
                 status: "open".to_string(),
                 planned_payoff: Some(placement()),
+                planned_payoff_turning_beat: None,
+                target_act: None,
             }),
             SubjectKindSpecific::CharacterArc(CharacterArcDetails {
                 arc_type: "belief_shift".to_string(),
@@ -1422,6 +1439,8 @@ mod tests {
                 description: "Reveal the saboteur.".to_string(),
                 status: "open".to_string(),
                 planned_payoff: Some(placement()),
+                planned_payoff_turning_beat: None,
+                target_act: None,
                 provenance: provenance(),
             }],
             vec![CharacterArcSummary {
@@ -1695,6 +1714,8 @@ mod tests {
                 description: "Reveal the saboteur.".to_string(),
                 status: "open".to_string(),
                 planned_payoff: Some(placement()),
+                planned_payoff_turning_beat: None,
+                target_act: None,
                 provenance: provenance(),
             }],
             vec![CharacterArcSummary {

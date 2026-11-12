@@ -278,6 +278,8 @@ impl Repository {
             None => None,
         };
         let notes_json = serde_json::to_string(&input.notes).context("serializing notes")?;
+        let planned_payoff_turning_beat = input.planned_payoff_turning_beat;
+        let target_act = input.target_act;
         let now = timestamp_to_micros(chrono::Utc::now());
 
         self.inner
@@ -286,8 +288,8 @@ impl Repository {
                 conn.execute(
                     "INSERT INTO narrative_promise (id, project_id, branch_id, promise_type, \
                      description, status, planted_at, planned_payoff, notes, archived_at, \
-                     created_at, updated_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, 'planted', ?6, ?7, ?8, NULL, ?9, ?9)",
+                     created_at, updated_at, planned_payoff_turning_beat, target_act) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'planted', ?6, ?7, ?8, NULL, ?9, ?9, ?10, ?11)",
                     rusqlite::params![
                         &id,
                         &project_id,
@@ -298,6 +300,8 @@ impl Repository {
                         &payoff_json,
                         &notes_json,
                         now,
+                        planned_payoff_turning_beat,
+                        target_act,
                     ],
                 )?;
                 Ok(())

@@ -1745,6 +1745,9 @@ async fn seed_promise_payoff_project(
                 note: None,
             }),
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();
@@ -1888,6 +1891,80 @@ fn poison_mutex<T: Send + 'static>(lock: std::sync::Arc<std::sync::Mutex<T>>) {
         panic!("intentional lock poison for test");
     });
     assert!(handle.join().is_err(), "poisoning thread must panic");
+}
+
+#[tokio::test]
+async fn direct_promise_payoff_turning_beat_requires_a_planned_payoff() {
+    use spindle_core::models::{CreateNarrativePromiseInput, StoryPlacement};
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let project = svc
+        .create_project(CreateProjectInput {
+            name: "Promise payoff".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "p".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    let planted_at = StoryPlacement {
+        book_number: 1,
+        chapter_number: 1,
+        scene_order: Some(1),
+        note: None,
+    };
+
+    // A payoff Beat is a position inside the planned payoff Scene; without that
+    // Scene the direct write refuses instead of storing a dangling reference.
+    let error = svc
+        .create_narrative_promise(CreateNarrativePromiseInput {
+            project_id: project.project_id.clone(),
+            promise_type: "mystery".into(),
+            description: "A payoff beat with no payoff scene".into(),
+            planted_at: planted_at.clone(),
+            planned_payoff: None,
+            planned_payoff_turning_beat: Some(2),
+            target_act: None,
+            notes: Vec::new(),
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("planned_payoff_turning_beat requires a planned_payoff"),
+        "the direct write refuses a Beat without its payoff Scene: {error}"
+    );
+
+    // The same promise with the payoff Scene is accepted and reads back.
+    let promise = svc
+        .create_narrative_promise(CreateNarrativePromiseInput {
+            project_id: project.project_id,
+            promise_type: "mystery".into(),
+            description: "The seal is named in the payoff Scene".into(),
+            planted_at,
+            planned_payoff: Some(StoryPlacement {
+                book_number: 1,
+                chapter_number: 3,
+                scene_order: Some(2),
+                note: None,
+            }),
+            planned_payoff_turning_beat: Some(2),
+            target_act: None,
+            notes: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let stored = svc
+        .repository()
+        .get_narrative_promise(&promise.narrative_promise_id)
+        .await
+        .unwrap();
+    assert_eq!(stored.planned_payoff_turning_beat, Some(2));
+    assert!(stored.planned_payoff.is_some());
 }
 
 #[path = "branch_snapshots/tests.rs"]

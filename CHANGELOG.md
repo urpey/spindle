@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- Add the **Key Fact** planning operation (`create_key_fact`) to the closed
+  allowlist at the Chapter and Scene levels. Its closed turning set is `death`,
+  `revealed_secret`, `relationship_turn`, `item_gained`, `item_lost`,
+  `power_gained`, `power_lost`; any other fact type fails deserialization, and
+  every non-turning fact keeps the existing mine-then-ratify canon flow. The
+  input carries the canonical-fact subject (or a project-wide fact), a unique
+  key, a value, optional context, a story placement with a required
+  `scene_order`, and an optional planned-Scene reference. The placement is
+  **planned-and-pending**: the Scene may still be unplanned, so a well-formed
+  future placement stages and applies. Acceptance writes the existing
+  planned-and-pending canonical fact (`scene_id: None`, placed by the Key
+  Fact's book/chapter), returns its id, and leaves binding to
+  `bind_canonical_fact_to_scene` once the scene row exists. Only an explicitly
+  supplied planned-Scene reference must resolve and agree with the placement;
+  a placement/reference disagreement is stage-recordable Blocking. A
+  `revealed_secret` Key Fact is registered as a secret canonical fact
+  (`secret = 1`) with its subject character as the initial holder (one
+  `knowledge_fact` row linked by `secret_of_fact_id`) and a concealment note
+  explaining the planned reveal; the circle expands later through
+  `record_knowledge` at the dramatised reveal. Key Facts are available only to
+  projects created through the planning root: an existing project gets a
+  readable `key_fact_requires_mckee_project` staging error. There is no new
+  table.
+- Narrative promises gain a planned payoff **Turning Beat** and a long-range
+  **target Act**: `planned_payoff_turning_beat` is the 1-based payoff Beat
+  position in the planned payoff Scene (same numbering as the Scene's
+  `turning_beat`) and `target_act` is the 1-based Act the promise pays off in.
+  V0060 adds both as nullable `narrative_promise` columns; row mapping, subject
+  snapshots, promise reads and the typed export emit them only when set, so
+  unset rows and existing projects stay byte-identical. For McKee projects a
+  promise planned at the Series-Arc or Book level must name a `target_act` that
+  exists in the accepted/merged Act list (missing or unknown Act is
+  stage-recordable Blocking); Chapter/Scene placements may omit it. The
+  existing payoff-before-setup ordering rule is unchanged and still blocking.
+  The payoff-Beat checks are stage-recordable Blocking findings: a payoff
+  Turning Beat that falls outside the planned payoff Scene's Beat list or names
+  a Beat that is not a Turn stages with the finding, and only acceptance is
+  refused. The direct `create_narrative_promise` write refuses a payoff Turning
+  Beat with no `planned_payoff` as a readable error.
+- Add the McKee **deus-ex-machina guard**: a `revealed_secret` Key Fact with no
+  earlier-planted promise whose planned payoff lands in that Scene, and an
+  information-dependent Turning Beat (`information_dependent` plus an optional
+  `promise_id` on a structured Beat) with no promise planted at an earlier
+  placement, are stage-recordable blocking findings. Both read the merged
+  promise view (accepted branch-visible rows, staged ancestors, the current
+  artifact, and the merged promise schedule), and both fields are skipped when
+  false/unset so existing plan JSON is unchanged. Non-McKee projects keep the
+  additive promise fields as plain optional data and cannot use Key Facts at
+  all.
 - Replace beat strings with structured **Beats** for McKee-structured projects.
   A planned Scene now carries `beats` — a closed `kind` (`action` / `reaction` /
   `turn`), an optional `actor_character_id`, the `tactic`, what is `said`, what

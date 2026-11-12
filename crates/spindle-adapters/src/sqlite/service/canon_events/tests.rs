@@ -1858,6 +1858,9 @@ async fn backfill_all_18_stores_idempotency_progression_dedup_and_shadow_parity(
                 note: None,
             }),
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();
@@ -1889,6 +1892,9 @@ async fn backfill_all_18_stores_idempotency_progression_dedup_and_shadow_parity(
             },
             planned_payoff: None,
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();
@@ -2317,6 +2323,9 @@ async fn backfill_and_shadow_parity_across_nested_branches_ancestor_edits_tombst
             },
             planned_payoff: None,
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();
@@ -2399,6 +2408,9 @@ async fn backfill_and_shadow_parity_across_nested_branches_ancestor_edits_tombst
             },
             planned_payoff: None,
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();

@@ -268,7 +268,7 @@ impl Repository {
                         source_owned
                     );
                     mark_legacy_rows_mapped_in_conn(
-                        &tx.tx,
+                        tx.conn(),
                         &scene.project_id,
                         &effective_branch_id,
                         &[

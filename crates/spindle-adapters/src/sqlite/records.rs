@@ -1026,7 +1026,8 @@ impl<'a> TryFrom<&Row<'a>> for Motif {
 // =============================================================================
 
 pub const NARRATIVE_PROMISE_COLUMNS: &str = "id, project_id, branch_id, promise_type, description, status, planted_at, \
-     planned_payoff, notes, archived_at, created_at, updated_at, status_history";
+     planned_payoff, notes, archived_at, created_at, updated_at, status_history, \
+     planned_payoff_turning_beat, target_act";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NarrativePromise {
@@ -1040,6 +1041,14 @@ pub struct NarrativePromise {
     pub status_history: Vec<spindle_core::models::PromiseStatusEvent>,
     pub planted_at: StoredStoryPlacement,
     pub planned_payoff: Option<StoredStoryPlacement>,
+    /// 1-based Beat position where the planned payoff lands (McKee, V0060).
+    /// Skipped when unset so existing rows and exports keep their exact shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_payoff_turning_beat: Option<i32>,
+    /// 1-based Act order the promise pays off in (McKee long-range, V0060).
+    /// Skipped when unset so existing rows and exports keep their exact shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_act: Option<i32>,
     pub notes: Vec<String>,
     pub archived_at: Option<Timestamp>,
     pub created_at: Timestamp,
@@ -1060,6 +1069,8 @@ impl<'a> TryFrom<&Row<'a>> for NarrativePromise {
             status_history: row::json(r, 12)?,
             planted_at: row::json(r, 6)?,
             planned_payoff: row::opt_json(r, 7)?,
+            planned_payoff_turning_beat: row::opt_int(r, 13)?.map(|value| value as i32),
+            target_act: row::opt_int(r, 14)?.map(|value| value as i32),
             notes: row::json(r, 8)?,
             archived_at: row::opt_time(r, 9)?,
             created_at: row::time(r, 10)?,

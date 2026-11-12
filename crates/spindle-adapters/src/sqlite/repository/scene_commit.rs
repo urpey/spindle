@@ -9,7 +9,7 @@ use super::*;
 impl CanonTransaction<'_> {
     fn get_scene_in_tx(&self, id: &str) -> Result<Scene> {
         let sql = format!("SELECT {SCENE_COLUMNS} FROM scene WHERE id = ?1");
-        let mut stmt = self.raw_tx().prepare_cached(&sql)?;
+        let mut stmt = self.conn().prepare_cached(&sql)?;
         stmt.query_row([id], |r| Scene::try_from(r))
             .optional_inner()?
             .ok_or_else(|| anyhow!("scene not found"))
@@ -28,7 +28,7 @@ impl CanonTransaction<'_> {
              WHERE project_id = ?1 AND branch_id = ?2 AND book_number = ?3 \
                AND chapter_number = ?4 AND scene_order = ?5 LIMIT 1"
         );
-        let mut stmt = self.raw_tx().prepare_cached(&sql)?;
+        let mut stmt = self.conn().prepare_cached(&sql)?;
         Ok(stmt
             .query_row(
                 rusqlite::params![
@@ -44,7 +44,7 @@ impl CanonTransaction<'_> {
     }
 
     fn book_id_in_tx(&self, project_id: &str, book_number: i32) -> Result<String> {
-        self.raw_tx()
+        self.conn()
             .query_row(
                 "SELECT id FROM book WHERE project_id = ?1 AND book_number = ?2 LIMIT 1",
                 rusqlite::params![project_id, book_number],
@@ -61,7 +61,7 @@ impl CanonTransaction<'_> {
         book_number: i32,
         chapter_number: i32,
     ) -> Result<String> {
-        self.raw_tx()
+        self.conn()
             .query_row(
                 "SELECT id FROM chapter WHERE project_id = ?1 AND book_number = ?2 \
                  AND chapter_number = ?3 LIMIT 1",
@@ -77,7 +77,7 @@ impl CanonTransaction<'_> {
     /// or 1 for a scene that has never been superseded. Matches the value
     /// `prepare_scene` reports as `scene_version`.
     pub fn current_scene_version_in_tx(&self, scene_id: &str) -> Result<i32> {
-        let latest: i64 = self.raw_tx().query_row(
+        let latest: i64 = self.conn().query_row(
             "SELECT COALESCE(MAX(version_number), 0) FROM scene_version WHERE scene_id = ?1",
             [scene_id],
             |r| r.get(0),
@@ -119,7 +119,7 @@ impl CanonTransaction<'_> {
         // An in-run commit must honor the same stale handoff-plan guard as
         // save_scene_draft: a superseded handoff may not commit stale prose.
         super::authoring::check_active_run_scene_handoff_plan_revision_in_conn(
-            self.raw_tx(),
+            self.conn(),
             project_id,
             branch_id,
             input.book_number,
@@ -145,17 +145,17 @@ impl CanonTransaction<'_> {
                 || existing.content_rating != content_rating
                 || existing.tone != input.tone;
             if let Some((receipt_id, scene_key)) = receipt_claim {
-                claim_generation_receipt_in_tx(self.raw_tx(), receipt_id, scene_key)
+                claim_generation_receipt_in_tx(self.conn(), receipt_id, scene_key)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
             }
             if scene_changed {
-                let latest: i64 = self.raw_tx().query_row(
+                let latest: i64 = self.conn().query_row(
                     "SELECT COALESCE(MAX(version_number), 0) FROM scene_version WHERE scene_id = ?1",
                     [&existing.id],
                     |r| r.get(0),
                 )?;
                 let version_id = mint_id_local("scene_version");
-                self.raw_tx().execute(
+                self.conn().execute(
                     "INSERT INTO scene_version (id, project_id, branch_id, scene_id, \
                      version_number, book_number, chapter_number, scene_order, \
                      full_text, summary, content_rating, tone, created_at) \
@@ -177,7 +177,7 @@ impl CanonTransaction<'_> {
                     ],
                 )?;
             }
-            self.raw_tx().execute(
+            self.conn().execute(
                 "UPDATE scene SET full_text = ?1, summary = ?2, content_rating = ?3, \
                  tone = ?4, location_id = COALESCE(?5, location_id), \
                  draft_origin = COALESCE(?6, draft_origin), updated_at = ?7 WHERE id = ?8",
@@ -193,18 +193,18 @@ impl CanonTransaction<'_> {
                 ],
             )?;
             if scene_changed {
-                self.raw_tx().execute(
+                self.conn().execute(
                     "UPDATE validator_finding SET resolved_at = ?1 \
                      WHERE scene_id = ?2 AND branch_id = ?3 AND resolved_at IS NULL",
                     rusqlite::params![now, &existing.id, branch_id],
                 )?;
-                self.raw_tx().execute(
+                self.conn().execute(
                     "UPDATE dual_persona_review SET status = 'stale', updated_at = ?1 \
                      WHERE branch_id = ?2 AND scene_id = ?3",
                     rusqlite::params![now, branch_id, &existing.id],
                 )?;
                 super::memory::invalidate_layered_memory_for_scene_in_conn(
-                    self.raw_tx(),
+                    self.conn(),
                     project_id,
                     branch_id,
                     &existing.id,
@@ -215,10 +215,10 @@ impl CanonTransaction<'_> {
         } else {
             let scene_id = mint_id("scene");
             if let Some((receipt_id, scene_key)) = receipt_claim {
-                claim_generation_receipt_in_tx(self.raw_tx(), receipt_id, scene_key)
+                claim_generation_receipt_in_tx(self.conn(), receipt_id, scene_key)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
             }
-            self.raw_tx().execute(
+            self.conn().execute(
                 "INSERT INTO scene (id, project_id, branch_id, book_id, chapter_id, \
                  book_number, chapter_number, scene_order, full_text, summary, \
                  content_rating, tone, draft_origin, location_id, created_at, updated_at) \
@@ -242,7 +242,7 @@ impl CanonTransaction<'_> {
                 ],
             )?;
             super::memory::invalidate_layered_memory_for_scene_in_conn(
-                self.raw_tx(),
+                self.conn(),
                 project_id,
                 branch_id,
                 &scene_id,
@@ -268,7 +268,7 @@ impl CanonTransaction<'_> {
         let effective_intensity = match intensity {
             Some(value) => Some(value),
             None => self
-                .raw_tx()
+                .conn()
                 .query_row(
                     "SELECT intensity FROM scene_beat_annotation \
                      WHERE branch_id = ?1 AND scene_id = ?2 LIMIT 1",
@@ -286,11 +286,11 @@ impl CanonTransaction<'_> {
         let conflict_json = serde_json::to_string(conflict_ids)?;
         let id = mint_id("scene_beat_annotation");
         let now = timestamp_to_micros(chrono::Utc::now());
-        self.raw_tx().execute(
+        self.conn().execute(
             "DELETE FROM scene_beat_annotation WHERE branch_id = ?1 AND scene_id = ?2",
             rusqlite::params![branch_id, scene_id],
         )?;
-        self.raw_tx().execute(
+        self.conn().execute(
             "INSERT INTO scene_beat_annotation (id, project_id, branch_id, scene_id, \
              beats, motif_ids, theme_ids, conflict_ids, created_at, updated_at, intensity) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10)",
@@ -335,12 +335,12 @@ impl CanonTransaction<'_> {
         let id = mint_id("chapter_summary");
         let digest_id = mint_id("book_digest");
         let now = timestamp_to_micros(chrono::Utc::now());
-        self.raw_tx().execute(
+        self.conn().execute(
             "DELETE FROM chapter_summary \
              WHERE project_id = ?1 AND branch_id = ?2 AND book_number = ?3 AND chapter_number = ?4",
             rusqlite::params![project_id, branch_id, book_number, chapter_number],
         )?;
-        self.raw_tx().execute(
+        self.conn().execute(
             "INSERT INTO chapter_summary (id, project_id, branch_id, book_number, \
              chapter_number, summary, key_events, character_changes, relationship_shifts, \
              arc_advances, promise_events, created_at, updated_at) \
@@ -364,7 +364,7 @@ impl CanonTransaction<'_> {
         const BOOK_DIGEST_CHAR_CAP: usize = 6000;
         let mut parts: Vec<(i32, String)> = Vec::new();
         {
-            let mut stmt = self.raw_tx().prepare(
+            let mut stmt = self.conn().prepare(
                 "SELECT chapter_number, summary FROM chapter_summary \
                  WHERE project_id = ?1 AND branch_id = ?2 AND book_number = ?3 \
                  ORDER BY chapter_number",
@@ -378,7 +378,7 @@ impl CanonTransaction<'_> {
         let (synopsis, truncated) = build_book_synopsis(&parts, BOOK_DIGEST_CHAR_CAP);
         let token_estimate = (synopsis.len() / 4) as i64;
         let promises = {
-            let mut stmt = self.raw_tx().prepare(&format!(
+            let mut stmt = self.conn().prepare(&format!(
                 "SELECT {NARRATIVE_PROMISE_COLUMNS} FROM narrative_promise \
                  WHERE project_id = ?1 AND branch_id = ?2 AND archived_at IS NULL"
             ))?;
@@ -388,7 +388,7 @@ impl CanonTransaction<'_> {
             .collect::<rusqlite::Result<Vec<_>>>()?
         };
         let conflicts = {
-            let mut stmt = self.raw_tx().prepare(&format!(
+            let mut stmt = self.conn().prepare(&format!(
                 "SELECT {CONFLICT_COLUMNS} FROM conflict \
                  WHERE project_id = ?1 AND branch_id = ?2 AND archived_at IS NULL"
             ))?;
@@ -398,7 +398,7 @@ impl CanonTransaction<'_> {
             .collect::<rusqlite::Result<Vec<_>>>()?
         };
         let plot_lines = {
-            let mut stmt = self.raw_tx().prepare(&format!(
+            let mut stmt = self.conn().prepare(&format!(
                 "SELECT {PLOT_LINE_COLUMNS} FROM plot_line \
                  WHERE project_id = ?1 AND branch_id = ?2 AND archived_at IS NULL"
             ))?;
@@ -410,7 +410,7 @@ impl CanonTransaction<'_> {
         let current_index = story_index(book_number, last_chapter_covered, 0);
         let open_threads = build_open_threads(&promises, &conflicts, &plot_lines, current_index);
         let open_threads_json = serde_json::to_string(&open_threads)?;
-        self.raw_tx().execute(
+        self.conn().execute(
             "INSERT INTO book_digest (id, project_id, branch_id, book_number, synopsis, \
              open_threads, last_chapter_covered, token_estimate, truncated, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10) \
@@ -439,7 +439,7 @@ impl CanonTransaction<'_> {
     pub fn upsert_writer_position_in_tx(&self, params: UpsertWriterPositionParams) -> Result<()> {
         let id = mint_id("writer_position");
         let updated_at = timestamp_to_micros(params.updated_at);
-        self.raw_tx().execute(
+        self.conn().execute(
             "INSERT INTO writer_position (id, project_id, branch_id, book_id, chapter_id, \
              scene_id, intent, next_focus, updated_by, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
@@ -481,7 +481,7 @@ impl CanonTransaction<'_> {
     ) -> Result<String> {
         let id = mint_id("quantity_state");
         let now = timestamp_to_micros(chrono::Utc::now());
-        self.raw_tx().execute(
+        self.conn().execute(
             "INSERT INTO quantity_state \
              (id, project_id, branch_id, subject_table, subject_id, measure, amount, \
               unit, band, change_reason, scene_id, book_number, chapter_number, \
@@ -530,7 +530,7 @@ impl CanonTransaction<'_> {
             .transpose()?;
         let notes_json = serde_json::to_string(notes)?;
         let now = timestamp_to_micros(chrono::Utc::now());
-        self.raw_tx().execute(
+        self.conn().execute(
             "INSERT INTO narrative_promise (id, project_id, branch_id, promise_type, \
              description, status, planted_at, planned_payoff, notes, archived_at, \
              created_at, updated_at) \
@@ -567,7 +567,7 @@ impl CanonTransaction<'_> {
         let placement_json = serde_json::to_string(&stored)?;
         let related_json = serde_json::to_string(related_entity_ids)?;
         let now = timestamp_to_micros(chrono::Utc::now());
-        self.raw_tx().execute(
+        self.conn().execute(
             "INSERT INTO timeline_event (id, project_id, branch_id, title, event_type, \
              placement, summary, related_entity_ids, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
@@ -592,7 +592,7 @@ impl CanonTransaction<'_> {
         idempotency_key: &str,
     ) -> Result<Option<(String, String)>> {
         Ok(self
-            .raw_tx()
+            .conn()
             .query_row(
                 "SELECT payload_hash, receipt_json FROM scene_commit_receipt \
                  WHERE idempotency_key = ?1",
@@ -615,7 +615,7 @@ impl CanonTransaction<'_> {
         receipt_json: &str,
     ) -> Result<()> {
         let now = timestamp_to_micros(chrono::Utc::now());
-        self.raw_tx().execute(
+        self.conn().execute(
             "INSERT INTO scene_commit_receipt \
              (operation_id, project_id, branch_id, scene_id, idempotency_key, payload_hash, \
               receipt_json, created_at) \

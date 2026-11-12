@@ -548,6 +548,19 @@ fn scene_beats(actor: &str, opponent: &str) -> serde_json::Value {
     scene_beats_for(reference(actor), reference(opponent))
 }
 
+/// The same three Beats, with the Turn Beat made information-dependent on an
+/// earlier-planted promise (the #28 deus-ex-machina guard's passing shape).
+fn scene_beats_with_information_promise(
+    actor: &str,
+    opponent: &str,
+    promise: &str,
+) -> serde_json::Value {
+    let mut beats = scene_beats(actor, opponent);
+    beats[2]["information_dependent"] = serde_json::json!(true);
+    beats[2]["promise_id"] = reference(promise);
+    beats
+}
+
 /// Three Beats for a single-character Scene: no second actor is invented.
 fn solo_scene_beats(actor: &str) -> serde_json::Value {
     serde_json::json!([
@@ -922,7 +935,7 @@ async fn all_human_fixture_applies_allowlist_and_reads_six_complete_manifests() 
             planned("conflict:heir","create_conflict",json!({"name":"The missing heir","conflict_type":"mystery","stakes":"Ada's home"})),
             planned("plot:heir","create_plot_line",json!({"name":"Find the heir","plot_type":"main","summary":"Trace a forged ledger","value_axis":"trust","is_main_plot":true,"connected_theme_ids":[reference("theme:trust")],"connected_conflict_ids":[reference("conflict:heir")]})),
             planned("motif:seal","create_motif",json!({"name":"Broken seal","description":"An inherited signet","connected_theme_ids":[reference("theme:trust")]})),
-            planned("promise:seal","create_narrative_promise",json!({"promise_type":"mystery","description":"Who forged the seal?","planted_at":{"book_number":1,"chapter_number":1},"planned_payoff":{"book_number":1,"chapter_number":3}})),
+            planned("promise:seal","create_narrative_promise",json!({"promise_type":"mystery","description":"Who forged the seal?","planted_at":{"book_number":1,"chapter_number":1,"scene_order":1},"planned_payoff":{"book_number":1,"chapter_number":3,"scene_order":2},"target_act":2})),
             planned("arc:ada","create_character_arc",json!({"character_id":reference("cast:ada"),"arc_type":"growth","starting_state":"Alone","ending_state":"Trusting","thematic_purpose":"Risk connection","connected_theme_ids":[reference("theme:trust")],"milestones":[{"label":"Ask for help","description":"Ada trusts Ben","placement":{"book_number":1,"chapter_number":2}}]})),
             planned("pacing:series","create_pacing_config",json!({"total_planned_books":2,"avg_chapters_per_book":3,"avg_scenes_per_chapter":2,"tension_model":"rising"})),
             planned("pacing:book","create_pacing_curve",json!({"book_number":1,"act_breakpoints":{},"scene_type_density":{"action":0.5,"sequel":0.5},"intensity_points":[{"position":0.0,"intensity":0.2},{"position":1.0,"intensity":0.8}]})),
@@ -967,39 +980,116 @@ async fn all_human_fixture_applies_allowlist_and_reads_six_complete_manifests() 
     for number in 1..=3 {
         let (primary_one, primary_two) = value_test_chain_for_chapter(number);
         let dilemma = json!({"character_id":reference("cast:ada"),"contradiction":"generous"});
+        // From chapter 2 on, the Turn Beat depends on information the story
+        // planted in chapter 1's first Scene; the guard must accept it.
+        let beats = if number == 1 {
+            scene_beats("cast:ada", "cast:ben")
+        } else {
+            scene_beats_with_information_promise("cast:ada", "cast:ben", "promise:seal")
+        };
         plans.push(planned(&format!("plan:{number}"),"plan_chapter",json!({"book_number":1,"chapter_number":number,"pov_character_id":reference("cast:ada"),"synopsis":format!("Turn {number}: the forgery forces a costly choice"),"target_theme_ids":[reference("theme:trust")],"target_conflict_ids":[reference("conflict:heir")],"target_plot_line_ids":[reference("plot:heir")],"scenes":[
-   {"scene_order":1,"summary":"Ada follows the ledger to the tidal gate","purpose":"Discover the forged seal","character_ids":[reference("cast:ada"),reference("cast:ben")],"location_id":reference("place:harbor"),"content_rating":"general","beat_structure":["clue","choice"],"beats":scene_beats("cast:ada","cast:ben"),"turning_beat":3,"research_required":true,"research_tags":["tidal gates"],"primary_value_axis":primary_one,"secondary_value_axes":[value_test_secondary_axis("trust")],"opposition":"The harbor magistrate","gap":{"expected":"The gate log will clear Ada","actual":"The log is missing a page"},"scene_question":"Who altered the tide log?","inaction_cost":"The next tide erases the evidence","risk":number},
-   {"scene_order":2,"summary":"Ada wagers her signet on Ben's testimony","purpose":"Force a trust decision","character_ids":[reference("cast:ada"),reference("cast:ben")],"location_id":reference("place:harbor"),"content_rating":"general","beat_structure":["cost","change"],"beats":scene_beats("cast:ada","cast:ben"),"turning_beat":3,"primary_value_axis":primary_two,"secondary_value_axes":[value_test_secondary_axis("trust")],"opposition":"Ben's silence","gap":{"expected":"Ben will testify","actual":"Ben asks for the signet first"},"scene_question":"Will Ada risk the signet?","inaction_cost":"Losing the heir's trail for good","risk":number + 1,"dilemma":dilemma}
+   {"scene_order":1,"summary":"Ada follows the ledger to the tidal gate","purpose":"Discover the forged seal","character_ids":[reference("cast:ada"),reference("cast:ben")],"location_id":reference("place:harbor"),"content_rating":"general","beat_structure":["clue","choice"],"beats":beats.clone(),"turning_beat":3,"research_required":true,"research_tags":["tidal gates"],"primary_value_axis":primary_one,"secondary_value_axes":[value_test_secondary_axis("trust")],"opposition":"The harbor magistrate","gap":{"expected":"The gate log will clear Ada","actual":"The log is missing a page"},"scene_question":"Who altered the tide log?","inaction_cost":"The next tide erases the evidence","risk":number},
+   {"scene_order":2,"summary":"Ada wagers her signet on Ben's testimony","purpose":"Force a trust decision","character_ids":[reference("cast:ada"),reference("cast:ben")],"location_id":reference("place:harbor"),"content_rating":"general","beat_structure":["cost","change"],"beats":beats,"turning_beat":3,"primary_value_axis":primary_two,"secondary_value_axes":[value_test_secondary_axis("trust")],"opposition":"Ben's silence","gap":{"expected":"Ben will testify","actual":"Ben asks for the signet first"},"scene_question":"Will Ada risk the signet?","inaction_cost":"Losing the heir's trail for good","risk":number + 1,"dilemma":dilemma}
   ]})));
     }
+    // A turning Key Fact the plan fixes before prose: Ada takes the broken seal
+    // as surety in the Scene that dramatises it. It applies as a
+    // planned-and-pending canonical fact, not as prose.
+    let mut plan_operations = plans;
+    plan_operations.push(PlanningOperationItem {
+        output_ref: "key:seal".into(),
+        operation: PlanningOperation::CreateKeyFact(PlanningCreateKeyFactInput {
+            kind: spindle_core::key_fact::KeyFactKind::ItemGained,
+            subject_table: Some("character".into()),
+            subject_id: Some(PlanningRef::ProposalRef("cast:ada".into())),
+            key: "Ada:broken_seal".into(),
+            value: "Ada takes the broken seal as surety".into(),
+            context: Some("The signet that anchors the trust turn".into()),
+            placement: value_place(1, 1, 1),
+            planned_scene_id: Some(PlanningRef::ProposalRef("plan:1".into())),
+        }),
+    });
     let manifests = bundle(
         &svc,
         &s,
         PlanningLevel::Scene,
         &[&chapters, &cast, &arc],
-        plans,
+        plan_operations,
     )
     .await;
     let report = accept(&svc, &s, &manifests).await;
     let scope = s.scope.clone().unwrap();
+    let key_fact_id = report
+        .operations
+        .iter()
+        .find_map(|receipt| receipt.returned_ids.get("key:seal"))
+        .cloned()
+        .expect("the Key Fact operation returns its canonical fact id");
     let mut count = 0;
-    for receipt in report.operations {
-        let id = receipt.returned_ids.values().next().unwrap();
-        let plan = svc.repository.get_chapter_plan(id).await.unwrap();
-        assert_eq!(plan.project_id, scope.project_id);
-        assert_eq!(plan.scenes.len(), 2);
-        count += plan.scenes.len();
-        for scene in &plan.scenes {
-            assert_eq!(scene.character_ids.len(), 2);
-            assert!(scene.location_id.is_some());
-            assert!(scene.content_rating.is_some());
-            assert!(!scene.purpose.is_empty());
+    let mut plan_receipts = 0;
+    let mut key_fact_receipts = 0;
+    for receipt in &report.operations {
+        assert_eq!(
+            receipt.outcome,
+            PlanningOperationOutcome::Applied,
+            "every fixture operation applies: {:?}",
+            receipt.error
+        );
+        assert!(
+            receipt.result.is_some(),
+            "an applied receipt carries its output"
+        );
+        match receipt.result.as_ref().unwrap() {
+            PlanningAppliedOutput::PlanChapter(_) => {
+                plan_receipts += 1;
+                assert_eq!(
+                    receipt.returned_ids.len(),
+                    1,
+                    "a plan returns exactly its chapter_plan id"
+                );
+                let id = receipt
+                    .returned_ids
+                    .values()
+                    .next()
+                    .expect("the plan's chapter_plan id");
+                let plan = svc.repository.get_chapter_plan(id).await.unwrap();
+                assert_eq!(plan.project_id, scope.project_id);
+                assert_eq!(plan.scenes.len(), 2);
+                count += plan.scenes.len();
+                for scene in &plan.scenes {
+                    assert_eq!(scene.character_ids.len(), 2);
+                    assert!(scene.location_id.is_some());
+                    assert!(scene.content_rating.is_some());
+                    assert!(!scene.purpose.is_empty());
+                }
+                assert_eq!(plan.scenes[0].research_required, Some(true));
+                assert!(!receipt.prior_state.as_object().unwrap().is_empty());
+            }
+            PlanningAppliedOutput::CreateKeyFact(out) => {
+                key_fact_receipts += 1;
+                assert_eq!(
+                    receipt.returned_ids.get("key:seal"),
+                    Some(&out.canonical_fact_id),
+                    "the Key Fact returns its canonical fact id"
+                );
+                assert_eq!(receipt.returned_ids.len(), 1);
+            }
+            other => panic!("unexpected receipt kind in the all-human fixture: {other:?}"),
         }
-        assert_eq!(plan.scenes[0].research_required, Some(true));
-        assert!(!receipt.prior_state.as_object().unwrap().is_empty());
-        assert!(receipt.result.is_some());
     }
+    assert_eq!(plan_receipts, 3);
+    assert_eq!(key_fact_receipts, 1);
     assert_eq!(count, 6);
+    // The Key Fact is a planned-and-pending canonical fact placed at the
+    // planned Scene; it is not prose and it has no bound scene yet.
+    let key_fact = svc
+        .repository
+        .get_canonical_fact(&key_fact_id)
+        .await
+        .expect("planned-and-pending key fact");
+    assert_eq!(key_fact.book_number, 1);
+    assert_eq!(key_fact.chapter_number, 1);
+    assert!(key_fact.scene_id.is_none());
     let drafts: i64 = svc
         .repository
         .pool()
@@ -1343,6 +1433,78 @@ async fn failed_character_design_receipt_rolls_back_its_own_design() {
         secret_facts, 4,
         "retry creates the rolled-back design facts exactly once"
     );
+}
+
+#[tokio::test]
+async fn nested_savepoint_rolls_back_a_failed_unit_inside_the_application_transaction() {
+    use crate::sqlite::repository::CreateCanonicalFactParams;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, _root) = accepted_root(&svc).await;
+    let scope = session.scope.clone().unwrap();
+    let repo = svc.repository.clone();
+    let pool = svc.repository.pool().clone();
+
+    async fn fact_count(pool: &crate::sqlite::SqlitePool, project_id: &str) -> i64 {
+        let project_id = project_id.to_string();
+        pool.read(move |conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM canonical_fact WHERE project_id=?1",
+                [&project_id],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .unwrap()
+    }
+
+    let before = fact_count(&pool, &scope.project_id).await;
+    let project = scope.project_id.clone();
+    let branch = scope.branch_id.clone();
+    pool.application_transaction(true, || async {
+        let nested_repo = repo.clone();
+        let nested_project = project.clone();
+        let nested_branch = branch.clone();
+        // The Planning application transaction has already pinned the writer
+        // and opened a transaction, so this unit must nest through a savepoint.
+        let error: anyhow::Result<()> = nested_repo
+            .with_transaction(move |tx| {
+                tx.create_canonical_fact(CreateCanonicalFactParams {
+                    project_id: nested_project.clone(),
+                    branch_id: nested_branch.clone(),
+                    scene_id: None,
+                    book_number: 1,
+                    chapter_number: 1,
+                    subject_table: "project".into(),
+                    subject_id: None,
+                    predicate: "nested:savepoint".into(),
+                    value_kind: "string".into(),
+                    value_text: Some("rolled back".into()),
+                    value_number: None,
+                    unit: None,
+                    value_json: None,
+                    aliases: Vec::new(),
+                    scope: "invariant".into(),
+                    valid_from: None,
+                    valid_until: None,
+                    legacy_untyped: false,
+                    secret: false,
+                    concealment_note: None,
+                })?;
+                anyhow::bail!("nested unit failed after its write");
+            })
+            .await;
+        assert!(error.is_err(), "the nested unit reports its failure");
+        assert_eq!(
+            fact_count(&pool, &project).await,
+            before,
+            "the savepoint rolls the nested write back while the outer transaction is open"
+        );
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(fact_count(&pool, &project).await, before);
 }
 
 #[tokio::test]
@@ -2448,6 +2610,8 @@ async fn route_generation_real_agent_stages_all_levels_and_applies_only_on_human
                         "description": "The wax seal impression matches the magistrate's ring",
                         "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1, "note": null},
                         "planned_payoff": {"book_number": 1, "chapter_number": 3, "scene_order": 2, "note": null},
+                        "planned_payoff_turning_beat": 3,
+                        "target_act": 1,
                         "notes": ["Planted in Ch1"]
                     }
                 }
@@ -2479,6 +2643,15 @@ async fn route_generation_real_agent_stages_all_levels_and_applies_only_on_human
                     "promise_ref": {"kind": "proposal_ref", "value": "promise:seal"},
                     "action": "payoff",
                     "placement": {"book_number": 1, "chapter_number": 3, "scene_order": 2, "note": null}
+                }
+            ],
+            "acts": [
+                {
+                    "order": 1,
+                    "climax": {"book_number": 1, "chapter_number": 1, "scene_order": 2},
+                    "charge": {"sign": "negative", "depth": "contrary"},
+                    "central_question_part": "Ada learns the manifest was forged",
+                    "answers_central_question": true
                 }
             ]
         }
@@ -5819,7 +5992,9 @@ fn phase_d_series_input(
                 "promise_type": "mystery",
                 "description": "Who rang the clapperless bell?",
                 "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
-                "planned_payoff": {"book_number": 1, "chapter_number": 2, "scene_order": 2}
+                "planned_payoff": {"book_number": 1, "chapter_number": 2, "scene_order": 2},
+                "planned_payoff_turning_beat": 3,
+                "target_act": 2
             }),
         ),
         planned(
@@ -6375,6 +6550,9 @@ async fn phase_d_validator_enforces_promise_schedules_pov_rotation_pacing_curves
             planted_at: phase_d_place(1, 4, 1),
             planned_payoff: Some(phase_d_place(1, 2, 1)),
             notes: vec![],
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         }),
     });
     series_test.operations.push(PlanningOperationItem {
@@ -6385,6 +6563,9 @@ async fn phase_d_validator_enforces_promise_schedules_pov_rotation_pacing_curves
             planted_at: phase_d_place(1, 1, 1),
             planned_payoff: None,
             notes: vec![],
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         }),
     });
     series_test.operations.push(PlanningOperationItem {
@@ -6395,6 +6576,9 @@ async fn phase_d_validator_enforces_promise_schedules_pov_rotation_pacing_curves
             planted_at: phase_d_place(1, 2, 1),
             planned_payoff: Some(phase_d_place(2, 1, 1)),
             notes: vec!["Pays off in Book 2 Chapter 1".into()],
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         }),
     });
     // Add arc:tomas with unordered milestones (ch 4 then ch 2) and spacing violation + book budget violation
@@ -10965,6 +11149,9 @@ fn value_beats() -> Vec<PlanningBeat> {
             wanted: "Proof that the seal was forged".into(),
             gap: gap("The ledger proves the forgery", "A page is missing"),
             swain_label: None,
+
+            information_dependent: false,
+            promise_id: None,
         },
         PlanningBeat {
             kind: BeatKind::Reaction,
@@ -10974,6 +11161,9 @@ fn value_beats() -> Vec<PlanningBeat> {
             wanted: "A witness she can trust".into(),
             gap: gap("The seal is old", "The seal was pressed today"),
             swain_label: Some("conflict".into()),
+
+            information_dependent: false,
+            promise_id: None,
         },
         PlanningBeat {
             kind: BeatKind::Turn,
@@ -10986,6 +11176,9 @@ fn value_beats() -> Vec<PlanningBeat> {
                 "The magistrate orders her silence",
             ),
             swain_label: None,
+
+            information_dependent: false,
+            promise_id: None,
         },
     ]
 }
@@ -12580,4 +12773,846 @@ async fn non_mckee_projects_are_exempt_from_value_chain_findings() {
     let scene_json = serde_json::to_value(&plan.scenes[0]).unwrap();
     assert!(scene_json.get("beats").is_none());
     assert!(scene_json.get("turning_beat").is_none());
+}
+
+// ---------------------------------------------------------------------------
+// McKee Key Facts and Narrative Promises (ticket #28)
+// ---------------------------------------------------------------------------
+
+/// A promise operation for the gate fixtures. `body` carries the promise fields;
+/// the output reference is always unique.
+fn promise_op(key: &str, body: serde_json::Value) -> PlanningOperationItem {
+    planned(key, "create_narrative_promise", body)
+}
+
+async fn stage_promises(
+    fixture: &ValueChainFixture,
+    items: Vec<PlanningOperationItem>,
+) -> PlanningProposal {
+    bundle(
+        &fixture.svc,
+        &fixture.session,
+        PlanningLevel::SeriesArc,
+        &[&fixture.series],
+        items,
+    )
+    .await
+}
+
+/// Chapter 2 of the value-chain fixture: its first Scene opens where chapter 1's
+/// last Scene closed, and its second Scene is the Sequence climax with a
+/// dilemma, so the value chain is valid and only the #28 gates can block.
+fn value_chapter_two_scenes() -> Vec<PlanningPlanChapterSceneInput> {
+    let mut climax = value_scene(
+        2,
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+    );
+    climax.dilemma = Some(value_dilemma("guarded"));
+    climax.risk = Some(5);
+    let mut first = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    // Chapter 1's last Scene ends at risk 3, so chapter 2 must not drop risk.
+    first.risk = Some(4);
+    vec![first, climax]
+}
+
+fn key_fact_op(
+    output_ref: &str,
+    kind: spindle_core::key_fact::KeyFactKind,
+    placement: PlanningStoryPlacement,
+    planned_scene: Option<PlanningRef>,
+) -> PlanningOperationItem {
+    PlanningOperationItem {
+        output_ref: output_ref.into(),
+        operation: PlanningOperation::CreateKeyFact(PlanningCreateKeyFactInput {
+            kind,
+            subject_table: Some("character".into()),
+            subject_id: Some(PlanningRef::ProposalRef("cast:hero".into())),
+            key: format!("hero:{output_ref}"),
+            value: "The truth costs the harbor its warning".into(),
+            context: Some("A turning canon fact fixed before prose".into()),
+            placement,
+            planned_scene_id: planned_scene,
+        }),
+    }
+}
+
+/// A project-wide Key Fact with no subject reference, for fixtures without a
+/// visible character.
+fn plain_key_fact_op(
+    output_ref: &str,
+    kind: spindle_core::key_fact::KeyFactKind,
+    placement: PlanningStoryPlacement,
+) -> PlanningOperationItem {
+    PlanningOperationItem {
+        output_ref: output_ref.into(),
+        operation: PlanningOperation::CreateKeyFact(PlanningCreateKeyFactInput {
+            kind,
+            subject_table: None,
+            subject_id: None,
+            key: format!("harbor:{output_ref}"),
+            value: "The harbor keeps the ledger".into(),
+            context: None,
+            placement,
+            planned_scene_id: None,
+        }),
+    }
+}
+
+#[tokio::test]
+async fn mckee_long_range_promise_needs_a_target_act_that_exists_and_reads_back() {
+    let fixture = value_chain_fixture().await;
+
+    // A Series-Arc promise without a target Act is a stage-recordable Blocking
+    // finding: the proposal stages with the finding and acceptance refuses.
+    let missing = stage_promises(
+        &fixture,
+        vec![promise_op(
+            "promise:no-act",
+            serde_json::json!({
+                "promise_type": "mystery",
+                "description": "Who forged the ledger?",
+                "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "planned_payoff": {"book_number": 2, "chapter_number": 1, "scene_order": 1}
+            }),
+        )],
+    )
+    .await;
+    assert!(
+        value_codes(&missing).contains("promise_long_range_missing_target_act"),
+        "{:?}",
+        missing.findings
+    );
+    reject_planning(&fixture.svc, &fixture.session, &missing).await;
+
+    // A target Act that does not exist in the merged Act list is also Blocking.
+    let unknown = stage_promises(
+        &fixture,
+        vec![promise_op(
+            "promise:bad-act",
+            serde_json::json!({
+                "promise_type": "mystery",
+                "description": "Who forged the ledger?",
+                "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "planned_payoff": {"book_number": 2, "chapter_number": 1, "scene_order": 1},
+                "target_act": 9
+            }),
+        )],
+    )
+    .await;
+    assert!(
+        value_codes(&unknown).contains("promise_target_act_unknown"),
+        "{:?}",
+        unknown.findings
+    );
+    reject_planning(&fixture.svc, &fixture.session, &unknown).await;
+
+    // A long-range promise naming an accepted Act stages cleanly and reads
+    // back through planning_status and get_entity.
+    let valid = stage_promises(
+        &fixture,
+        vec![promise_op(
+            "promise:ledger",
+            serde_json::json!({
+                "promise_type": "mystery",
+                "description": "Who forged the ledger?",
+                "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "planned_payoff": {"book_number": 2, "chapter_number": 1, "scene_order": 1},
+                "planned_payoff_turning_beat": 3,
+                "target_act": 2
+            }),
+        )],
+    )
+    .await;
+    assert!(
+        valid.findings.is_empty(),
+        "a long-range promise with an existing target Act must stage cleanly: {:?}",
+        valid.findings
+    );
+    let report = accept(&fixture.svc, &fixture.session, &valid).await;
+    let promise_id = report
+        .operations
+        .iter()
+        .find_map(|receipt| receipt.returned_ids.get("promise:ledger"))
+        .cloned()
+        .expect("the promise operation returns its id");
+
+    let status = fixture
+        .svc
+        .planning_status(PlanningStatusInput {
+            session_id: Some(fixture.session.id.clone()),
+            project_id: None,
+            branch_id: None,
+            target_range: None,
+            include_readiness: Some(false),
+        })
+        .await
+        .unwrap();
+    let applied = status
+        .proposals
+        .iter()
+        .find(|proposal| proposal.proposal_id == valid.id)
+        .expect("applied promise proposal");
+    assert_eq!(applied.operations[0].operation["input"]["target_act"], 2);
+    assert_eq!(
+        applied.operations[0].operation["input"]["planned_payoff_turning_beat"],
+        3
+    );
+
+    let snapshot = fixture
+        .svc
+        .get_entity(spindle_core::models::GetEntityInput {
+            project_id: fixture.scope.project_id.clone(),
+            table: spindle_core::subject::SubjectTable::NarrativePromise,
+            entity_id: promise_id.clone(),
+            branch_id: None,
+        })
+        .await
+        .unwrap();
+    let spindle_core::subject_snapshot::SubjectKindSpecific::NarrativePromise(details) =
+        snapshot.kind_specific()
+    else {
+        panic!("promise snapshot must expose promise details");
+    };
+    assert_eq!(details.target_act, Some(2));
+    assert_eq!(details.planned_payoff_turning_beat, Some(3));
+    assert_eq!(
+        details.planned_payoff.as_ref().map(|p| p.book_number),
+        Some(2)
+    );
+}
+
+#[tokio::test]
+async fn mckee_promise_payoff_cannot_precede_its_setup() {
+    let fixture = value_chain_fixture().await;
+    let mut input = artifact(&fixture.session, "unused");
+    input.level = PlanningLevel::SeriesArc;
+    input.parents = BTreeMap::from([(
+        fixture.series.id.clone(),
+        fixture.series.payload_hash.clone(),
+    )]);
+    input.operations = vec![promise_op(
+        "promise:inverted",
+        serde_json::json!({
+            "promise_type": "mystery",
+            "description": "Paid before planted",
+            "planted_at": {"book_number": 1, "chapter_number": 2, "scene_order": 2},
+            "planned_payoff": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+            "target_act": 1
+        }),
+    )];
+    let error = fixture
+        .svc
+        .stage_planning(input)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("promise_payoff_before_plant"),
+        "payoff-before-setup stays a hard Blocking error: {error}"
+    );
+}
+
+#[tokio::test]
+async fn mckee_promise_payoff_turning_beat_must_name_a_turn_beat() {
+    let fixture = value_chain_fixture().await;
+    // Chapter 1 Scene 1 is already planned: its Beat 1 is an action and Beat 3
+    // is the turn. A payoff Turning Beat must be a 1-based turn position.
+    let not_turn = stage_promises(
+        &fixture,
+        vec![promise_op(
+            "promise:not-turn",
+            serde_json::json!({
+                "promise_type": "mystery",
+                "description": "Payoff on an action beat",
+                "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "planned_payoff": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "planned_payoff_turning_beat": 1,
+                "target_act": 1
+            }),
+        )],
+    )
+    .await;
+    assert!(
+        value_codes(&not_turn).contains("promise_payoff_turning_beat_not_turn"),
+        "{:?}",
+        not_turn.findings
+    );
+    reject_planning(&fixture.svc, &fixture.session, &not_turn).await;
+
+    let out_of_range = stage_promises(
+        &fixture,
+        vec![promise_op(
+            "promise:out-of-range",
+            serde_json::json!({
+                "promise_type": "mystery",
+                "description": "Payoff outside the Beat list",
+                "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "planned_payoff": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "planned_payoff_turning_beat": 9,
+                "target_act": 1
+            }),
+        )],
+    )
+    .await;
+    assert!(
+        value_codes(&out_of_range).contains("promise_payoff_turning_beat_out_of_range"),
+        "{:?}",
+        out_of_range.findings
+    );
+
+    let without_payoff = stage_promises(
+        &fixture,
+        vec![promise_op(
+            "promise:beat-no-payoff",
+            serde_json::json!({
+                "promise_type": "mystery",
+                "description": "A beat without a payoff Scene",
+                "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "planned_payoff": null,
+                "planned_payoff_turning_beat": 3,
+                "target_act": 1,
+                "notes": ["Deferred beyond the horizon"]
+            }),
+        )],
+    )
+    .await;
+    assert!(
+        value_codes(&without_payoff).contains("promise_payoff_turning_beat_without_payoff"),
+        "{:?}",
+        without_payoff.findings
+    );
+}
+
+#[tokio::test]
+async fn mckee_key_fact_stages_applies_and_binds_as_a_planned_and_pending_fact() {
+    use spindle_core::models::{ContentRating, SaveSceneDraftInput};
+
+    let fixture = value_chain_fixture().await;
+    // The secret the reveal pays off: planted in chapter 1, paid in chapter 2
+    // Scene 1.
+    let promises = stage_promises(
+        &fixture,
+        vec![promise_op(
+            "promise:seal",
+            serde_json::json!({
+                "promise_type": "mystery",
+                "description": "Who pressed the seal?",
+                "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "planned_payoff": {"book_number": 1, "chapter_number": 2, "scene_order": 1},
+                "target_act": 2
+            }),
+        )],
+    )
+    .await;
+    assert!(promises.findings.is_empty(), "{:?}", promises.findings);
+    accept(&fixture.svc, &fixture.session, &promises).await;
+
+    let mut scenes = value_chapter_two_scenes();
+    // Make the turning Beat depend on the promise planted in chapter 1, so the
+    // information-dependent gate passes through the same artifact.
+    scenes[0].beats[2].information_dependent = true;
+    scenes[0].beats[2].promise_id = Some(PlanningRef::ProposalRef("promise:seal".into()));
+    let mut scene_input = value_scene_artifact(
+        &fixture.session,
+        &[&fixture.cast, &fixture.series, &fixture.chapters, &promises],
+        vec![(2, scenes)],
+    );
+    let plan_ref = scene_input.operations[0].output_ref.clone();
+    scene_input.operations.push(key_fact_op(
+        "key:reveal",
+        spindle_core::key_fact::KeyFactKind::RevealedSecret,
+        value_place(1, 2, 1),
+        Some(PlanningRef::ProposalRef(plan_ref)),
+    ));
+
+    // A revealed secret needs a character subject: it becomes the initial
+    // holder of the secret fact. A project-wide reveal is stage-recordable
+    // Blocking, not a silent public fact.
+    let mut bad_subject = value_scene_artifact(
+        &fixture.session,
+        &[&fixture.cast, &fixture.series, &fixture.chapters, &promises],
+        vec![(2, value_chapter_two_scenes())],
+    );
+    bad_subject.operations.push(plain_key_fact_op(
+        "key:no-subject",
+        spindle_core::key_fact::KeyFactKind::RevealedSecret,
+        value_place(1, 2, 1),
+    ));
+    let bad_subject = fixture.svc.stage_planning(bad_subject).await.unwrap();
+    assert!(
+        value_codes(&bad_subject).contains("key_fact_secret_reveal_requires_character_subject"),
+        "{:?}",
+        bad_subject.findings
+    );
+    reject_planning(&fixture.svc, &fixture.session, &bad_subject).await;
+
+    let scene_proposal = fixture.svc.stage_planning(scene_input).await.unwrap();
+    assert!(
+        scene_proposal.findings.is_empty(),
+        "a promised reveal and an information-dependent Turn must pass: {:?}",
+        scene_proposal.findings
+    );
+    let report = accept(&fixture.svc, &fixture.session, &scene_proposal).await;
+    let fact_id = report
+        .operations
+        .iter()
+        .find_map(|receipt| receipt.returned_ids.get("key:reveal"))
+        .cloned()
+        .expect("the Key Fact operation returns the canonical fact id");
+
+    let fact = fixture
+        .svc
+        .repository
+        .get_canonical_fact(&fact_id)
+        .await
+        .unwrap();
+    assert!(fact.scene_id.is_none(), "a Key Fact is planned-and-pending");
+    assert_eq!((fact.book_number, fact.chapter_number), (1, 2));
+    assert_eq!(fact.predicate, "hero:key:reveal");
+    assert_eq!(
+        fact.value_text.as_deref(),
+        Some("The truth costs the harbor its warning")
+    );
+    assert_eq!(fact.subject_table, "character");
+    assert_eq!(
+        fact.valid_from
+            .as_ref()
+            .and_then(|placement| placement.scene_order),
+        Some(1)
+    );
+
+    // A revealed_secret Key Fact is a secret canonical fact whose initial
+    // circle of trust is its subject character. The reveal still reads back
+    // through planning; the circle expands only at the dramatised reveal.
+    let subject_id = fact.subject_id.clone().expect("the subject character id");
+    let (secret, concealment_note, holders): (i64, Option<String>, i64) = fixture
+        .svc
+        .repository
+        .pool()
+        .read({
+            let fact_id = fact_id.clone();
+            let subject_id = subject_id.clone();
+            move |conn| {
+                let secret = conn.query_row(
+                    "SELECT secret FROM canonical_fact WHERE id=?1",
+                    [&fact_id],
+                    |row| row.get(0),
+                )?;
+                let note = conn.query_row(
+                    "SELECT concealment_note FROM canonical_fact WHERE id=?1",
+                    [&fact_id],
+                    |row| row.get(0),
+                )?;
+                let holders = conn.query_row(
+                    "SELECT COUNT(*) FROM knowledge_fact WHERE secret_of_fact_id=?1 AND character_id=?2",
+                    rusqlite::params![&fact_id, &subject_id],
+                    |row| row.get(0),
+                )?;
+                Ok((secret, note, holders))
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(secret, 1, "a revealed_secret fact is a secret fact");
+    assert!(
+        concealment_note.is_some_and(|note| note.contains("Planned reveal")),
+        "the planned reveal is explained in the concealment note"
+    );
+    assert_eq!(
+        holders, 1,
+        "the subject character is in the initial circle of trust"
+    );
+
+    // The fact is bindable once the scene row exists.
+    let scene = fixture
+        .svc
+        .save_scene_draft(SaveSceneDraftInput {
+            project_id: fixture.scope.project_id.clone(),
+            book_number: 1,
+            chapter_number: 2,
+            chapter_id: None,
+            scene_order: 1,
+            full_text: "\"The seal was pressed here,\" Ada said.".into(),
+            summary: "Ada names the seal's forger.".into(),
+            content_rating: ContentRating::General,
+            tone: None,
+            generation_id: None,
+            source_path: None,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    fixture
+        .svc
+        .bind_canonical_fact_to_scene(spindle_core::models::BindCanonicalFactToSceneInput {
+            canonical_fact_id: fact_id.clone(),
+            scene_id: scene.scene_id.clone(),
+        })
+        .await
+        .expect("a planned-and-pending Key Fact binds to its scene later");
+    let bound = fixture
+        .svc
+        .repository
+        .get_canonical_fact(&fact_id)
+        .await
+        .unwrap();
+    assert_eq!(bound.scene_id.as_deref(), Some(scene.scene_id.as_str()));
+}
+
+#[tokio::test]
+async fn mckee_key_fact_future_placement_is_planned_and_pending_and_references_still_agree() {
+    let fixture = value_chain_fixture().await;
+
+    // The placement names a Scene that is not planned yet: the Key Fact is
+    // planned-and-pending, so it stages and applies without the Scene row.
+    let future = bundle(
+        &fixture.svc,
+        &fixture.session,
+        PlanningLevel::Chapter,
+        &[&fixture.cast, &fixture.chapters],
+        vec![key_fact_op(
+            "key:future",
+            spindle_core::key_fact::KeyFactKind::Death,
+            value_place(1, 3, 1),
+            None,
+        )],
+    )
+    .await;
+    assert!(
+        future
+            .findings
+            .iter()
+            .all(|finding| !finding.code.starts_with("key_fact_")),
+        "a future placement must not be a Key Fact finding: {:?}",
+        future.findings
+    );
+    let report = accept(&fixture.svc, &fixture.session, &future).await;
+    let fact_id = report
+        .operations
+        .iter()
+        .find_map(|receipt| receipt.returned_ids.get("key:future"))
+        .cloned()
+        .expect("the future Key Fact returns its canonical fact id");
+    let fact = fixture
+        .svc
+        .repository
+        .get_canonical_fact(&fact_id)
+        .await
+        .expect("planned-and-pending key fact");
+    assert!(
+        fact.scene_id.is_none(),
+        "the future Scene does not exist yet"
+    );
+    assert_eq!((fact.book_number, fact.chapter_number), (1, 3));
+    assert_eq!(
+        fact.valid_from
+            .as_ref()
+            .and_then(|placement| placement.scene_order),
+        Some(1)
+    );
+
+    // An explicit planned-scene reference still has to agree with the
+    // placement: a chapter plan for chapter 2 cannot own a chapter-1 Scene.
+    let mut scene_input = value_scene_artifact(
+        &fixture.session,
+        &[&fixture.cast, &fixture.series, &fixture.chapters],
+        vec![(2, value_chapter_two_scenes())],
+    );
+    let plan_ref = scene_input.operations[0].output_ref.clone();
+    scene_input.operations.push(key_fact_op(
+        "key:mismatch",
+        spindle_core::key_fact::KeyFactKind::Death,
+        value_place(1, 1, 1),
+        Some(PlanningRef::ProposalRef(plan_ref)),
+    ));
+    let mismatch = fixture.svc.stage_planning(scene_input).await.unwrap();
+    assert!(
+        value_codes(&mismatch).contains("key_fact_scene_reference_mismatch"),
+        "{:?}",
+        mismatch.findings
+    );
+    reject_planning(&fixture.svc, &fixture.session, &mismatch).await;
+}
+
+#[tokio::test]
+async fn mckee_secret_reveal_key_fact_without_an_earlier_promise_is_blocking() {
+    let fixture = value_chain_fixture().await;
+    let promises = stage_promises(
+        &fixture,
+        vec![promise_op(
+            "promise:late",
+            serde_json::json!({
+                "promise_type": "mystery",
+                "description": "Paid in chapter 2 Scene 2",
+                "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "planned_payoff": {"book_number": 1, "chapter_number": 2, "scene_order": 2},
+                "target_act": 2
+            }),
+        )],
+    )
+    .await;
+    assert!(promises.findings.is_empty(), "{:?}", promises.findings);
+    accept(&fixture.svc, &fixture.session, &promises).await;
+
+    // The reveal is planned in chapter 2 Scene 1, but the promise pays off in
+    // Scene 2 and nothing lands in this scene: deus ex machina.
+    let mut scene_input = value_scene_artifact(
+        &fixture.session,
+        &[&fixture.cast, &fixture.series, &fixture.chapters, &promises],
+        vec![(2, value_chapter_two_scenes())],
+    );
+    scene_input.operations.push(key_fact_op(
+        "key:unpromised-reveal",
+        spindle_core::key_fact::KeyFactKind::RevealedSecret,
+        value_place(1, 2, 1),
+        None,
+    ));
+    let proposal = fixture.svc.stage_planning(scene_input).await.unwrap();
+    assert!(
+        value_codes(&proposal).contains("key_fact_secret_reveal_without_promise"),
+        "{:?}",
+        proposal.findings
+    );
+    reject_planning(&fixture.svc, &fixture.session, &proposal).await;
+
+    // A non-reveal Key Fact, and a reveal whose promise pays off in that Scene,
+    // are not blocked by this guard (the positive case is covered by the bind
+    // test above; here the placement must simply not be the reveal).
+    let mut death_input = value_scene_artifact(
+        &fixture.session,
+        &[&fixture.cast, &fixture.series, &fixture.chapters, &promises],
+        vec![(2, value_chapter_two_scenes())],
+    );
+    death_input.operations.push(key_fact_op(
+        "key:death",
+        spindle_core::key_fact::KeyFactKind::Death,
+        value_place(1, 2, 1),
+        None,
+    ));
+    let death = fixture.svc.stage_planning(death_input).await.unwrap();
+    assert!(
+        !value_codes(&death).contains("key_fact_secret_reveal_without_promise"),
+        "only a revealed secret triggers the deus-ex-machina guard: {:?}",
+        death.findings
+    );
+}
+
+#[tokio::test]
+async fn mckee_information_dependent_turning_beat_needs_an_earlier_planted_promise() {
+    let fixture = value_chain_fixture().await;
+    let promises = stage_promises(
+        &fixture,
+        vec![
+            promise_op(
+                "promise:early",
+                serde_json::json!({
+                    "promise_type": "mystery",
+                    "description": "Planted in chapter 1",
+                    "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                    "planned_payoff": {"book_number": 1, "chapter_number": 2, "scene_order": 1},
+                    "target_act": 2
+                }),
+            ),
+            promise_op(
+                "promise:late",
+                serde_json::json!({
+                    "promise_type": "mystery",
+                    "description": "Planted in the payoff scene itself",
+                    "planted_at": {"book_number": 1, "chapter_number": 2, "scene_order": 1},
+                    "planned_payoff": {"book_number": 1, "chapter_number": 2, "scene_order": 1},
+                    "target_act": 2
+                }),
+            ),
+        ],
+    )
+    .await;
+    assert!(promises.findings.is_empty(), "{:?}", promises.findings);
+    accept(&fixture.svc, &fixture.session, &promises).await;
+
+    // Missing promise reference.
+    let mut missing = value_chapter_two_scenes();
+    missing[0].beats[2].information_dependent = true;
+    let mut input = value_scene_artifact(
+        &fixture.session,
+        &[&fixture.cast, &fixture.series, &fixture.chapters, &promises],
+        vec![(2, missing)],
+    );
+    let proposal = fixture.svc.stage_planning(input.clone()).await.unwrap();
+    assert!(
+        value_codes(&proposal).contains("turning_beat_information_dependent_without_promise"),
+        "{:?}",
+        proposal.findings
+    );
+    reject_planning(&fixture.svc, &fixture.session, &proposal).await;
+
+    // A promise planted in the same Scene is not earlier than the Scene.
+    let mut late = value_chapter_two_scenes();
+    late[0].beats[2].information_dependent = true;
+    late[0].beats[2].promise_id = Some(PlanningRef::ProposalRef("promise:late".into()));
+    input = value_scene_artifact(
+        &fixture.session,
+        &[&fixture.cast, &fixture.series, &fixture.chapters, &promises],
+        vec![(2, late)],
+    );
+    let proposal = fixture.svc.stage_planning(input).await.unwrap();
+    assert!(
+        value_codes(&proposal).contains("turning_beat_promise_not_planted_earlier"),
+        "{:?}",
+        proposal.findings
+    );
+
+    // The earlier-planted promise satisfies the guard and round-trips.
+    let mut early = value_chapter_two_scenes();
+    early[0].beats[2].information_dependent = true;
+    early[0].beats[2].promise_id = Some(PlanningRef::ProposalRef("promise:early".into()));
+    let input = value_scene_artifact(
+        &fixture.session,
+        &[&fixture.cast, &fixture.series, &fixture.chapters, &promises],
+        vec![(2, early)],
+    );
+    let proposal = fixture.svc.stage_planning(input).await.unwrap();
+    assert!(
+        proposal.findings.is_empty(),
+        "an earlier-planted promise satisfies the information gate: {:?}",
+        proposal.findings
+    );
+    let report = accept(&fixture.svc, &fixture.session, &proposal).await;
+    let plan_id = report.operations[0].returned_ids.values().next().unwrap();
+    let plan = fixture
+        .svc
+        .repository
+        .get_chapter_plan(plan_id)
+        .await
+        .unwrap();
+    let turn = &plan.scenes[0].beats[2];
+    assert!(turn.information_dependent);
+    assert!(
+        turn.promise_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("narrative_promise:")),
+        "apply resolves the promise reference to its record id: {:?}",
+        turn.promise_id
+    );
+}
+
+#[tokio::test]
+async fn non_mckee_projects_keep_promises_additive_and_cannot_use_key_facts() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let (session, root) = accepted_non_mckee_project(&svc).await;
+    let promise = bundle(
+        &svc,
+        &session,
+        PlanningLevel::SeriesArc,
+        &[&root],
+        vec![promise_op(
+            "promise:plain",
+            serde_json::json!({
+                "promise_type": "mystery",
+                "description": "No Act structure exists here",
+                "planted_at": {"book_number": 1, "chapter_number": 1},
+                "planned_payoff": {"book_number": 1, "chapter_number": 2}
+            }),
+        )],
+    )
+    .await;
+    assert!(
+        promise.findings.is_empty(),
+        "non-McKee promises keep their old behaviour: {:?}",
+        promise.findings
+    );
+    accept(&svc, &session, &promise).await;
+
+    // A Key Fact is a new planning capability, not an additive field: an
+    // existing project cannot opt into it. This follows the `story_spine_*` /
+    // `character_design_requires_mckee_project` precedent: a readable hard
+    // staging error, not a proposal that stages and then fails acceptance.
+    let mut key_fact = artifact(&session, "unused");
+    key_fact.level = PlanningLevel::Chapter;
+    key_fact
+        .parents
+        .insert(root.id.clone(), root.payload_hash.clone());
+    key_fact.operations = vec![plain_key_fact_op(
+        "key:plain",
+        spindle_core::key_fact::KeyFactKind::RevealedSecret,
+        value_place(1, 1, 1),
+    )];
+    let error = svc.stage_planning(key_fact).await.unwrap_err().to_string();
+    assert!(
+        error.contains("key_fact_requires_mckee_project"),
+        "existing projects cannot opt into Key Facts: {error}"
+    );
+}
+
+#[tokio::test]
+async fn v0059_to_v0060_upgrade_adds_promise_columns_without_touching_existing_rows() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let _warm = crate::sqlite::SqlitePool::open(&tmp.path().join("warm.db"))
+        .await
+        .unwrap();
+    let path = tmp.path().join("legacy.db");
+    {
+        let mut conn = rusqlite::Connection::open(&path).unwrap();
+        crate::sqlite::migrations::runner()
+            .set_target(refinery::Target::Version(59))
+            .run(&mut conn)
+            .unwrap();
+        conn.execute(
+            "INSERT INTO project(id,name,project_type,genre,reader_contract,created_at,updated_at) \
+             VALUES('project:legacy','Legacy','novel','mystery',\
+             '{\"promise\":\"p\",\"style_notes\":[],\"boundaries\":[]}',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bible_branch(id,project_id,parent_branch_id,name,status,created_at) \
+             VALUES('bible_branch:legacy','project:legacy',NULL,'main','active',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE project SET active_branch_id='bible_branch:legacy' WHERE id='project:legacy'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO narrative_promise(id,project_id,branch_id,promise_type,description,status,planted_at,planned_payoff,notes,created_at,updated_at) \
+             VALUES('narrative_promise:legacy','project:legacy','bible_branch:legacy','mystery',\
+             'The old promise','planted',\
+             '{\"book_number\":1,\"chapter_number\":1,\"scene_order\":null,\"note\":null}',\
+             '{\"book_number\":1,\"chapter_number\":3,\"scene_order\":null,\"note\":null}',\
+             '[]',1,1)",
+            [],
+        )
+        .unwrap();
+    }
+    let pool = crate::sqlite::SqlitePool::open(&path).await.unwrap();
+    let repo = Repository::with_model_router(
+        pool,
+        tmp.path().join("data"),
+        crate::ai::ModelRouter::local_only(),
+    );
+    let svc = SqliteSpindleService::new(repo);
+    let promise = svc
+        .repository
+        .get_narrative_promise("narrative_promise:legacy")
+        .await
+        .unwrap();
+    assert_eq!(promise.description, "The old promise");
+    assert_eq!(promise.planned_payoff_turning_beat, None);
+    assert_eq!(promise.target_act, None);
+    assert_eq!(
+        promise.planned_payoff.as_ref().map(|p| p.chapter_number),
+        Some(3)
+    );
+    let json = serde_json::to_value(&promise).unwrap();
+    assert!(
+        json.get("planned_payoff_turning_beat").is_none(),
+        "unset columns must not change the serialized shape: {json}"
+    );
+    assert!(json.get("target_act").is_none());
 }

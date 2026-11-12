@@ -627,6 +627,9 @@ async fn promise_history_tracks_actual_payoff_reopening_correction_and_unknown_d
             planted_at: placement(1),
             planned_payoff: Some(placement(2)),
             notes: vec![],
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap()
@@ -785,6 +788,9 @@ async fn export_recap_folds_summaries_and_promises_at_cursor() {
                 note: None,
             }),
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();
@@ -816,6 +822,9 @@ async fn export_recap_folds_summaries_and_promises_at_cursor() {
         },
         planned_payoff: None,
         notes: Vec::new(),
+
+        planned_payoff_turning_beat: None,
+        target_act: None,
     })
     .await
     .unwrap();
@@ -1688,6 +1697,9 @@ async fn export_bible_round_trips_typed_records_with_rfc3339_timestamps() {
         },
         planned_payoff: None,
         notes: Vec::new(),
+
+        planned_payoff_turning_beat: None,
+        target_act: None,
     })
     .await
     .unwrap();

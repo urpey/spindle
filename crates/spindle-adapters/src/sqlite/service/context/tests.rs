@@ -1973,6 +1973,9 @@ async fn scene_context_renders_open_threads_line() {
         },
         planned_payoff: None,
         notes: Vec::new(),
+
+        planned_payoff_turning_beat: None,
+        target_act: None,
     })
     .await
     .unwrap();
@@ -2087,6 +2090,9 @@ async fn scene_context_omits_open_threads_when_all_resolved() {
             },
             planned_payoff: None,
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();
@@ -2217,6 +2223,9 @@ async fn scene_context_open_threads_respects_per_book_cap_with_multibyte() {
             },
             planned_payoff: None,
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();

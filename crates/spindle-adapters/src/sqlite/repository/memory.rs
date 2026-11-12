@@ -234,7 +234,7 @@ impl Repository {
                 };
                 let layer = enum_str(summary.layer)?;
                 let data = serde_json::to_string(summary)?;
-                tx.tx.execute(
+                tx.conn().execute(
                     "INSERT INTO memory_summary (
                         id, project_id, branch_id, layer, scope_key,
                         book_number, chapter_number, scene_order,
@@ -276,7 +276,7 @@ impl Repository {
                 .map(|summary| summary.summary_id.clone())
                 .collect();
             if keep_ids.is_empty() {
-                tx.tx.execute(
+                tx.conn().execute(
                     "DELETE FROM memory_summary WHERE project_id = ?1 AND branch_id = ?2",
                     rusqlite::params![&project_id, &branch_id],
                 )?;
@@ -295,10 +295,10 @@ impl Repository {
                 for id in &keep_ids {
                     params.push(id);
                 }
-                tx.tx.execute(&sql, params.as_slice())?;
+                tx.conn().execute(&sql, params.as_slice())?;
             }
 
-            tx.tx.execute(
+            tx.conn().execute(
                 "DELETE FROM memory_summary_dependency \
                  WHERE summary_id IN (
                     SELECT id FROM memory_summary WHERE project_id = ?1 AND branch_id = ?2
@@ -306,7 +306,7 @@ impl Repository {
                 rusqlite::params![&project_id, &branch_id],
             )?;
             for edge in &edges {
-                tx.tx.execute(
+                tx.conn().execute(
                     "INSERT OR IGNORE INTO memory_summary_dependency (
                         summary_id, depends_on_summary_id, source_kind
                      ) VALUES (?1, ?2, ?3)",
@@ -396,7 +396,7 @@ impl Repository {
         let plan = plan.clone();
         let now = timestamp_to_micros(chrono::Utc::now());
         self.with_transaction(move |tx| {
-            invalidate_layered_memory_in_conn(&tx.tx, &project_id, &branch_id, &plan, now)
+            invalidate_layered_memory_in_conn(tx.conn(), &project_id, &branch_id, &plan, now)
         })
         .await
     }
@@ -414,7 +414,7 @@ impl Repository {
         let reason = reason.to_string();
         self.with_transaction(move |tx| {
             invalidate_layered_memory_for_scene_in_conn(
-                &tx.tx,
+                tx.conn(),
                 &project_id,
                 &branch_id,
                 &scene_id,
@@ -434,7 +434,7 @@ impl Repository {
         let branch_id = branch_id.to_string();
         let now = timestamp_to_micros(chrono::Utc::now());
         self.with_transaction(move |tx| {
-            let mut stmt = tx.tx.prepare(
+            let mut stmt = tx.conn().prepare(
                 "SELECT id, summary_id, reason, attempts FROM memory_recompute_job \
                  WHERE project_id = ?1 AND branch_id = ?2 AND status = 'pending' \
                    AND next_attempt <= ?3 \
@@ -454,7 +454,7 @@ impl Repository {
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             for row in &rows {
-                tx.tx.execute(
+                tx.conn().execute(
                     "UPDATE memory_recompute_job \
                      SET status = 'claimed', attempts = attempts + 1, updated_at = ?2 \
                      WHERE id = ?1",

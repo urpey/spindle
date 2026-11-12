@@ -613,6 +613,116 @@ impl SqliteSpindleService {
                 CreateNarrativePromise,
                 narrative_promise_id
             ),
+            CreateKeyFact(_) => {
+                // The planning input is not a twin of a public write input: its
+                // subject/scene slots are planning references, resolved by the
+                // generic dispatcher before this point. Read the resolved shape
+                // and wrap the existing planned-and-pending canonical-fact path
+                // (`scene_id: None`), which is the only Key Fact write.
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct ResolvedKeyFact {
+                    project_id: String,
+                    kind: spindle_core::key_fact::KeyFactKind,
+                    #[serde(default)]
+                    subject_table: Option<String>,
+                    #[serde(default)]
+                    subject_id: Option<String>,
+                    key: String,
+                    value: String,
+                    #[serde(default)]
+                    context: Option<String>,
+                    placement: PlanningStoryPlacement,
+                    #[serde(default)]
+                    planned_scene_id: Option<String>,
+                }
+                let resolved: ResolvedKeyFact = serde_json::from_value(input)?;
+                let placement = resolved.placement;
+                // The explicit planned-Scene reference is validated at staging;
+                // re-check it at apply so acceptance cannot bind a fact to a
+                // chapter plan that no longer covers its placement.
+                if let Some(reference) = resolved.planned_scene_id.as_deref() {
+                    let plan = self
+                        .repository
+                        .get_chapter_plan(reference)
+                        .await
+                        .with_context(|| {
+                            format!("resolved planned_scene_id '{reference}' is not a chapter plan")
+                        })?;
+                    let order = placement.scene_order.unwrap_or_default();
+                    anyhow::ensure!(
+                        plan.book_number == placement.book_number
+                            && plan.chapter_number == placement.chapter_number
+                            && plan.scenes.iter().any(|scene| scene.scene_order == order),
+                        "planned_scene_id '{reference}' no longer agrees with the Key Fact placement (book {} chapter {} scene {order})",
+                        placement.book_number,
+                        placement.chapter_number,
+                    );
+                }
+                // A revealed_secret Key Fact is a secret canonical fact: the
+                // subject character is in the initial circle of trust and the
+                // concealment note explains the planned reveal. The circle
+                // grows later through record_knowledge/secret_of_fact_id at the
+                // dramatised reveal, never here.
+                let secrecy = if resolved.kind.is_secret_reveal() {
+                    anyhow::ensure!(
+                        resolved.subject_table.as_deref() == Some("character"),
+                        "a revealed_secret Key Fact requires a character subject_table"
+                    );
+                    let holder_id = resolved
+                        .subject_id
+                        .clone()
+                        .filter(|id| id.starts_with("character:"))
+                        .context(
+                            "a revealed_secret Key Fact requires a resolved character subject_id",
+                        )?;
+                    Some(spindle_core::models::SecrecyScope {
+                        holder_ids: vec![holder_id],
+                        concealment_note: Some(format!(
+                            "Planned reveal at book {} chapter {} scene {}; the subject knows the secret from the start. Record each further holder at the dramatised reveal with record_knowledge/secret_of_fact_id.",
+                            placement.book_number,
+                            placement.chapter_number,
+                            placement.scene_order.unwrap_or_default(),
+                        )),
+                    })
+                } else {
+                    None
+                };
+                let out = self
+                    .register_canonical_fact(RegisterCanonicalFactInput {
+                        project_id: resolved.project_id,
+                        scene_id: None,
+                        book_number: placement.book_number,
+                        chapter_number: placement.chapter_number,
+                        fact_type: Some(resolved.kind.as_str().to_string()),
+                        key: Some(resolved.key.clone()),
+                        value: Some(resolved.value.clone()),
+                        context: resolved.context,
+                        subject_table: resolved.subject_table,
+                        subject_id: resolved.subject_id,
+                        predicate: Some(resolved.key),
+                        value_kind: Some("string".to_string()),
+                        value_text: Some(resolved.value),
+                        value_number: None,
+                        value_unit: None,
+                        value_json: None,
+                        aliases: Vec::new(),
+                        scope: None,
+                        valid_from: Some(StoryPlacement {
+                            book_number: placement.book_number,
+                            chapter_number: placement.chapter_number,
+                            scene_order: placement.scene_order,
+                            note: placement.note,
+                        }),
+                        valid_until: None,
+                        legacy_untyped: None,
+                        supersedes_fact_id: None,
+                        secrecy,
+                    })
+                    .await?;
+                ids.insert(item.output_ref.clone(), out.canonical_fact_id.clone());
+                PlanningAppliedOutput::CreateKeyFact(Box::new(out))
+            }
             CreateCharacterArc(_) => {
                 let out = self
                     .create_character_arc(serde_json::from_value(input)?)

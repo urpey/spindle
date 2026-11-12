@@ -97,6 +97,25 @@ pub struct PlannedBeat {
     /// What the actor expects this attempt to bring versus what the world
     /// actually returns.
     pub gap: SceneGap,
+    /// Whether this Beat's Gap depends on information the reader must already
+    /// have been promised. Only the Scene's Turning Beat is judged: such a Beat
+    /// must name the earlier-planted promise it pays off (the deus-ex-machina
+    /// guard), so a payoff never arrives from nowhere.
+    ///
+    /// Additive and serde-defaulted: absent means `false`, and `false` is never
+    /// serialized, so existing plan JSON is unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub information_dependent: bool,
+    /// The promise this information-dependent Beat depends on, as a resolved
+    /// narrative-promise record id in the stored form (a planning reference in
+    /// [`crate::planning::PlanningBeat`]).
+    ///
+    /// Spelled out with the `_id` suffix on purpose: planning's generic `*_id`
+    /// reference resolution then resolves the promise reference exactly like a
+    /// Beat's `actor_character_id`, and a bare `promise` key can never collide
+    /// with a future operation field of that name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promise_id: Option<String>,
     /// Optional Swain category label. Never a structural kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub swain_label: Option<String>,
@@ -228,6 +247,8 @@ mod tests {
             said: "Then take the signet as surety.".into(),
             wanted: "Ben's testimony".into(),
             gap: gap(),
+            information_dependent: false,
+            promise_id: None,
             swain_label: Some("conflict".into()),
         };
         let json = serde_json::to_value(&beat).unwrap();
@@ -255,6 +276,46 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn information_dependent_and_promise_fields_are_additive_and_skipped_when_unset() {
+        // A pre-#28 Beat (no new keys) still deserializes, and neither new key
+        // appears in its serialized output.
+        let legacy: PlannedBeat = serde_json::from_value(serde_json::json!({
+            "kind": "action",
+            "tactic": "Ask",
+            "said": "Who rang it?",
+            "wanted": "A name",
+            "gap": {"expected": "An answer", "actual": "Silence"}
+        }))
+        .unwrap();
+        assert!(!legacy.information_dependent);
+        assert_eq!(legacy.promise_id, None);
+        let json = serde_json::to_value(&legacy).unwrap();
+        assert!(json.get("information_dependent").is_none());
+        assert!(json.get("promise_id").is_none());
+
+        // An information-dependent Turning Beat carries the earlier-planted
+        // promise it pays off.
+        let dependent: PlannedBeat = serde_json::from_value(serde_json::json!({
+            "kind": "turn",
+            "tactic": "Name the forger",
+            "said": "The seal was warm.",
+            "wanted": "The truth heard",
+            "gap": {"expected": "The hall listens", "actual": "The hall orders silence"},
+            "information_dependent": true,
+            "promise_id": "narrative_promise:seal"
+        }))
+        .unwrap();
+        assert!(dependent.information_dependent);
+        assert_eq!(
+            dependent.promise_id.as_deref(),
+            Some("narrative_promise:seal")
+        );
+        let json = serde_json::to_value(&dependent).unwrap();
+        assert_eq!(json["information_dependent"], true);
+        assert_eq!(json["promise_id"], "narrative_promise:seal");
     }
 
     #[test]

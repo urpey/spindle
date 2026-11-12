@@ -489,7 +489,7 @@ pub(crate) fn mirror_legacy_claims_in_tx(
 
 impl CanonTransaction<'_> {
     pub fn canon_cutover_mode(&self, project_id: &str) -> Result<CanonCutoverModeV1> {
-        canon_cutover_mode_in_conn(&self.tx, project_id)
+        canon_cutover_mode_in_conn(self.conn(), project_id)
     }
 
     pub fn mirror_canon_claims(
@@ -501,7 +501,7 @@ impl CanonTransaction<'_> {
         claims: Vec<ClaimV1>,
     ) -> Result<Option<RecordCanonPolicyOutputV1>> {
         mirror_legacy_claims_in_tx(
-            &self.tx,
+            self.conn(),
             project_id,
             branch_id,
             source_revision_id,
@@ -519,7 +519,7 @@ impl CanonTransaction<'_> {
         keys: Vec<(String, String)>,
     ) -> Result<()> {
         mark_legacy_rows_mapped_in_conn(
-            &self.tx,
+            self.conn(),
             project_id,
             branch_id,
             &keys,
@@ -538,7 +538,7 @@ impl Repository {
     ) -> Result<RecordCanonPolicyOutputV1> {
         self.with_transaction(move |tx| {
             let now_micros = timestamp_to_micros(chrono::Utc::now());
-            apply_canon_policy_input_in_tx(&tx.tx, input, now_micros)
+            apply_canon_policy_input_in_tx(tx.conn(), input, now_micros)
         })
         .await
     }
@@ -553,17 +553,24 @@ impl Repository {
     ) -> Result<RevokeCanonDecisionOutputV1> {
         self.with_transaction(move |tx| {
             let now_micros = timestamp_to_micros(chrono::Utc::now());
-            let target_decision = load_decision_in_conn(&tx.tx, &input.decision_id)?;
-            let target_events = load_events_by_decision_in_conn(&tx.tx, &input.decision_id)?;
+            let target_decision = load_decision_in_conn(tx.conn(), &input.decision_id)?;
+            let target_events = load_events_by_decision_in_conn(tx.conn(), &input.decision_id)?;
             anyhow::ensure!(
                 !target_events.is_empty(),
                 "canon decision has no events to revoke"
             );
-            let lineage =
-                resolve_branch_lineage_in_conn(&tx.tx, Some(&input.project_id), &input.branch_id)?;
-            let all_events = load_events_for_branches_in_conn(&tx.tx, &input.project_id, &lineage)?;
-            let claims =
-                load_canon_claims_for_branch_in_conn(&tx.tx, &input.project_id, &input.branch_id)?;
+            let lineage = resolve_branch_lineage_in_conn(
+                tx.conn(),
+                Some(&input.project_id),
+                &input.branch_id,
+            )?;
+            let all_events =
+                load_events_for_branches_in_conn(tx.conn(), &input.project_id, &lineage)?;
+            let claims = load_canon_claims_for_branch_in_conn(
+                tx.conn(),
+                &input.project_id,
+                &input.branch_id,
+            )?;
             let mut plan = plan_canon_batch_revocation(
                 &target_events,
                 &all_events,
@@ -600,7 +607,7 @@ impl Repository {
                 ),
             };
             let decision = append_canon_policy_decision_in_tx(
-                &tx.tx,
+                tx.conn(),
                 AppendCanonDecisionInputV1 {
                     project_id: input.project_id.clone(),
                     branch_id: input.branch_id.clone(),
@@ -651,7 +658,7 @@ impl Repository {
                 {
                     let mut updated = claim.clone();
                     updated.status = CanonClaimStatus::Withdrawn;
-                    tx.tx.execute(
+                    tx.conn().execute(
                         "UPDATE canon_claim SET status = ?2, data = ?3 WHERE id = ?1",
                         rusqlite::params![
                             claim_id,
