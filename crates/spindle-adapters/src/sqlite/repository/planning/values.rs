@@ -73,7 +73,7 @@ impl SceneGateEntry {
 /// One planned Scene with the value fields the chain rules read, plus the
 /// finding path and repair hint for the plan that owns it.
 #[derive(Debug, Clone)]
-struct SceneValueEntry {
+pub(super) struct SceneValueEntry {
     book_number: i32,
     chapter_number: i32,
     scene_order: i32,
@@ -170,6 +170,22 @@ impl SceneValueEntry {
         }
     }
 
+    /// The Scene's exact story coordinates.
+    pub(super) fn coordinates(&self) -> (i32, i32, i32) {
+        (self.book_number, self.chapter_number, self.scene_order)
+    }
+
+    /// Every axis of the Scene (primary first, then secondaries) with the path
+    /// suffix the finding would use for it.
+    pub(super) fn axes(&self) -> Vec<(String, &SceneValueAxis)> {
+        scene_axes(self)
+    }
+
+    /// The JSON-pointer path that locates this Scene's plan.
+    pub(super) fn finding_path(&self) -> &str {
+        &self.path
+    }
+
     fn gate_entry(&self) -> SceneGateEntry {
         SceneGateEntry {
             book_number: self.book_number,
@@ -215,10 +231,18 @@ pub(super) fn validate_mckee_value_chain(
 
     let sequences = evaluated_sequences_in_conn(conn, input, scope)?;
     let scenes = evaluated_scene_values_in_conn(conn, input, scope)?;
+    let acts = evaluated_mckee_acts_in_conn(conn, input, scope)?;
+    // Subplot structure is checked against the same merged sources the value
+    // chain reads: merged Sequences, the merged plot lines, the merged Acts and
+    // this planned-Scene list. It runs even when no Scene is planned yet, so a
+    // Chapter artifact that only groups Scenes into Sequences still cannot
+    // place a Subplot Sequence climax after every Convergence Point.
+    super::subplots::validate_mckee_subplot_structure(
+        conn, input, scope, &scenes, &sequences, &acts, findings,
+    )?;
     if scenes.is_empty() {
         return Ok(());
     }
-    let acts = evaluated_mckee_acts_in_conn(conn, input, scope)?;
     let designs = evaluated_design_contradictions_in_conn(conn, input, scope)?;
     let receipts = apply::refs_in_conn(conn, &input.session_id)?;
 
@@ -467,7 +491,7 @@ fn validate_own_sequences(input: &StagePlanningInput, findings: &mut Vec<Plannin
 // ---------------------------------------------------------------------------
 
 /// Merge applied, staged-ancestor and current-artifact Sequences by key.
-fn evaluated_sequences_in_conn(
+pub(super) fn evaluated_sequences_in_conn(
     conn: &rusqlite::Connection,
     input: &StagePlanningInput,
     scope: &PlanningScope,

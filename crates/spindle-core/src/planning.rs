@@ -172,6 +172,26 @@ pub struct PlannedIntensity {
     pub note: Option<String>,
 }
 
+/// The Subplot Sequence climax an Act climax cites as its cause.
+///
+/// The shape is deliberately narrow so it resolves deterministically: the plot
+/// line is referenced with the same [`PlanningRef`] slot Sequences use, and the
+/// Sequence is named by the schedule-local `sequence_key` (the merge identity,
+/// so a later Chapter artifact's refinement is followed). Naming the record id
+/// instead would pin the cause to one proposal's output; naming the plot line
+/// is required because a `sequence_key` is only unique within one plot line's
+/// Sequences.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PlannedActCause {
+    /// The Subplot whose Sequence climax causes this Act's climax. The field is
+    /// named `plot_line_id` on purpose so the generic planning reference
+    /// validation treats it as a `plot_line` reference.
+    pub plot_line_id: PlanningRef,
+    /// The cited Sequence's schedule-local key.
+    pub sequence_key: String,
+}
+
 /// One Act in the ordered Act list carried by a writing-level schedule.
 ///
 /// An Act is planning intent (ADR 0006), never a story record. It names the
@@ -197,6 +217,10 @@ pub struct PlannedAct {
     /// True only on the final Act, whose climax answers the Central Question.
     #[serde(default)]
     pub answers_central_question: bool,
+    /// Optional Subplot Sequence climax this Act climax cites as its cause.
+    /// Additive and skipped when absent, so existing Act JSON is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<PlannedActCause>,
 }
 
 /// One Sequence in the chapter-level Sequence list carried by a planning

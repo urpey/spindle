@@ -11848,3 +11848,213 @@ async fn narrative_promise_structured_payoff_fields_are_on_the_public_schema_and
         "unset fields must not appear in the snapshot: {details}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn planning_status_exposes_an_act_cause_reference_through_mcp_tools() {
+    use crate::tools::{ToolRouter, ToolSerializationState};
+    use std::sync::Arc;
+
+    let (_tmp, svc) = fresh_service().await;
+    let router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        Some("new-book".to_string()),
+        Arc::new(ToolSerializationState::default()),
+    );
+    let begun = planning_call(
+        &router,
+        "planning_begin",
+        serde_json::json!({
+            "premise": "A harbor archivist learns the tide bell is a forged warning.",
+            "horizon": {"book_number": 1, "chapter_start": 1, "chapter_end": 2, "scenes_per_chapter": 2}
+        }),
+    )
+    .await;
+    let session_id = begun["session"]["session_id"].as_str().unwrap().to_string();
+
+    planning_advance_and_accept(
+        &router,
+        &session_id,
+        "contract",
+        serde_json::json!({
+            "schema_version": 1,
+            "level": "contract",
+            "rationale": "Root the McKee project.",
+            "operations": [{
+                "output_ref": "project:root",
+                "operation": {"operation": "create_project", "input": {
+                    "name": "The Clapperless Bell",
+                    "project_type": "novel",
+                    "genre": "mystery",
+                    "reader_contract": {"promise": "A fair-play mystery.", "style_notes": [], "boundaries": []}
+                }}
+            }]
+        }),
+        "subplot-contract",
+        None,
+    )
+    .await;
+
+    planning_advance_and_accept(
+        &router,
+        &session_id,
+        "cast_world",
+        serde_json::json!({
+            "schema_version": 1,
+            "level": "cast_world",
+            "rationale": "Minimal cast and one place.",
+            "operations": [
+                {"output_ref": "cast:mara", "operation": {"operation": "create_character", "input": {
+                    "name": "Mara", "summary": "Harbor archivist", "role": "protagonist"
+                }}},
+                {"output_ref": "design:mara", "operation": {"operation": "create_character_design", "input": {
+                    "character_id": {"kind": "proposal_ref", "value": "cast:mara"},
+                    "contradictions": ["keeps every chart", "cannot read her own heart"],
+                    "public_self": "Harbor archivist",
+                    "personal_self": "Raises her nephew alone",
+                    "private_self": "Fears deep water",
+                    "hidden_self": "She signed the forged manifest",
+                    "conscious_desire": "Clear the harbor's name",
+                    "unconscious_desire": "To be forgiven",
+                    "pressure_on_protagonist": "Withholds the chart that would convict her"
+                }}},
+                {"output_ref": "loc:watchtower", "operation": {"operation": "create_location", "input": {
+                    "name": "Watchtower", "kind": "building", "summary": "Tidal signal tower"
+                }}}
+            ]
+        }),
+        "subplot-cast",
+        None,
+    )
+    .await;
+
+    planning_advance_and_accept(
+        &router,
+        &session_id,
+        "series_arc",
+        serde_json::json!({
+            "schema_version": 1,
+            "level": "series_arc",
+            "rationale": "Main Plot, Subplot and the two-Act shape.",
+            "operations": [
+                {"output_ref": "plot:main", "operation": {"operation": "create_plot_line", "input": {
+                    "name": "Find the bell ringer",
+                    "plot_type": "main",
+                    "summary": "Trace the signal cable",
+                    "value_axis": "truth",
+                    "is_main_plot": true
+                }}},
+                {"output_ref": "plot:sub", "operation": {"operation": "create_plot_line", "input": {
+                    "name": "The magistrate's price",
+                    "plot_type": "parallel",
+                    "summary": "Freedom narrows as the harbor closes",
+                    "value_axis": "freedom",
+                    "subplot_job": "contradict",
+                    "convergence_points": [{"book_number": 1, "chapter_number": 2, "scene_order": 1}]
+                }}}
+            ],
+            "schedule": {
+                "acts": [
+                    {"order": 1, "climax": {"book_number": 1, "chapter_number": 1, "scene_order": 2}, "charge": {"sign": "negative", "depth": "contrary"}, "central_question_part": "Mara learns the bell was rung deliberately", "answers_central_question": false},
+                    {"order": 2, "climax": {"book_number": 1, "chapter_number": 2, "scene_order": 1}, "charge": {"sign": "negative", "depth": "contradictory"}, "central_question_part": "Mara answers the harbor", "answers_central_question": true}
+                ]
+            }
+        }),
+        "subplot-series",
+        None,
+    )
+    .await;
+
+    planning_advance_and_accept(
+        &router,
+        &session_id,
+        "chapter",
+        serde_json::json!({
+            "schema_version": 1,
+            "level": "chapter",
+            "rationale": "Group the opening Scenes into the Subplot Sequence.",
+            "operations": [{
+                "output_ref": "chapter:1",
+                "operation": {"operation": "create_chapter", "input": {
+                    "book_id": {"kind": "proposal_ref", "value": "project:root:book"},
+                    "book_number": 1,
+                    "chapter_number": 1,
+                    "title": "One"
+                }}
+            }],
+            "schedule": {
+                "sequences": [{
+                    "sequence_key": "seq:sub",
+                    "plot_line_id": {"kind": "proposal_ref", "value": "plot:sub"},
+                    "question": "How much freedom does the harbor leave Mara?",
+                    "inciting_scene": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                    "climax_scene": {"book_number": 1, "chapter_number": 1, "scene_order": 2},
+                    "member_scenes": [
+                        {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                        {"book_number": 1, "chapter_number": 1, "scene_order": 2}
+                    ]
+                }]
+            }
+        }),
+        "subplot-chapter",
+        None,
+    )
+    .await;
+
+    // A later Book artifact refines Act 2 and cites the already-accepted
+    // Subplot Sequence climax as its cause.
+    planning_advance_and_accept(
+        &router,
+        &session_id,
+        "book",
+        serde_json::json!({
+            "schema_version": 1,
+            "level": "book",
+            "rationale": "Name what causes the second Act's climax.",
+            "operations": [{
+                "output_ref": "outline:book:cause",
+                "operation": {"operation": "set_book_outline", "input": {
+                    "book_id": {"kind": "proposal_ref", "value": "project:root:book"},
+                    "book_number": 1,
+                    "content": "Mara answers the harbor with the magistrate's own price."
+                }}
+            }],
+            "schedule": {
+                "acts": [{
+                    "order": 2,
+                    "climax": {"book_number": 1, "chapter_number": 2, "scene_order": 1},
+                    "charge": {"sign": "negative", "depth": "contradictory"},
+                    "central_question_part": "Mara answers the harbor",
+                    "answers_central_question": true,
+                    "cause": {
+                        "plot_line_id": {"kind": "proposal_ref", "value": "plot:sub"},
+                        "sequence_key": "seq:sub"
+                    }
+                }]
+            }
+        }),
+        "subplot-book",
+        None,
+    )
+    .await;
+
+    let status = planning_call(
+        &router,
+        "planning_status",
+        serde_json::json!({"session_id": session_id, "include_readiness": false}),
+    )
+    .await;
+    let book_summary = status["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|proposal| proposal["level"] == "book" && proposal["status"] == "applied")
+        .unwrap_or_else(|| panic!("applied Book proposal in {status}"));
+    assert_eq!(
+        book_summary["schedule"]["acts"][0]["cause"]["plot_line_id"]["value"], "plot:sub",
+        "the Act cause is part of the public planning_status proposal schedule: {status}"
+    );
+    assert_eq!(
+        book_summary["schedule"]["acts"][0]["cause"]["sequence_key"], "seq:sub",
+        "{status}"
+    );
+}

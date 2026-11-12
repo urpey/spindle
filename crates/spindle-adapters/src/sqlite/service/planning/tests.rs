@@ -507,6 +507,7 @@ fn planned_act(
         charge: Some(Charge::new(sign, depth).expect("valid charge pair")),
         central_question_part: central_question_part.to_string(),
         answers_central_question,
+        cause: None,
     }
 }
 
@@ -2602,6 +2603,21 @@ async fn route_generation_real_agent_stages_all_levels_and_applies_only_on_human
                 }
             },
             {
+                "output_ref": "plot:sub",
+                "operation": {
+                    "operation": "create_plot_line",
+                    "input": {
+                        "name": "The Magistrate's Debt",
+                        "plot_type": "parallel",
+                        "summary": "Corin's authority narrows the harbor's freedom",
+                        "status": "active",
+                        "value_axis": "freedom",
+                        "subplot_job": "contradict",
+                        "convergence_points": [{"book_number": 1, "chapter_number": 3, "scene_order": 2, "note": "Basin confrontation"}]
+                    }
+                }
+            },
+            {
                 "output_ref": "promise:seal",
                 "operation": {
                     "operation": "create_narrative_promise",
@@ -2718,6 +2734,15 @@ async fn route_generation_real_agent_stages_all_levels_and_applies_only_on_human
                     {"book_number": 1, "chapter_number": 1, "scene_order": 1},
                     {"book_number": 1, "chapter_number": 1, "scene_order": 2}
                 ]
+            }, {
+                "sequence_key": "seq:sub",
+                "plot_line_id": {"kind": "proposal_ref", "value": "plot:sub"},
+                "question": "How much freedom does the magistrate leave the harbor?",
+                "inciting_scene": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "climax_scene": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+                "member_scenes": [
+                    {"book_number": 1, "chapter_number": 1, "scene_order": 1}
+                ]
             }]
         }
     });
@@ -2753,7 +2778,8 @@ async fn route_generation_real_agent_stages_all_levels_and_applies_only_on_human
                             "gap": {"expected": "The manifest is complete", "actual": "A page is torn out"},
                             "scene_question": "Who removed the page?",
                             "inaction_cost": "The heir's trail goes cold",
-                            "risk": 1
+                            "risk": 1,
+                            "dilemma": {"character_id": {"kind": "proposal_ref", "value": "cast:ada"}, "contradiction": "keeps every chart"}
                         },
                         {
                             "scene_order": 2,
@@ -13615,4 +13641,915 @@ async fn v0059_to_v0060_upgrade_adds_promise_columns_without_touching_existing_r
         "unset columns must not change the serialized shape: {json}"
     );
     assert!(json.get("target_act").is_none());
+}
+
+// ---------------------------------------------------------------------------
+// McKee Subplot structure and Act causes (ticket #29)
+// ---------------------------------------------------------------------------
+
+fn subplot_place(book: i32, chapter: i32, scene: i32) -> PlanningStoryPlacement {
+    PlanningStoryPlacement {
+        book_number: book,
+        chapter_number: chapter,
+        scene_order: Some(scene),
+        note: None,
+    }
+}
+
+fn subplot_charge(sign: ChargeSign, depth: ChargeDepth) -> Charge {
+    value_turn_charge(sign, depth)
+}
+
+/// The six-Scene truth chain the Subplot fixture plans. It zig-zags so it never
+/// records three consecutive same-direction turns and every chapter's last
+/// Scene closes on a Charge different from the chapter's first opening Charge.
+fn subplot_truth_chain() -> Vec<(Charge, Charge)> {
+    let c = subplot_charge;
+    let states = [
+        c(ChargeSign::Positive, ChargeDepth::Positive),
+        c(ChargeSign::Negative, ChargeDepth::Contrary),
+        c(ChargeSign::Negative, ChargeDepth::Contradictory),
+        c(ChargeSign::Negative, ChargeDepth::Contrary),
+        c(ChargeSign::Negative, ChargeDepth::NegationOfTheNegation),
+        c(ChargeSign::Negative, ChargeDepth::Contradictory),
+        c(ChargeSign::Negative, ChargeDepth::Contrary),
+    ];
+    states.windows(2).map(|pair| (pair[0], pair[1])).collect()
+}
+
+/// One Subplot scenario: the plot-line fields and the freedom-axis turns the
+/// six planned Scenes carry (index 0..6; `None` means the Scene does not carry
+/// the Subplot axis at all).
+#[derive(Clone)]
+struct SubplotScenario {
+    convergence_points: Vec<PlanningStoryPlacement>,
+    value_axis: &'static str,
+    job: &'static str,
+    acts: Vec<PlannedAct>,
+    freedom: Vec<Option<(Charge, Charge)>>,
+}
+
+impl SubplotScenario {
+    fn valid() -> Self {
+        Self {
+            convergence_points: vec![subplot_place(1, 3, 1)],
+            value_axis: "freedom",
+            job: "contradict",
+            acts: vec![
+                planned_act(
+                    1,
+                    1,
+                    1,
+                    2,
+                    ChargeSign::Negative,
+                    ChargeDepth::Contrary,
+                    "Ada learns the harbor forged the ledger",
+                    false,
+                ),
+                planned_act(
+                    2,
+                    1,
+                    2,
+                    2,
+                    ChargeSign::Negative,
+                    ChargeDepth::Contradictory,
+                    "Ada answers the harbor",
+                    true,
+                ),
+            ],
+            freedom: vec![
+                Some((
+                    subplot_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                    subplot_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                )),
+                None,
+                Some((
+                    subplot_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                    subplot_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                )),
+                None,
+                None,
+                None,
+            ],
+        }
+    }
+}
+
+struct SubplotFixture {
+    _tmp: tempfile::TempDir,
+    svc: SqliteSpindleService,
+    session: PlanningSession,
+    root: PlanningProposal,
+    cast: PlanningProposal,
+    series: PlanningProposal,
+    subplot_id: String,
+}
+
+async fn subplot_fixture(scenario: SubplotScenario) -> SubplotFixture {
+    use serde_json::json;
+
+    let (tmp, svc) = fresh_service_local().await;
+    let (s, root) = accepted_root(&svc).await;
+    let cast = bundle(
+        &svc,
+        &s,
+        PlanningLevel::CastWorld,
+        &[&root],
+        vec![
+            planned(
+                "cast:hero",
+                "create_character",
+                json!({"name":"Ada","summary":"Harbor archivist","role":"protagonist"}),
+            ),
+            planned(
+                "design:hero",
+                "create_character_design",
+                character_design_payload("cast:hero", &["guarded", "resolute"]),
+            ),
+            planned(
+                "loc:gate",
+                "create_location",
+                json!({"name":"The Gate","kind":"fortification","summary":"The last gate"}),
+            ),
+        ],
+    )
+    .await;
+    accept(&svc, &s, &cast).await;
+
+    let subplot = json!({
+        "name": "The magistrate's price",
+        "plot_type": "parallel",
+        "summary": "Freedom narrows as the harbor closes",
+        "value_axis": scenario.value_axis,
+        "subplot_job": scenario.job,
+        "convergence_points": serde_json::to_value(&scenario.convergence_points).unwrap(),
+    });
+    let series = bundle_with_schedule(
+        &svc,
+        &s,
+        PlanningLevel::SeriesArc,
+        &[&root, &cast],
+        vec![
+            planned(
+                "plot:main",
+                "create_plot_line",
+                json!({
+                    "name": "The truth of the tide",
+                    "plot_type": "main",
+                    "summary": "Trace the forged ledger",
+                    "value_axis": "truth",
+                    "is_main_plot": true
+                }),
+            ),
+            planned("plot:sub", "create_plot_line", subplot),
+        ],
+        PlanningSchedule {
+            acts: scenario.acts,
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    let report = accept(&svc, &s, &series).await;
+    let subplot_id = report
+        .operations
+        .iter()
+        .find_map(|receipt| receipt.returned_ids.get("plot:sub").cloned())
+        .expect("Subplot receipt");
+    SubplotFixture {
+        _tmp: tmp,
+        svc,
+        session: s,
+        root,
+        cast,
+        series,
+        subplot_id,
+    }
+}
+
+fn subplot_sequences_valid() -> Vec<PlannedSequence> {
+    vec![
+        PlannedSequence {
+            sequence_key: "seq:main".into(),
+            plot_line_id: Some(PlanningRef::ProposalRef("plot:main".into())),
+            question: "Will the truth of the ledger surface?".into(),
+            inciting_scene: Some(subplot_place(1, 1, 2)),
+            climax_scene: Some(subplot_place(1, 3, 2)),
+            member_scenes: vec![
+                subplot_place(1, 1, 2),
+                subplot_place(1, 2, 2),
+                subplot_place(1, 3, 1),
+                subplot_place(1, 3, 2),
+            ],
+        },
+        PlannedSequence {
+            sequence_key: "seq:sub".into(),
+            plot_line_id: Some(PlanningRef::ProposalRef("plot:sub".into())),
+            question: "How much freedom does the harbor leave Ada?".into(),
+            inciting_scene: Some(subplot_place(1, 1, 1)),
+            climax_scene: Some(subplot_place(1, 2, 1)),
+            member_scenes: vec![subplot_place(1, 1, 1), subplot_place(1, 2, 1)],
+        },
+    ]
+}
+
+/// The same Sequences, with the Subplot Sequence climax moved to the last
+/// planned Scene so it lands after the fixture's Convergence Point.
+fn subplot_sequences_after_convergence() -> Vec<PlannedSequence> {
+    let mut sequences = subplot_sequences_valid();
+    sequences[1].member_scenes = vec![
+        subplot_place(1, 1, 1),
+        subplot_place(1, 2, 1),
+        subplot_place(1, 3, 2),
+    ];
+    sequences[1].climax_scene = Some(subplot_place(1, 3, 2));
+    sequences
+}
+
+fn subplot_chapter_operations() -> Vec<PlanningOperationItem> {
+    use serde_json::json;
+    let mut operations = Vec::new();
+    for chapter in 1..=3 {
+        let key = format!("chapter:{chapter}");
+        operations.push(planned(
+            &key,
+            "create_chapter",
+            json!({"book_id": reference("project:root:book"),"book_number":1,"chapter_number":chapter,"title":format!("Chapter {chapter}")}),
+        ));
+        operations.push(planned(
+            &format!("outline:chapter:{chapter}"),
+            "set_chapter_outline",
+            json!({"entity_id": reference(&key),"book_number":1,"chapter_number":chapter,"content":format!("Chapter {chapter} outline."),"beats":[{"order":1,"summary":"Open","status":"planned"}]}),
+        ));
+    }
+    operations
+}
+
+async fn stage_subplot_chapters(
+    fixture: &SubplotFixture,
+    sequences: Vec<PlannedSequence>,
+) -> PlanningProposal {
+    bundle_with_schedule(
+        &fixture.svc,
+        &fixture.session,
+        PlanningLevel::Chapter,
+        &[&fixture.root, &fixture.series],
+        subplot_chapter_operations(),
+        PlanningSchedule {
+            sequences,
+            ..PlanningSchedule::default()
+        },
+    )
+    .await
+}
+
+fn subplot_scenes(scenario: &SubplotScenario) -> Vec<(i32, Vec<PlanningPlanChapterSceneInput>)> {
+    let chain = subplot_truth_chain();
+    let cumulatives = [1, 2, 2, 3, 4, 5];
+    let mut chapters: Vec<(i32, Vec<PlanningPlanChapterSceneInput>)> = Vec::new();
+    for (index, (opening, closing)) in chain.into_iter().enumerate() {
+        let chapter = index as i32 / 2 + 1;
+        let scene_order = index as i32 % 2 + 1;
+        let mut scene = value_scene(scene_order, opening, closing);
+        scene.risk = Some(cumulatives[index]);
+        // Act climaxes (1.2, 2.2) and Sequence climaxes (2.1, 3.2) need a
+        // dilemma; both contradictions exist on the fixture's Character Design.
+        if matches!(index, 1 | 2 | 3 | 5) {
+            scene.dilemma = Some(value_dilemma(if index % 2 == 0 {
+                "resolute"
+            } else {
+                "guarded"
+            }));
+        }
+        if let Some((freedom_opening, freedom_closing)) = scenario.freedom[index] {
+            scene.secondary_value_axes = vec![SceneValueAxis {
+                axis: scenario.value_axis.into(),
+                opening: freedom_opening,
+                closing: freedom_closing,
+            }];
+        }
+        match chapters.last_mut() {
+            Some((last_chapter, scenes)) if *last_chapter == chapter => scenes.push(scene),
+            _ => chapters.push((chapter, vec![scene])),
+        }
+    }
+    chapters
+}
+
+async fn stage_subplot_scenes(
+    fixture: &SubplotFixture,
+    scenario: &SubplotScenario,
+    chapters: &PlanningProposal,
+) -> PlanningProposal {
+    let input = value_scene_artifact(
+        &fixture.session,
+        &[&fixture.cast, &fixture.series, chapters],
+        subplot_scenes(scenario),
+    );
+    fixture.svc.stage_planning(input).await.unwrap()
+}
+
+fn advisory_codes(proposal: &PlanningProposal) -> std::collections::BTreeSet<String> {
+    proposal
+        .findings
+        .iter()
+        .filter(|finding| finding.severity == PlanningFindingSeverity::Advisory)
+        .map(|finding| finding.code.clone())
+        .collect()
+}
+
+fn finding_with_code<'a>(proposal: &'a PlanningProposal, code: &str) -> &'a PlanningFinding {
+    proposal
+        .findings
+        .iter()
+        .find(|finding| finding.code == code)
+        .unwrap_or_else(|| panic!("missing finding {code}: {:?}", proposal.findings))
+}
+
+async fn accepted_subplot_chapters(fixture: &SubplotFixture) -> PlanningProposal {
+    let chapters = stage_subplot_chapters(fixture, subplot_sequences_valid()).await;
+    assert!(
+        chapters
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "a valid Subplot Sequence set must not block: {:?}",
+        chapters.findings
+    );
+    accept(&fixture.svc, &fixture.session, &chapters).await;
+    chapters
+}
+
+#[tokio::test]
+async fn mckee_subplot_sequence_climax_after_every_convergence_point_blocks() {
+    let fixture = subplot_fixture(SubplotScenario::valid()).await;
+    let chapters = stage_subplot_chapters(&fixture, subplot_sequences_after_convergence()).await;
+    let finding = finding_with_code(&chapters, "subplot_sequence_climax_after_convergence_point");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+    assert!(
+        finding.path.ends_with("/schedule/sequences/1/climax_scene"),
+        "the finding points at the staging author's Sequence entry: {}",
+        finding.path
+    );
+    assert!(finding.related_refs.iter().any(|value| value == "seq:sub"));
+    assert!(
+        finding
+            .related_refs
+            .iter()
+            .any(|value| value == &fixture.subplot_id),
+        "the finding names the Subplot record: {:?}",
+        finding.related_refs
+    );
+    reject_planning(&fixture.svc, &fixture.session, &chapters).await;
+
+    // A climax placed exactly on the Convergence Point satisfies it.
+    let mut at_the_point = SubplotScenario::valid();
+    at_the_point.convergence_points = vec![subplot_place(1, 2, 1)];
+    let fixture = subplot_fixture(at_the_point).await;
+    let chapters = stage_subplot_chapters(&fixture, subplot_sequences_valid()).await;
+    assert!(
+        chapters
+            .findings
+            .iter()
+            .all(|finding| finding.code != "subplot_sequence_climax_after_convergence_point"),
+        "a climax at the Convergence Point must satisfy the rule: {:?}",
+        chapters.findings
+    );
+    accept(&fixture.svc, &fixture.session, &chapters).await;
+}
+
+#[tokio::test]
+async fn mckee_subplot_without_a_convergence_point_is_advisory_only() {
+    let mut scenario = SubplotScenario::valid();
+    scenario.convergence_points = Vec::new();
+    let fixture = subplot_fixture(scenario.clone()).await;
+    let chapters = accepted_subplot_chapters(&fixture).await;
+    let finding = finding_with_code(&chapters, "subplot_without_convergence_point");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Advisory);
+    assert!(
+        finding.path.ends_with("/convergence_points"),
+        "the advisory points at the plot line's convergence field: {}",
+        finding.path
+    );
+
+    let scenes = stage_subplot_scenes(&fixture, &scenario, &chapters).await;
+    assert!(advisory_codes(&scenes).contains("subplot_without_convergence_point"));
+    assert!(
+        scenes
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "the advisory must not block acceptance: {:?}",
+        scenes.findings
+    );
+    accept(&fixture.svc, &fixture.session, &scenes).await;
+}
+
+#[tokio::test]
+async fn mckee_subplot_axis_dormant_for_three_chapters_is_advisory() {
+    let mut scenario = SubplotScenario::valid();
+    scenario.freedom = vec![None; 6];
+    let fixture = subplot_fixture(scenario.clone()).await;
+    let chapters = accepted_subplot_chapters(&fixture).await;
+    let scenes = stage_subplot_scenes(&fixture, &scenario, &chapters).await;
+    let finding = finding_with_code(&scenes, "subplot_axis_dormant");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Advisory);
+    assert!(
+        finding.actual.contains("chapters 1-3"),
+        "the run definition names the whole scanned run: {}",
+        finding.actual
+    );
+    assert!(
+        scenes
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "{:?}",
+        scenes.findings
+    );
+    accept(&fixture.svc, &fixture.session, &scenes).await;
+}
+
+#[tokio::test]
+async fn mckee_subplot_job_mismatch_is_advisory() {
+    let mut scenario = SubplotScenario::valid();
+    scenario.freedom = vec![
+        Some((
+            subplot_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            subplot_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        )),
+        None,
+        None,
+        None,
+        None,
+        None,
+    ];
+    let fixture = subplot_fixture(scenario.clone()).await;
+    let chapters = accepted_subplot_chapters(&fixture).await;
+    let scenes = stage_subplot_scenes(&fixture, &scenario, &chapters).await;
+    let finding = finding_with_code(&scenes, "subplot_job_unsupported");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Advisory);
+    assert!(
+        finding.expected.contains("contradict") && finding.expected.contains("negative"),
+        "the heuristic's requirement is stated: {}",
+        finding.expected
+    );
+    assert!(
+        scenes
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "{:?}",
+        scenes.findings
+    );
+    accept(&fixture.svc, &fixture.session, &scenes).await;
+}
+
+#[tokio::test]
+async fn mckee_subplot_turning_deeper_than_the_main_plot_in_an_act_is_advisory() {
+    let mut scenario = SubplotScenario::valid();
+    scenario.freedom = vec![
+        Some((
+            subplot_charge(ChargeSign::Positive, ChargeDepth::Positive),
+            subplot_charge(ChargeSign::Negative, ChargeDepth::NegationOfTheNegation),
+        )),
+        None,
+        None,
+        None,
+        None,
+        None,
+    ];
+    let fixture = subplot_fixture(scenario.clone()).await;
+    let chapters = accepted_subplot_chapters(&fixture).await;
+    let scenes = stage_subplot_scenes(&fixture, &scenario, &chapters).await;
+    let finding = finding_with_code(&scenes, "subplot_deeper_than_main_plot");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Advisory);
+    assert!(
+        finding.expected.contains("Act 1"),
+        "the Act's story range is named: {}",
+        finding.expected
+    );
+    assert!(
+        scenes
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "{:?}",
+        scenes.findings
+    );
+    accept(&fixture.svc, &fixture.session, &scenes).await;
+}
+
+fn subplot_cause(plot_line: &str, sequence_key: &str) -> spindle_core::planning::PlannedActCause {
+    spindle_core::planning::PlannedActCause {
+        plot_line_id: PlanningRef::ProposalRef(plot_line.into()),
+        sequence_key: sequence_key.into(),
+    }
+}
+
+/// Stage a later Book artifact that refines Act 2 with a cause. Acts are
+/// Series-Arc/Book schedule metadata, and the flow does allow a Book artifact
+/// to be staged after the Chapter Sequences exist: the cause resolves against
+/// the accepted Sequences, not against a Chapter parent.
+async fn stage_book_act_with_cause(
+    fixture: &SubplotFixture,
+    cause: spindle_core::planning::PlannedActCause,
+    climax: PlanningStoryPlacement,
+) -> PlanningProposal {
+    use serde_json::json;
+    let mut act = planned_act(
+        2,
+        1,
+        climax.chapter_number,
+        climax.scene_order.expect("exact Act climax"),
+        ChargeSign::Negative,
+        ChargeDepth::Contradictory,
+        "Ada answers the harbor",
+        true,
+    );
+    act.climax = Some(climax);
+    act.cause = Some(cause);
+    bundle_with_schedule(
+        &fixture.svc,
+        &fixture.session,
+        PlanningLevel::Book,
+        &[&fixture.root, &fixture.cast, &fixture.series],
+        vec![planned(
+            &unique_fixture_ref("outline:book"),
+            "set_book_outline",
+            json!({"book_id":reference("project:root:book"),"book_number":1,"content":"Ada answers the harbor."}),
+        )],
+        PlanningSchedule {
+            acts: vec![act],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await
+}
+
+fn act_cause_codes(proposal: &PlanningProposal) -> Vec<&PlanningFinding> {
+    proposal
+        .findings
+        .iter()
+        .filter(|finding| finding.code.starts_with("act_cause_"))
+        .collect()
+}
+
+async fn subplot_fixture_with_accepted_scenes(
+    scenario: SubplotScenario,
+) -> (SubplotFixture, PlanningProposal, PlanningProposal) {
+    let fixture = subplot_fixture(scenario.clone()).await;
+    let chapters = accepted_subplot_chapters(&fixture).await;
+    let scenes = stage_subplot_scenes(&fixture, &scenario, &chapters).await;
+    accept(&fixture.svc, &fixture.session, &scenes).await;
+    (fixture, chapters, scenes)
+}
+
+#[tokio::test]
+async fn mckee_act_cause_resolves_against_a_subplot_sequence_and_is_accepted() {
+    let (fixture, chapters, scenes) =
+        subplot_fixture_with_accepted_scenes(SubplotScenario::valid()).await;
+    assert!(
+        chapters.findings.is_empty(),
+        "the valid Subplot fixture must stay clean at Chapter acceptance: {:?}",
+        chapters.findings
+    );
+    assert!(
+        scenes.findings.is_empty(),
+        "the valid Subplot fixture must stay clean at Scene acceptance: {:?}",
+        scenes.findings
+    );
+    let cause = subplot_cause("plot:sub", "seq:sub");
+    let book = stage_book_act_with_cause(&fixture, cause.clone(), subplot_place(1, 2, 2)).await;
+    assert!(
+        act_cause_codes(&book).is_empty(),
+        "a resolvable cause must not produce an Act-cause finding: {:?}",
+        book.findings
+    );
+    assert!(
+        book.findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "a resolvable cause must not block: {:?}",
+        book.findings
+    );
+    accept(&fixture.svc, &fixture.session, &book).await;
+
+    // Read back: the applied Book proposal carries the cause in its schedule.
+    let proposals = fixture
+        .svc
+        .list_planning_proposals(&fixture.session.id, fixture.session.scope.clone())
+        .await
+        .unwrap();
+    let applied = proposals
+        .iter()
+        .find(|proposal| proposal.id == book.id)
+        .expect("applied Book proposal");
+    assert_eq!(applied.status, PlanningProposalStatus::Applied);
+    assert_eq!(
+        applied.artifact.schedule.acts[0].cause,
+        Some(cause),
+        "the Act cause round-trips through the applied proposal"
+    );
+}
+
+#[tokio::test]
+async fn mckee_act_cause_must_resolve_to_a_subplot_sequence() {
+    let (fixture, _chapters, _scenes) =
+        subplot_fixture_with_accepted_scenes(SubplotScenario::valid()).await;
+
+    // No Sequence carries the cited key.
+    let unknown = stage_book_act_with_cause(
+        &fixture,
+        subplot_cause("plot:sub", "seq:missing"),
+        subplot_place(1, 2, 2),
+    )
+    .await;
+    let finding = finding_with_code(&unknown, "act_cause_unresolved_subplot_sequence");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+    assert!(
+        finding.path.ends_with("/cause/sequence_key"),
+        "the finding points at the cited key: {}",
+        finding.path
+    );
+    reject_planning(&fixture.svc, &fixture.session, &unknown).await;
+
+    // The cited plot line is the Main Plot.
+    let not_a_subplot = stage_book_act_with_cause(
+        &fixture,
+        subplot_cause("plot:main", "seq:main"),
+        subplot_place(1, 2, 2),
+    )
+    .await;
+    let finding = finding_with_code(&not_a_subplot, "act_cause_not_a_subplot");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+    reject_planning(&fixture.svc, &fixture.session, &not_a_subplot).await;
+
+    // The Sequence exists but belongs to another plot line.
+    let wrong_owner = stage_book_act_with_cause(
+        &fixture,
+        subplot_cause("plot:sub", "seq:main"),
+        subplot_place(1, 2, 2),
+    )
+    .await;
+    assert_eq!(
+        finding_with_code(&wrong_owner, "act_cause_unresolved_subplot_sequence").severity,
+        PlanningFindingSeverity::Blocking
+    );
+    reject_planning(&fixture.svc, &fixture.session, &wrong_owner).await;
+}
+
+#[tokio::test]
+async fn mckee_act_cause_must_precede_the_act_climax() {
+    let (fixture, _chapters, _scenes) =
+        subplot_fixture_with_accepted_scenes(SubplotScenario::valid()).await;
+    // seq:sub climaxes at book 1 chapter 2 scene 1; this Act 2 climaxes at
+    // chapter 1 scene 1, so the cited cause lands after its effect.
+    let book = stage_book_act_with_cause(
+        &fixture,
+        subplot_cause("plot:sub", "seq:sub"),
+        subplot_place(1, 1, 1),
+    )
+    .await;
+    let finding = finding_with_code(&book, "act_cause_after_act_climax");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+    assert!(finding.expected.contains("Act 2"));
+    reject_planning(&fixture.svc, &fixture.session, &book).await;
+}
+
+#[tokio::test]
+async fn mckee_act_cause_needs_a_convergence_point_to_land_on() {
+    let mut scenario = SubplotScenario::valid();
+    scenario.convergence_points = Vec::new();
+    let (fixture, _chapters, _scenes) = subplot_fixture_with_accepted_scenes(scenario).await;
+    let book = stage_book_act_with_cause(
+        &fixture,
+        subplot_cause("plot:sub", "seq:sub"),
+        subplot_place(1, 2, 2),
+    )
+    .await;
+    let finding = finding_with_code(&book, "act_cause_after_convergence_point");
+    assert_eq!(finding.severity, PlanningFindingSeverity::Blocking);
+    assert!(
+        finding.actual.contains("no Convergence Point"),
+        "the finding explains the missing convergence: {}",
+        finding.actual
+    );
+    reject_planning(&fixture.svc, &fixture.session, &book).await;
+}
+
+fn non_mckee_chapter_operations() -> Vec<PlanningOperationItem> {
+    use serde_json::json;
+    (1..=3)
+        .flat_map(|chapter| {
+            let key = format!("chapter:{chapter}");
+            [
+                planned(
+                    &key,
+                    "create_chapter",
+                    json!({"book_number":1,"chapter_number":chapter,"title":format!("Chapter {chapter}")}),
+                ),
+                planned(
+                    &format!("outline:chapter:{chapter}"),
+                    "set_chapter_outline",
+                    json!({"entity_id":reference(&key),"book_number":1,"chapter_number":chapter,"content":format!("Chapter {chapter} outline."),"beats":[{"order":1,"summary":"Open","status":"planned"}]}),
+                ),
+            ]
+        })
+        .collect()
+}
+
+fn non_mckee_scene(
+    scene_order: i32,
+    character_id: &str,
+    location_id: &str,
+) -> PlanningPlanChapterSceneInput {
+    PlanningPlanChapterSceneInput {
+        scene_order,
+        summary: format!("Scene {scene_order}"),
+        beat_structure: Vec::new(),
+        beats: Vec::new(),
+        turning_beat: None,
+        character_ids: vec![PlanningRef::ExistingRecordId(character_id.into())],
+        location_id: Some(PlanningRef::ExistingRecordId(location_id.into())),
+        content_rating: Some(spindle_core::models::ContentRating::General),
+        purpose: "Advance the harbor story.".into(),
+        research_required: None,
+        research_tags: Vec::new(),
+        explicit_query: None,
+        primary_value_axis: None,
+        secondary_value_axes: Vec::new(),
+        opposition: None,
+        gap: None,
+        scene_question: None,
+        inaction_cost: None,
+        risk: None,
+        dilemma: None,
+    }
+}
+
+#[tokio::test]
+async fn non_mckee_projects_get_no_subplot_or_act_cause_findings() {
+    use serde_json::json;
+    use spindle_core::models::{CreateCharacterInput, CreateLocationInput};
+    use spindle_core::plot_line::SubplotJob;
+
+    let (_tmp, svc) = fresh_service_local().await;
+    let (s, root) = accepted_non_mckee_project(&svc).await;
+    let project_id = s.scope.as_ref().unwrap().project_id.clone();
+    let plot = svc
+        .create_plot_line(spindle_core::models::CreatePlotLineInput {
+            project_id: project_id.clone(),
+            name: "Free line".into(),
+            plot_type: "parallel".into(),
+            summary: "Unstructured subplot".into(),
+            status: None,
+            convergence_points: vec![spindle_core::models::StoryPlacement {
+                book_number: 1,
+                chapter_number: 1,
+                scene_order: Some(1),
+                note: None,
+            }],
+            connected_conflict_ids: Vec::new(),
+            connected_theme_ids: Vec::new(),
+            value_axis: Some("freedom".into()),
+            subplot_job: Some(SubplotJob::Contradict),
+            is_main_plot: false,
+        })
+        .await
+        .unwrap();
+
+    // The Sequence climax is after the plot line's only convergence point. On a
+    // McKee project that is blocking; an unmarked project must be exempt.
+    let chapters = bundle_with_schedule(
+        &svc,
+        &s,
+        PlanningLevel::Chapter,
+        &[&root],
+        non_mckee_chapter_operations(),
+        PlanningSchedule {
+            sequences: vec![PlannedSequence {
+                sequence_key: "seq:free".into(),
+                plot_line_id: Some(PlanningRef::ExistingRecordId(plot.plot_line_id.clone())),
+                question: "Does the free line move?".into(),
+                inciting_scene: Some(subplot_place(1, 1, 1)),
+                climax_scene: Some(subplot_place(1, 3, 2)),
+                member_scenes: vec![
+                    subplot_place(1, 1, 1),
+                    subplot_place(1, 2, 1),
+                    subplot_place(1, 3, 2),
+                ],
+            }],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    assert!(
+        chapters
+            .findings
+            .iter()
+            .all(|finding| !finding.code.starts_with("subplot_")
+                && !finding.code.starts_with("act_cause_")),
+        "an unmarked project must not receive Subplot findings: {:?}",
+        chapters.findings
+    );
+    accept(&svc, &s, &chapters).await;
+
+    let character = svc
+        .create_character(CreateCharacterInput {
+            project_id: project_id.clone(),
+            name: "Ada".into(),
+            summary: "Harbor archivist".into(),
+            role: "protagonist".into(),
+            realm: None,
+            aliases: Vec::new(),
+            voice_profile: Default::default(),
+            emotional_profile: Default::default(),
+            initial_state: None,
+        })
+        .await
+        .unwrap();
+    let location = svc
+        .create_location(CreateLocationInput {
+            project_id: project_id.clone(),
+            name: "The Gate".into(),
+            kind: "fortification".into(),
+            realm: None,
+            summary: "The last gate".into(),
+            initial_state: Default::default(),
+        })
+        .await
+        .unwrap();
+    let plans = (1..=3)
+        .map(|chapter| {
+            (
+                chapter,
+                vec![
+                    non_mckee_scene(1, &character.character_id, &location.location_id),
+                    non_mckee_scene(2, &character.character_id, &location.location_id),
+                ],
+            )
+        })
+        .collect::<Vec<_>>();
+    let scenes = value_scene_artifact(&s, &[&root, &chapters], plans);
+    let scenes = svc.stage_planning(scenes).await.unwrap();
+    assert!(
+        scenes
+            .findings
+            .iter()
+            .all(|finding| !finding.code.starts_with("subplot_")
+                && !finding.code.starts_with("act_cause_")),
+        "an unmarked project's Scene plan must not receive Subplot findings: {:?}",
+        scenes.findings
+    );
+    accept(&svc, &s, &scenes).await;
+
+    // An Act cause is plain optional data on an unmarked project: it is stored
+    // and never resolved or validated.
+    let book = bundle_with_schedule(
+        &svc,
+        &s,
+        PlanningLevel::Book,
+        &[&root],
+        vec![planned(
+            "outline:book:free",
+            "set_book_outline",
+            json!({"book_number":1,"content":"The harbor answers."}),
+        )],
+        PlanningSchedule {
+            acts: vec![PlannedAct {
+                // A cause that would be unresolvable on a McKee project: the
+                // Sequence key names nothing. An unmarked project stores it
+                // without resolving it.
+                cause: Some(spindle_core::planning::PlannedActCause {
+                    plot_line_id: PlanningRef::ExistingRecordId(plot.plot_line_id.clone()),
+                    sequence_key: "seq:missing".into(),
+                }),
+                ..planned_act(
+                    1,
+                    1,
+                    3,
+                    2,
+                    ChargeSign::Negative,
+                    ChargeDepth::Contrary,
+                    "Anything",
+                    true,
+                )
+            }],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    assert!(
+        act_cause_codes(&book).is_empty(),
+        "an unmarked project must ignore an unresolvable Act cause: {:?}",
+        book.findings
+    );
+    assert!(
+        book.findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "{:?}",
+        book.findings
+    );
+    accept(&svc, &s, &book).await;
 }
