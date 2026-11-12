@@ -1186,6 +1186,9 @@ impl SqliteSpindleService {
                     planted_at: promise.planted_at.clone(),
                     planned_payoff: promise.planned_payoff.clone(),
                     notes: promise.notes.clone(),
+
+                    planned_payoff_turning_beat: None,
+                    target_act: None,
                 })
                 .await?;
                 created_promises += 1;

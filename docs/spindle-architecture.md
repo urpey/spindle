@@ -1095,6 +1095,63 @@ labels only (ADR 0007) and never gain validation or enum membership. There is no
 migration: chapter plans are JSON on `chapter_plan`. Unmarked projects get no
 Beat findings and their payloads are unchanged.
 
+**Key Facts** are the turning canon decided during planning
+(`PlanningOperation::CreateKeyFact`, `spindle_core::key_fact`). The operation is
+in the closed allowlist at the Chapter and Scene levels only, where planned
+Scenes exist, and its `kind` is a closed turning set: `death`,
+`revealed_secret`, `relationship_turn`, `item_gained`, `item_lost`,
+`power_gained`, `power_lost`. Any other fact type fails deserialization, so a
+stat change, a pull result or an arbitrary note can never enter the Key Fact
+path; those facts keep the existing mine-then-ratify canon flow unchanged. The
+input names a subject from the existing canonical-fact subject model (or no
+subject for a project-wide fact), a unique `key` (the canonical fact's
+predicate), a `value`, optional `context`, a story placement with a required
+`scene_order`, and an optional `planned_scene_id` naming the planned chapter
+plan that owns the Scene. Acceptance applies the existing planned-and-pending
+canonical-fact path (`scene_id: None`, placed by the Key Fact's book/chapter),
+returns the canonical fact id, and leaves binding to the later
+`bind_canonical_fact_to_scene` flow once the Scene row exists. For a McKee
+project, Chapter/Scene acceptance records stage-recordable blocking findings
+when the placement is not a positive book/chapter/scene, when it does not name a
+planned Scene in the merged planned range (accepted plans, staged ancestors and
+the current artifact share one merge with the value-chain pass, so the two can
+never disagree about which plan is in force), when `planned_scene_id` cannot be
+resolved, or when the reference and the placement name different Scenes. V0060
+adds no Key Fact table: the fact is a `canonical_fact` row.
+
+**Narrative promises** gain two additive fields on both the planning operation
+and the direct `create_narrative_promise` input: `planned_payoff_turning_beat`
+(the 1-based position of the payoff Beat in the planned payoff Scene, the same
+numbering as `turning_beat`, meaningful only with `planned_payoff`) and
+`target_act` (the 1-based order of the Act the promise must pay off in). V0060
+adds the two nullable columns to `narrative_promise`; row mapping, snapshots,
+promise reads and the typed export emit them only when set, so unset rows and
+existing projects stay byte-identical. For a McKee project a promise planned at
+the Series-Arc or Book level is **long-range** and must name a `target_act` that
+exists in the accepted/merged Act list (missing or unknown Act is a
+stage-recordable blocking finding); a Chapter/Scene placement may omit it. The
+pre-existing ordering rule is unchanged and still hard-blocking: a payoff
+placement before its setup, or a payoff Turning Beat that is not a Turn Beat or
+falls outside the planned payoff Scene's Beat list, is refused. The payoff
+Turning Beat may be omitted when the payoff is not on the Turning Beat or the
+payoff Scene is outside the current horizon.
+
+The **deus-ex-machina guard** (McKee projects) ties the two together with
+stage-recordable blocking findings. A `revealed_secret` Key Fact needs an
+earlier-planted promise whose planned payoff lands in that Scene
+(`key_fact_secret_reveal_without_promise`); a chapter-wide payoff placement does
+not name a Scene and cannot satisfy it. A structured Beat gains
+`information_dependent` (serde default `false`, never serialized when false) and
+an optional `promise_id`; when the Scene's Turning Beat is information-dependent
+it must name a promise planted at an earlier placement than its Scene
+(`turning_beat_information_dependent_without_promise`,
+`turning_beat_promise_not_planted_earlier`). Both guards read the merged promise
+view — accepted `narrative_promise` rows visible from the branch lineage,
+promises declared by staged ancestors and the current artifact, plus the planned
+payoff/plant events of the merged promise schedule — with the same deterministic
+precedence as the Act and Sequence gates. Non-McKee projects are exempt and
+their promises and plans serialize exactly as before.
+
 On a McKee project a `scene_add` plan amendment is refused at pre-flight: the
 class cannot add Sequence membership or a value plan, so it must restage the
 Chapter planning artifact instead. `scene_replace` keeps the value-plan fields

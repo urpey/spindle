@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- Add the **Key Fact** planning operation (`create_key_fact`) to the closed
+  allowlist at the Chapter and Scene levels. Its closed turning set is `death`,
+  `revealed_secret`, `relationship_turn`, `item_gained`, `item_lost`,
+  `power_gained`, `power_lost`; any other fact type fails deserialization, and
+  every non-turning fact keeps the existing mine-then-ratify canon flow. The
+  input carries the canonical-fact subject (or a project-wide fact), a unique
+  key, a value, optional context, a story placement with a required
+  `scene_order`, and an optional planned-Scene reference. Acceptance writes the
+  existing planned-and-pending canonical fact (`scene_id: None`, placed by the
+  Key Fact's book/chapter), returns its id, and leaves binding to
+  `bind_canonical_fact_to_scene` once the scene row exists. Stage-recordable
+  blocking findings cover a placement with no planned Scene in the merged
+  planned range and a placement/reference disagreement. There is no new table.
+- Narrative promises gain a planned payoff **Turning Beat** and a long-range
+  **target Act**: `planned_payoff_turning_beat` is the 1-based payoff Beat
+  position in the planned payoff Scene (same numbering as the Scene's
+  `turning_beat`) and `target_act` is the 1-based Act the promise pays off in.
+  V0060 adds both as nullable `narrative_promise` columns; row mapping, subject
+  snapshots, promise reads and the typed export emit them only when set, so
+  unset rows and existing projects stay byte-identical. For McKee projects a
+  promise planned at the Series-Arc or Book level must name a `target_act` that
+  exists in the accepted/merged Act list (missing or unknown Act is
+  stage-recordable Blocking); Chapter/Scene placements may omit it. The
+  existing payoff-before-setup ordering rule is unchanged and still blocking.
+- Add the McKee **deus-ex-machina guard**: a `revealed_secret` Key Fact with no
+  earlier-planted promise whose planned payoff lands in that Scene, and an
+  information-dependent Turning Beat (`information_dependent` plus an optional
+  `promise_id` on a structured Beat) with no promise planted at an earlier
+  placement, are stage-recordable blocking findings. Both read the merged
+  promise view (accepted branch-visible rows, staged ancestors, the current
+  artifact, and the merged promise schedule), and both fields are skipped when
+  false/unset so existing plan JSON is unchanged. Non-McKee projects are exempt.
 - Replace beat strings with structured **Beats** for McKee-structured projects.
   A planned Scene now carries `beats` — a closed `kind` (`action` / `reaction` /
   `turn`), an optional `actor_character_id`, the `tactic`, what is `said`, what

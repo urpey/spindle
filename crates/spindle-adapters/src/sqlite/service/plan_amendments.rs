@@ -582,6 +582,9 @@ impl SqliteSpindleService {
                     planted_at,
                     planned_payoff,
                     notes: Vec::new(),
+
+                    planned_payoff_turning_beat: None,
+                    target_act: None,
                 })
                 .await?;
             return Ok((Some(out.narrative_promise_id), None));

@@ -53,8 +53,13 @@ fn allowed_operations_for_level(
             "set_arc_pacing_constraints",
         ],
         (PlanningLevel::Book, _) => &["create_book", "set_book_outline"],
-        (PlanningLevel::Chapter, _) => &["create_chapter", "set_chapter_outline", "plan_chapter"],
-        (PlanningLevel::Scene, _) => &["plan_chapter"],
+        (PlanningLevel::Chapter, _) => &[
+            "create_chapter",
+            "set_chapter_outline",
+            "plan_chapter",
+            "create_key_fact",
+        ],
+        (PlanningLevel::Scene, _) => &["plan_chapter", "create_key_fact"],
     }
 }
 

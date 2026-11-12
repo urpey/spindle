@@ -2860,6 +2860,9 @@ async fn serial_context_keeps_recent_books_and_old_commitments_without_future_su
         },
         planned_payoff: None,
         notes: vec![],
+
+        planned_payoff_turning_beat: None,
+        target_act: None,
     })
     .await
     .unwrap();
@@ -2988,6 +2991,9 @@ async fn save_summary_populates_open_threads_from_unresolved_threads() {
                 note: None,
             }),
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();
@@ -3117,6 +3123,9 @@ async fn save_summary_open_threads_deterministic_across_rebuilds() {
                 note: None,
             }),
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();

@@ -3,6 +3,7 @@ use super::*;
 use sha2::{Digest, Sha256};
 use spindle_core::planning::*;
 pub(super) mod apply;
+pub(super) mod promises;
 pub(super) mod values;
 
 fn hash<T: serde::Serialize>(value: &T) -> Result<String> {
@@ -759,6 +760,9 @@ fn check_level(level: PlanningLevel, op: &PlanningOperation, attached: bool) -> 
         CreateBook(_) | SetBookOutline(_) => level == PlanningLevel::Book,
         CreateChapter(_) | SetChapterOutline(_) => level == PlanningLevel::Chapter,
         PlanChapter(_) => matches!(level, PlanningLevel::Chapter | PlanningLevel::Scene),
+        // A Key Fact names the planned Scene that must dramatise it, so it is
+        // planned where scenes are: the Chapter and Scene levels.
+        CreateKeyFact(_) => matches!(level, PlanningLevel::Chapter | PlanningLevel::Scene),
     };
     anyhow::ensure!(valid, "operation not allowed for planning level/scope");
     let value = serde_json::to_value(op)?;
@@ -836,7 +840,17 @@ fn check_refs(
                     "book",
                     "chapter",
                     "faction",
-                    "story_spine"
+                    "story_spine",
+                    // Key Fact subjects use the existing canonical-fact subject
+                    // model, and `planned_scene_id` names the planned chapter
+                    // plan (V0060 does not add a table).
+                    "religion",
+                    "economy",
+                    "term",
+                    "system_overlay",
+                    "timeline_event",
+                    "scene",
+                    "chapter_plan"
                 ]
                 .contains(&table),
                 "unsupported planning record type"
@@ -874,7 +888,8 @@ fn check_refs(
                     "connected_theme_ids" | "target_theme_ids" | "theme_ids" => Some("theme"),
                     "connected_conflict_ids" | "target_conflict_ids" => Some("conflict"),
                     "target_plot_line_ids" | "plot_line_id" => Some("plot_line"),
-                    "promise_ref" => Some("narrative_promise"),
+                    "promise_ref" | "promise_id" => Some("narrative_promise"),
+                    "planned_scene_id" => Some("chapter_plan"),
                     "character_arc_id" => Some("character_arc"),
                     "book_id" => Some("book"),
                     "entity_id" => Some("chapter"),
@@ -910,6 +925,7 @@ fn output_type(op: &PlanningOperation) -> &'static str {
         CreateTheme(_) => "theme",
         CreateMotif(_) => "motif",
         CreateNarrativePromise(_) => "narrative_promise",
+        CreateKeyFact(_) => "canonical_fact",
         CreateCharacterArc(_) => "character_arc",
         CreatePacingConfig(_) => "pacing_config",
         CreatePacingCurve(_) => "pacing_curve",
@@ -993,6 +1009,28 @@ const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "scene_turning_beat_out_of_range",
     "scene_turning_beat_not_turn",
     "scene_multiple_turn_beats",
+    // Narrative promise payoff structure, Key Facts and the deus-ex-machina
+    // guard (ticket #28).
+    "promise_target_act_invalid",
+    "promise_target_act_unknown",
+    "promise_long_range_missing_target_act",
+    "promise_payoff_turning_beat_invalid",
+    "promise_payoff_turning_beat_without_payoff",
+    "promise_payoff_turning_beat_out_of_range",
+    "promise_payoff_turning_beat_not_turn",
+    "key_fact_empty_key",
+    "key_fact_empty_value",
+    "key_fact_invalid_placement",
+    "key_fact_placement_not_planned_scene",
+    "key_fact_scene_reference_unknown",
+    "key_fact_scene_reference_mismatch",
+    "key_fact_unknown_subject_table",
+    "key_fact_subject_incomplete",
+    "key_fact_subject_mismatch",
+    "key_fact_secret_reveal_without_promise",
+    "turning_beat_information_dependent_without_promise",
+    "turning_beat_promise_unknown",
+    "turning_beat_promise_not_planted_earlier",
 ];
 
 /// One blocking finding rendered for a caller-facing error string. The path
@@ -1251,7 +1289,8 @@ fn collect_ref_findings(
                     "connected_theme_ids" | "target_theme_ids" | "theme_ids" => Some("theme"),
                     "connected_conflict_ids" | "target_conflict_ids" => Some("conflict"),
                     "target_plot_line_ids" | "plot_line_id" => Some("plot_line"),
-                    "promise_ref" => Some("narrative_promise"),
+                    "promise_ref" | "promise_id" => Some("narrative_promise"),
+                    "planned_scene_id" => Some("chapter_plan"),
                     "character_arc_id" => Some("character_arc"),
                     "book_id" => Some("book"),
                     "entity_id" => Some("chapter"),
@@ -5010,6 +5049,7 @@ fn validate_stage_input_in_conn_excluding(
     validate_mckee_act_climax_placements(conn, input, &s.scope, &mut findings)?;
     validate_mckee_pacing_curve_breakpoints(conn, input, &s.scope, &mut findings)?;
     values::validate_mckee_value_chain(conn, input, &s.scope, &mut findings)?;
+    promises::validate_mckee_promises(conn, input, &s.scope, &ctx, &mut findings)?;
 
     Ok(findings)
 }
@@ -5600,6 +5640,10 @@ impl Repository {
                                                 said: beat.said,
                                                 wanted: beat.wanted,
                                                 gap: beat.gap,
+                                                information_dependent: beat.information_dependent,
+                                                promise_id: beat
+                                                    .promise_id
+                                                    .map(PlanningRef::ExistingRecordId),
                                                 swain_label: beat.swain_label,
                                             })
                                             .collect(),

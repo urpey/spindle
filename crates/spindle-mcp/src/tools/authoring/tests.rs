@@ -127,6 +127,9 @@ async fn update_promise_status_accepts_common_alias_fields() {
                 note: None,
             }),
             notes: vec![],
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .expect("create promise directly");

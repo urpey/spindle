@@ -516,6 +516,9 @@ mod plan_ratify {
                     actual: "A page is missing".into(),
                 },
                 swain_label: None,
+
+                information_dependent: false,
+                promise_id: None,
             },
             PlannedBeat {
                 kind: BeatKind::Turn,
@@ -528,6 +531,9 @@ mod plan_ratify {
                     actual: "The hall orders her silence".into(),
                 },
                 swain_label: None,
+
+                information_dependent: false,
+                promise_id: None,
             },
         ]
     }

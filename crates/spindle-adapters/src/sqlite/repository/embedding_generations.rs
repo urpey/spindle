@@ -243,7 +243,7 @@ impl Repository {
         let table_name_for_tx = table_name.clone();
         let now = timestamp_to_micros(chrono::Utc::now());
         self.with_transaction(move |tx| {
-            tx.tx.execute(
+            tx.conn().execute(
                 "INSERT INTO embedding_generation (
                     generation_id, provider, model, dimension, metric, normalization,
                     version, table_name, status, created_at, activated_at, retired_at,
@@ -265,7 +265,7 @@ impl Repository {
                 "CREATE VIRTUAL TABLE IF NOT EXISTS {table_name_for_tx} USING vec0(\
                  se_id TEXT PRIMARY KEY, embedding FLOAT[{dimension}])"
             );
-            tx.tx.execute(&create, [])?;
+            tx.conn().execute(&create, [])?;
             Ok(())
         })
         .await?;
@@ -387,8 +387,7 @@ impl Repository {
         let expected_previous_generation_id = expected_previous_generation_id.to_string();
         let now = timestamp_to_micros(chrono::Utc::now());
         self.with_transaction(move |tx| {
-            let current: Option<String> = tx
-                .tx
+            let current: Option<String> = tx.conn()
                 .query_row(
                     "SELECT active_generation_id FROM embedding_index_state WHERE project_id = ?1",
                     [&project_id],
@@ -400,8 +399,7 @@ impl Repository {
                 current == expected_previous_generation_id,
                 "stale embedding index state: expected active {expected_previous_generation_id}, current {current}"
             );
-            let epoch: Option<i64> = tx
-                .tx
+            let epoch: Option<i64> = tx.conn()
                 .query_row(
                     "SELECT write_epoch FROM embedding_index_state WHERE project_id = ?1",
                     [&project_id],
@@ -413,7 +411,7 @@ impl Repository {
                 "{}",
                 EMBEDDING_WRITE_CONFLICT
             );
-            let status: String = tx.tx.query_row(
+            let status: String = tx.conn().query_row(
                 "SELECT status FROM embedding_generation WHERE generation_id = ?1",
                 [&generation_id],
                 |row| row.get(0),
@@ -425,7 +423,7 @@ impl Repository {
             // Lifecycle changes are per project. The shared registry row and
             // its vec0 table must stay usable by other projects activating the
             // same spec.
-            tx.tx.execute(
+            tx.conn().execute(
                 "INSERT INTO embedding_generation_project (
                     project_id, generation_id, status, created_at, activated_at
                  ) VALUES (?1, ?2, 'active', ?3, ?3)
@@ -435,7 +433,7 @@ impl Repository {
                 rusqlite::params![&project_id, &generation_id, now],
             )?;
             if current != generation_id {
-                tx.tx.execute(
+                tx.conn().execute(
                     "INSERT INTO embedding_generation_project (
                         project_id, generation_id, status, created_at, retired_at
                      ) VALUES (?1, ?2, 'retired', ?3, ?3)
@@ -444,19 +442,19 @@ impl Repository {
                     rusqlite::params![&project_id, &current, now],
                 )?;
             }
-            tx.tx.execute(
+            tx.conn().execute(
                 "UPDATE embedding_generation_project SET status = 'retired', retired_at = ?3 \
                  WHERE project_id = ?1 AND generation_id = ?2 AND status = 'active' \
                    AND generation_id <> ?4",
                 rusqlite::params![&project_id, &current, now, &generation_id],
             )?;
-            tx.tx.execute(
+            tx.conn().execute(
                 "UPDATE embedding_generation SET status = 'active', \
                     activated_at = COALESCE(activated_at, ?2) \
                  WHERE generation_id = ?1 AND status = 'building'",
                 rusqlite::params![&generation_id, now],
             )?;
-            tx.tx.execute(
+            tx.conn().execute(
                 "INSERT INTO embedding_index_state (
                     project_id, active_generation_id, previous_generation_id,
                     rollback_until, updated_at
@@ -495,7 +493,7 @@ impl Repository {
         let now = timestamp_to_micros(chrono::Utc::now());
         self.with_transaction(move |tx| {
             let state = tx
-                .tx
+                .conn()
                 .query_row(
                     "SELECT project_id, active_generation_id, previous_generation_id, \
                             rollback_until, updated_at \
@@ -523,18 +521,18 @@ impl Repository {
                 "{}",
                 EmbeddingValidationError::RollbackWindowClosed
             );
-            tx.tx.execute(
+            tx.conn().execute(
                 "UPDATE embedding_generation_project SET status = 'retired', retired_at = ?3 \
                  WHERE project_id = ?1 AND generation_id = ?2",
                 rusqlite::params![&project_id, &state.active_generation_id, now],
             )?;
-            tx.tx.execute(
+            tx.conn().execute(
                 "UPDATE embedding_generation_project SET status = 'active', \
                     activated_at = ?3, retired_at = NULL, failed_at = NULL \
                  WHERE project_id = ?1 AND generation_id = ?2",
                 rusqlite::params![&project_id, &previous, now],
             )?;
-            tx.tx.execute(
+            tx.conn().execute(
                 "UPDATE embedding_index_state SET active_generation_id = ?2, \
                     previous_generation_id = NULL, rollback_until = NULL, updated_at = ?3 \
                  WHERE project_id = ?1",

@@ -73,7 +73,7 @@ impl Repository {
         .to_string();
         self.with_transaction(move |tx| {
             let now_micros = timestamp_to_micros(chrono::Utc::now());
-            tx.tx.execute(
+            tx.conn().execute(
                 "INSERT INTO canon_source_map (
                     project_id, branch_id, source_table, legacy_primary_key,
                     migration_version, status, provenance, claim_ids, event_ids,
@@ -146,7 +146,7 @@ impl Repository {
         self.with_transaction(move |tx| {
             let now_micros = timestamp_to_micros(chrono::Utc::now());
             let current = tx
-                .tx
+                .conn()
                 .query_row(
                     "SELECT project_id, mode, activated_decision_watermark, reason, updated_at \
                      FROM canon_cutover_state WHERE project_id = ?1",
@@ -162,7 +162,7 @@ impl Repository {
                     },
                 )
                 .optional_inner()?;
-            let decision_watermark: i64 = tx.tx.query_row(
+            let decision_watermark: i64 = tx.conn().query_row(
                 "SELECT COALESCE(MAX(decision_seq), 0) FROM canon_decision WHERE project_id = ?1",
                 [&project_id],
                 |row| row.get(0),
@@ -176,7 +176,7 @@ impl Repository {
             )
             .map_err(|error| anyhow!(error.to_string()))?;
             let mode_str = enum_to_sql_str(state.mode)?;
-            tx.tx.execute(
+            tx.conn().execute(
                 "INSERT INTO canon_cutover_state (
                     project_id, mode, activated_decision_watermark, reason, updated_at
                  ) VALUES (?1, ?2, ?3, ?4, ?5)

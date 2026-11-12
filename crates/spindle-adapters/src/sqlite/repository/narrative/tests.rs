@@ -179,6 +179,9 @@ async fn narrative_entity_creates_round_trip() {
                 note: Some("climax".into()),
             }),
             notes: vec!["watch for ash imagery".into()],
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();

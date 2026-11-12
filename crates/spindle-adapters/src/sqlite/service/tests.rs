@@ -1745,6 +1745,9 @@ async fn seed_promise_payoff_project(
                 note: None,
             }),
             notes: Vec::new(),
+
+            planned_payoff_turning_beat: None,
+            target_act: None,
         })
         .await
         .unwrap();

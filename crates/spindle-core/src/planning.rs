@@ -1,6 +1,7 @@
 //! Initial-planning contracts. These never authorize in-run amendments.
 use crate::character_design::CharacterDesignView;
 use crate::charge::Charge;
+use crate::key_fact::KeyFactKind;
 use crate::models::*;
 use crate::plot_line::SubplotJob;
 use crate::scene_value::{SceneGap, SceneValueAxis};
@@ -780,6 +781,7 @@ pub enum PlanningOperation {
     CreateTheme(PlanningCreateThemeInput),
     CreateMotif(PlanningCreateMotifInput),
     CreateNarrativePromise(PlanningCreateNarrativePromiseInput),
+    CreateKeyFact(PlanningCreateKeyFactInput),
     CreateCharacterArc(PlanningCreateCharacterArcInput),
     CreatePacingConfig(PlanningCreatePacingConfigInput),
     CreatePacingCurve(PlanningCreatePacingCurveInput),
@@ -998,8 +1000,60 @@ pub struct PlanningCreateNarrativePromiseInput {
     pub description: String,
     pub planted_at: PlanningStoryPlacement,
     pub planned_payoff: Option<PlanningStoryPlacement>,
+    /// The 1-based position in the payoff Scene's `beats` where the payoff
+    /// lands, ideally its Turning Beat (the same numbering as the Scene's
+    /// `turning_beat`). Only meaningful with `planned_payoff`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub planned_payoff_turning_beat: Option<i32>,
+    /// The 1-based order of the Act this promise must pay off in. Required for a
+    /// long-range promise planned at the Series-Arc or Book level; it must name
+    /// an Act in the accepted/merged Act list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub target_act: Option<i32>,
     #[serde(default)]
     pub notes: Vec<String>,
+}
+
+/// Stage one turning canon fact decided during planning (a Key Fact).
+///
+/// Only the closed [`KeyFactKind`] set is accepted, so a non-turning fact type
+/// is rejected at deserialization and can never enter the Key Fact path. The
+/// operation wraps the existing planned-and-pending canonical fact registration
+/// (`scene_id: None`, placed by `placement`); acceptance returns the canonical
+/// fact id, which is bound to the dramatising scene later with
+/// `bind_canonical_fact_to_scene` once the scene row exists.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanningCreateKeyFactInput {
+    /// The closed turning type of this Key Fact.
+    pub kind: KeyFactKind,
+    /// Subject table of the fact's subject (for example `character`,
+    /// `location` or `project`). Required together with `subject_id`; the
+    /// existing canonical-fact subject model decides the allowed tables.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_table: Option<String>,
+    /// Subject record id (a record id or a planning reference). Required
+    /// together with `subject_table`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_id: Option<PlanningRef>,
+    /// Unique key identifying the fact; it becomes the canonical fact's
+    /// predicate.
+    pub key: String,
+    /// The canonical value text.
+    pub value: String,
+    /// Optional context about where/how the fact is established.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    /// The planned Scene that must dramatise the fact. `scene_order` is
+    /// required: the fact is placed on that scene position.
+    pub placement: PlanningStoryPlacement,
+    /// Optional reference to the upfront planned Scene's chapter plan (a
+    /// `plan_chapter` output proposal reference or an existing `chapter_plan`
+    /// record id). When present it must agree with `placement`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_scene_id: Option<PlanningRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1212,6 +1266,18 @@ pub struct PlanningBeat {
     /// What the actor expects this attempt to bring versus what the world
     /// actually returns.
     pub gap: SceneGap,
+    /// Whether this Beat's Gap depends on information the reader must already
+    /// have been promised. Only the Scene's Turning Beat is judged, and it must
+    /// name the earlier-planted promise it pays off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub information_dependent: bool,
+    /// The promise this information-dependent Beat depends on, as a planning
+    /// reference (resolved to the narrative-promise record id on apply).
+    ///
+    /// Spelled out with the `_id` suffix because planning payloads resolve
+    /// `*_id` keys generically; a bare `promise` key would not resolve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promise_id: Option<PlanningRef>,
     /// Optional Swain category label. Never a structural kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub swain_label: Option<String>,
@@ -2307,6 +2373,92 @@ mod tests {
         );
         assert!(json["beats"][0].get("swain_label").is_none());
     }
+
+    #[test]
+    fn key_fact_operation_accepts_only_the_closed_turning_set() {
+        let valid = json!({
+            "operation": "create_key_fact",
+            "input": {
+                "kind": "revealed_secret",
+                "subject_table": "character",
+                "subject_id": {"kind":"proposal_ref","value":"cast:ada"},
+                "key": "Ada:forged_manifest",
+                "value": "Ada signed the forged manifest",
+                "context": "The reveal the mystery promised",
+                "placement": {"book_number":1,"chapter_number":1,"scene_order":2},
+                "planned_scene_id": {"kind":"proposal_ref","value":"plan:1"}
+            }
+        });
+        let operation: PlanningOperation = serde_json::from_value(valid.clone()).unwrap();
+        let PlanningOperation::CreateKeyFact(key_fact) = operation else {
+            panic!("create_key_fact must parse as its own operation");
+        };
+        assert_eq!(key_fact.kind, KeyFactKind::RevealedSecret);
+        assert!(key_fact.kind.is_secret_reveal());
+        assert_eq!(key_fact.placement.scene_order, Some(2));
+
+        // A non-turning fact type is not a Key Fact type: the operation fails
+        // closed at deserialization, before any staging or hashing.
+        for non_turning in ["stat_change", "pull_result", "ability_gained"] {
+            let mut bad = valid.clone();
+            bad["input"]["kind"] = json!(non_turning);
+            assert!(
+                serde_json::from_value::<PlanningOperation>(bad).is_err(),
+                "'{non_turning}' must not be accepted by create_key_fact"
+            );
+        }
+        // Unknown nested fields still fail closed.
+        let mut extra = valid;
+        extra["input"]["unexpected_field"] = json!(true);
+        assert!(serde_json::from_value::<PlanningOperation>(extra).is_err());
+    }
+
+    #[test]
+    fn promise_payoff_turning_beat_and_target_act_are_additive() {
+        // A pre-#28 promise payload keeps its exact shape: neither new key is
+        // serialized when unset.
+        let legacy: PlanningCreateNarrativePromiseInput = serde_json::from_value(json!({
+            "promise_type":"mystery",
+            "description":"Who forged the seal?",
+            "planted_at":{"book_number":1,"chapter_number":1},
+            "planned_payoff":{"book_number":1,"chapter_number":3}
+        }))
+        .unwrap();
+        assert_eq!(legacy.planned_payoff_turning_beat, None);
+        assert_eq!(legacy.target_act, None);
+        let json = serde_json::to_value(&legacy).unwrap();
+        assert!(json.get("planned_payoff_turning_beat").is_none());
+        assert!(json.get("target_act").is_none());
+
+        let planned: PlanningCreateNarrativePromiseInput = serde_json::from_value(json!({
+            "promise_type":"mystery",
+            "description":"Who forged the seal?",
+            "planted_at":{"book_number":1,"chapter_number":1,"scene_order":1},
+            "planned_payoff":{"book_number":2,"chapter_number":1,"scene_order":2},
+            "planned_payoff_turning_beat":3,
+            "target_act":2
+        }))
+        .unwrap();
+        assert_eq!(planned.planned_payoff_turning_beat, Some(3));
+        assert_eq!(planned.target_act, Some(2));
+        let json = serde_json::to_value(&planned).unwrap();
+        assert_eq!(json["planned_payoff_turning_beat"], 3);
+        assert_eq!(json["target_act"], 2);
+
+        // The same fields are additive on the direct write input, and the
+        // direct input's unknown-field rule is unchanged.
+        let direct: CreateNarrativePromiseInput = serde_json::from_value(json!({
+            "project_id":"project:test",
+            "promise_type":"mystery",
+            "description":"Who forged the seal?",
+            "planted_at":{"book_number":1,"chapter_number":1},
+            "planned_payoff":null
+        }))
+        .unwrap();
+        assert_eq!(direct.target_act, None);
+        let json = serde_json::to_value(&direct).unwrap();
+        assert!(json.get("target_act").is_none());
+    }
 }
 
 /// A committed operation receipt. IDs include the operation's named output and
@@ -2356,6 +2508,7 @@ pub enum PlanningAppliedOutput {
     CreateTheme(Box<CreateThemeOutput>),
     CreateMotif(Box<CreateMotifOutput>),
     CreateNarrativePromise(Box<CreateNarrativePromiseOutput>),
+    CreateKeyFact(Box<RegisterCanonicalFactOutput>),
     CreateCharacterArc(Box<CreateCharacterArcOutput>),
     CreatePacingConfig(Box<CreatePacingConfigOutput>),
     CreatePacingCurve(Box<CreatePacingCurveOutput>),

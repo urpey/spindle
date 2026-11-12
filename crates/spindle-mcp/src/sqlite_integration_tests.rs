@@ -9295,6 +9295,15 @@ fn mckee_scene_beats(actor: &str) -> serde_json::Value {
     ])
 }
 
+/// The same Beats with the Turn Beat made information-dependent on an
+/// earlier-planted promise (the #28 deus-ex-machina guard's passing shape).
+fn mckee_scene_beats_with_promise(actor: &str, promise: &str) -> serde_json::Value {
+    let mut beats = mckee_scene_beats(actor);
+    beats[2]["information_dependent"] = serde_json::json!(true);
+    beats[2]["promise_id"] = serde_json::json!({"kind": "proposal_ref", "value": promise});
+    beats
+}
+
 // Scenario brief used by the new-book entry flow: a harbor mystery with one
 // POV character, one location, one world rule, a planted promise, and a
 // two-chapter / four-scene near horizon.
@@ -9413,7 +9422,9 @@ fn planning_entry_series_artifact() -> serde_json::Value {
                 "promise_type": "mystery",
                 "description": "Who rang the clapperless bell?",
                 "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
-                "planned_payoff": {"book_number": 1, "chapter_number": 2, "scene_order": 2}
+                "planned_payoff": {"book_number": 1, "chapter_number": 2, "scene_order": 2},
+                "planned_payoff_turning_beat": 3,
+                "target_act": 2
             }}},
             {"output_ref": "arc:mara", "operation": {"operation": "create_character_arc", "input": {
                 "character_id": {"kind": "proposal_ref", "value": "cast:mara"},
@@ -9462,12 +9473,19 @@ fn entry_value_scenes(chapter: i32) -> Vec<serde_json::Value> {
     } else {
         "cannot read her own heart"
     };
+    // promise:bell is planted at (1, 1, 1): every Scene after it may make its
+    // Turn Beat information-dependent on that promise.
+    let scene_one_beats = if chapter == 1 {
+        mckee_scene_beats("cast:mara")
+    } else {
+        mckee_scene_beats_with_promise("cast:mara", "promise:bell")
+    };
     vec![
         serde_json::json!({
             "scene_order": 1,
             "summary": "Mara hears the bronze bell.",
             "beat_structure": ["hook", "turn"],
-            "beats": mckee_scene_beats("cast:mara"),
+            "beats": scene_one_beats,
             "turning_beat": 3,
             "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
             "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
@@ -9485,7 +9503,7 @@ fn entry_value_scenes(chapter: i32) -> Vec<serde_json::Value> {
             "scene_order": 2,
             "summary": "Mara climbs to the lantern room.",
             "beat_structure": ["escalation", "decision"],
-            "beats": mckee_scene_beats("cast:mara"),
+            "beats": mckee_scene_beats_with_promise("cast:mara", "promise:bell"),
             "turning_beat": 3,
             "character_ids": [{"kind": "proposal_ref", "value": "cast:mara"}],
             "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
@@ -9529,6 +9547,21 @@ fn planning_entry_scene_artifact() -> serde_json::Value {
             }}
         }));
     }
+    // A turning Key Fact: the secret promise:bell pays off in chapter 2 Scene 2,
+    // so the reveal is planned and bound there instead of arriving from nowhere.
+    plans.push(serde_json::json!({
+        "output_ref": "key:bell-forgery",
+        "operation": {"operation": "create_key_fact", "input": {
+            "kind": "revealed_secret",
+            "subject_table": "character",
+            "subject_id": {"kind": "proposal_ref", "value": "cast:mara"},
+            "key": "Mara:bell_forgery",
+            "value": "Mara finds the bell clapper hidden in the magistrate's sea chest",
+            "context": "The reveal the clapperless-bell promise paid off",
+            "placement": {"book_number": 1, "chapter_number": 2, "scene_order": 2},
+            "planned_scene_id": {"kind": "proposal_ref", "value": "plan:ch2"}
+        }}
+    }));
     serde_json::json!({
         "schema_version": 1,
         "level": "scene",
@@ -11694,4 +11727,124 @@ async fn non_mckee_project_plan_chapter_payloads_keep_the_legacy_scene_shape() {
             "legacy scene payload must not grow {field}: {structured}"
         );
     }
+}
+
+/// McKee #28 public contract: `create_narrative_promise` advertises the
+/// planned payoff Turning Beat and the long-range target Act, and both read
+/// back through `get_entity`; an unset promise keeps its old payload shape.
+#[tokio::test]
+async fn narrative_promise_structured_payoff_fields_are_on_the_public_schema_and_read_back() {
+    use crate::tools::{ToolRouter, ToolSerializationState};
+    use std::sync::Arc;
+
+    let (_tmp, svc) = fresh_service().await;
+    let project = svc
+        .create_project(CreateProjectInput {
+            name: "Promise Contract".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "The seal pays off".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    let router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        None,
+        Arc::new(ToolSerializationState::default()),
+    );
+
+    let tools = router.list_tools();
+    let schema = serde_json::to_value(
+        tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == "create_narrative_promise")
+            .expect("create_narrative_promise schema"),
+    )
+    .unwrap();
+    let schema_text = schema.to_string();
+    assert!(
+        schema_text.contains("planned_payoff_turning_beat"),
+        "the public promise schema must advertise the payoff Turning Beat: {schema}"
+    );
+    assert!(
+        schema_text.contains("target_act"),
+        "the public promise schema must advertise the target Act: {schema}"
+    );
+
+    let created = planning_call(
+        &router,
+        "create_narrative_promise",
+        serde_json::json!({
+            "project_id": project.project_id,
+            "promise_type": "mystery",
+            "description": "Who pressed the seal?",
+            "planted_at": {"book_number": 1, "chapter_number": 1, "scene_order": 1},
+            "planned_payoff": {"book_number": 1, "chapter_number": 2, "scene_order": 2},
+            "planned_payoff_turning_beat": 3,
+            "target_act": 2
+        }),
+    )
+    .await;
+    let promise_id = created["narrative_promise_id"]
+        .as_str()
+        .expect("promise id")
+        .to_string();
+    let read = planning_call(
+        &router,
+        "get_entity",
+        serde_json::json!({
+            "project_id": project.project_id,
+            "table": "narrative_promise",
+            "entity_id": promise_id
+        }),
+    )
+    .await;
+    let details = &read["kind_specific"]["details"];
+    assert_eq!(details["target_act"], serde_json::json!(2));
+    assert_eq!(details["planned_payoff_turning_beat"], serde_json::json!(3));
+    assert_eq!(
+        details["planned_payoff"]["book_number"],
+        serde_json::json!(1)
+    );
+
+    // A promise created without the new fields keeps the pre-#28 payload shape.
+    let legacy = planning_call(
+        &router,
+        "create_narrative_promise",
+        serde_json::json!({
+            "project_id": project.project_id,
+            "promise_type": "clue",
+            "description": "An old promise",
+            "planted_at": {"book_number": 1, "chapter_number": 1},
+            "planned_payoff": null
+        }),
+    )
+    .await;
+    let legacy_id = legacy["narrative_promise_id"]
+        .as_str()
+        .expect("legacy promise id")
+        .to_string();
+    let read = planning_call(
+        &router,
+        "get_entity",
+        serde_json::json!({
+            "project_id": project.project_id,
+            "table": "narrative_promise",
+            "entity_id": legacy_id
+        }),
+    )
+    .await;
+    let details = &read["kind_specific"]["details"];
+    assert!(
+        details.get("planned_payoff_turning_beat").is_none(),
+        "unset fields must not appear in the snapshot: {details}"
+    );
+    assert!(
+        details.get("target_act").is_none(),
+        "unset fields must not appear in the snapshot: {details}"
+    );
 }
