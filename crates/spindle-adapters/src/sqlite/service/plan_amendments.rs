@@ -381,6 +381,40 @@ impl SqliteSpindleService {
             })
     }
 
+    /// Refuse an amendment class the McKee value-chain invariants cannot keep
+    /// valid.
+    ///
+    /// `scene_add` builds a scene from stored fields; on a McKee project that
+    /// scene would have no primary Value Axis, Gap, Inaction Cost or dilemma and
+    /// no Sequence membership, so it could never pass planning acceptance and
+    /// **no amendment class can add Sequence membership** either. Rather than
+    /// silently writing a value-less scene, the dispatcher directs the author to
+    /// restage the Chapter planning artifact (which re-validates the whole plan
+    /// and its `schedule.sequences`). The downstream amendment-class cascade for
+    /// Sequences is the #34 follow-up, not part of this fix.
+    pub(super) async fn ensure_amendment_class_supported(
+        &self,
+        amendment: &crate::sqlite::records::StoredPlanAmendment,
+        class: &str,
+    ) -> Result<()> {
+        if class != "scene_add" {
+            return Ok(());
+        }
+        let project = self.repository.get_project(&amendment.project_id).await?;
+        if !project.mckee_structured {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "scene_add is refused for McKee-structured projects: a new Scene cannot be placed \
+             in an accepted Sequence through a plan amendment, and the added Scene would carry \
+             no value plan (primary Value Axis, Gap, Inaction Cost, dilemma) or Sequence \
+             membership, which planning acceptance refuses. Restage the Chapter planning \
+             artifact instead — plan a new chapter-plan proposal with the Scene's value plan and \
+             the updated schedule.sequences — so the whole plan is re-validated. Adding Sequence \
+             membership through an amendment is follow-up #34."
+        )
+    }
+
     /// Cheap referential + immutability pre-flight for one `apply` decision (ADR
     /// 0003 D3). Re-validates the payload per class, runs the immutability guard,
     /// and confirms the amendment coheres with the CURRENT plan. No writes. Runs
@@ -397,6 +431,11 @@ impl SqliteSpindleService {
         if !plan_amendment_payload_is_valid(class, payload) {
             anyhow::bail!("payload no longer valid for class '{class}'");
         }
+        // A McKee project's value-chain invariants cannot be repaired by the
+        // classes that rebuild a plan from stored fields alone; refuse before
+        // any write so the batch stays atomic.
+        self.ensure_amendment_class_supported(amendment, class)
+            .await?;
 
         if class == "promise_followup" {
             // Placement guard (ADR D3): the followup must plant at or after the
@@ -510,6 +549,11 @@ impl SqliteSpindleService {
         };
 
         let class = amendment.amendment_class.as_str();
+        // Defence in depth: pre-flight already refuses an unsupported class, but
+        // the apply path must never silently write a value-less McKee scene if a
+        // caller reaches it directly.
+        self.ensure_amendment_class_supported(amendment, class)
+            .await?;
 
         if class == "promise_followup" {
             let placement = payload
@@ -593,6 +637,14 @@ impl SqliteSpindleService {
         let mut target_conflict_ids = plan.target_conflict_ids.clone();
         let mut target_plot_line_ids = plan.target_plot_line_ids.clone();
 
+        // `scene_drop` / `scene_reorder` / `synopsis_update` stay available on a
+        // McKee project: they do not invent value-plan fields, and their known
+        // structural side effects are documented rather than blocked here. A
+        // dropped Scene that a Sequence still lists leaves a dangling member, and
+        // a reorder can break the axis chain; this pass does not cascade into
+        // `schedule.sequences` (#34), so the next Chapter planning acceptance
+        // reports the result instead. Refusing these would strand the living
+        // outline without removing the actual inconsistency.
         match class {
             "synopsis_update" => {
                 synopsis = payload
@@ -687,6 +739,11 @@ impl SqliteSpindleService {
                     .context("scene_replace missing scene_order")?
                     as i32;
                 if let Some((_, target)) = scenes.iter_mut().find(|(_, s)| s.scene_order == order) {
+                    // Deliberately only prose/cast/place edits. The value plan
+                    // (primary and secondary axes, opposition, Gap, scene
+                    // question, Inaction Cost, risk, dilemma) is carried through
+                    // untouched, so a replacement can never drop a McKee Scene
+                    // out of the value chain or its Sequence membership.
                     target.summary = payload
                         .get("summary")
                         .and_then(|v| v.as_str())

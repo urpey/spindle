@@ -49,8 +49,8 @@ pub(crate) fn accepted_planning_acts_in_conn(
 }
 
 /// The Sequences accepted on one project branch (see
-/// [`merge_applied_sequence_rows`] for the precedence rule). In-connection twin
-/// of [`Repository::accepted_planning_sequences`], used by the value-chain pass.
+/// [`merge_applied_sequence_rows`] for the precedence rule). Used by the
+/// value-chain pass.
 pub(crate) fn accepted_planning_sequences_in_conn(
     conn: &rusqlite::Connection,
     project_id: &str,
@@ -124,7 +124,8 @@ fn merge_applied_act_rows(rows: Vec<(usize, String)>) -> Result<Vec<PlannedAct>>
 
 /// Merge applied proposal payloads in lineage order, then decision order
 /// within a branch, keeping only Chapter-level Sequences. See
-/// [`accepted_planning_sequences`].
+/// [`merge_planned_sequences`](spindle_core::sequences::merge_planned_sequences)
+/// for the refine-by-key precedence rule.
 fn merge_applied_sequence_rows(rows: Vec<(usize, String)>) -> Result<Vec<PlannedSequence>> {
     let mut decided: Vec<(usize, i64, String, Vec<PlannedSequence>)> = Vec::new();
     for (branch_rank, data) in rows {
@@ -601,27 +602,6 @@ impl Repository {
         merge_applied_act_rows(rows)
     }
 
-    /// The Sequences accepted on one project branch, merged by `sequence_key`
-    /// (a later decision overrides the same key; see
-    /// [`merge_applied_sequence_rows`]).
-    ///
-    /// Only applied Chapter proposals contribute: Sequences are chapter-level
-    /// schedule metadata, and a lower- or higher-level artifact that somehow
-    /// carries `schedule.sequences` must never leak into the accepted list.
-    pub async fn accepted_planning_sequences(
-        &self,
-        project_id: &str,
-        branch_id: &str,
-    ) -> Result<Vec<PlannedSequence>> {
-        let project_id = project_id.to_owned();
-        let branch_id = branch_id.to_owned();
-        let rows = self
-            .pool()
-            .read(move |conn| applied_proposal_rows_in_conn(conn, &project_id, &branch_id))
-            .await?;
-        merge_applied_sequence_rows(rows)
-    }
-
     pub async fn stage_planning(&self, input: StagePlanningInput) -> Result<PlanningProposal> {
         anyhow::ensure!(
             input.schema_version == 1,
@@ -946,9 +926,12 @@ fn output_type(op: &PlanningOperation) -> &'static str {
 /// author can see exactly which field is missing or invalid. Every other
 /// blocking finding still rejects staging, as before.
 ///
-/// Story-Spine completeness (V0057), the McKee Main Plot / Subplot checks
-/// (V0058) and the McKee Character Design gate (V0059) are recorded: the
-/// proposal stages, but acceptance is gated until the findings are repaired.
+/// The set is grouped by feature, not by migration version: Story-Spine
+/// completeness, the McKee Main Plot / Subplot checks, the McKee Character
+/// Design gate, the McKee Act list, and the McKee Sequence / scene value-chain
+/// classes. The proposal stages, but acceptance is gated until the findings are
+/// repaired. Add a code here when a new class should stage with its findings
+/// visible.
 const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "story_spine_missing_central_question",
     "story_spine_missing_controlling_idea_value",
@@ -988,6 +971,8 @@ const STAGE_RECORDABLE_BLOCKING_CODES: &[&str] = &[
     "sequence_members_unordered",
     "sequence_missing_climax",
     "sequence_climax_not_member",
+    "sequence_climax_not_last",
+    "sequence_missing_inciting",
     "sequence_inciting_after_climax",
     "sequence_wrong_level",
     "scene_missing_primary_value_axis",

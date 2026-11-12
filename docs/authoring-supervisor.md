@@ -66,16 +66,16 @@ unmarked projects are unchanged.
 Chapter plans for McKee projects also carry Sequences (`PlanningSchedule.sequences`
 on the Chapter artifact) and the scene value plan: primary and secondary Value
 Axes with opening/closing Charges, opposition, Gap, scene question, Inaction
-Cost, risk and the dilemma naming the tested contradiction. The supervisor
-reads those fields through the chapter plan but does not validate them again:
-the value-chain blocking findings recorded at planning acceptance are part of
-the applied proposal's findings, so `authoring_prepare_run` refuses a run whose
-plans were accepted with a broken chain, a Scene outside every Sequence, a
-missing Inaction Cost, or a climax without a dilemma. Advisory findings (a
-same-direction run, a risk drop inside a Sequence, a chapter ending off a Value
-Turn, an untested contradiction) never block a run. Sequences may cross
-chapters; the supervisor never turns them into timeline events or canonical
-facts.
+Cost, risk and the dilemma naming the tested contradiction. Those fields
+round-trip through the chapter plan (planning status, chapter briefing and the
+direct plan read all return them), but the supervisor and
+`authoring_prepare_run` do **not** read or enforce them yet. The value-chain
+blocking and advisory findings exist only at planning stage/acceptance time;
+drafting readiness does not re-check the chain, Sequence membership, Inaction
+Cost or climax dilemmas, so a run can start from a plan whose value chain is
+broken. Supervisor-side enforcement is follow-up work (#31/#32). Sequences may
+cross chapters; the supervisor never turns them into timeline events or
+canonical facts.
 
 ## MCP Tools Interface
 

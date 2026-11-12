@@ -714,37 +714,42 @@ impl SqliteSpindleService {
 
     /// Plan or replan a chapter — upserts chapter_plan + chapter_outline.
     pub async fn plan_chapter(&self, input: PlanChapterInput) -> Result<PlanChapterOutput> {
-        self.repository.get_project(&input.project_id).await?;
+        let project = self.repository.get_project(&input.project_id).await?;
 
-        // Typed validity of a scene's value plan at write time. A planning
-        // artifact records the same shapes as findings before acceptance; this
-        // guard keeps a direct plan_chapter write from storing a plan the
-        // value-chain rules can never accept (risk 1..=5, at most two secondary
-        // axes, unique non-empty axis names, non-blank Gap and dilemma).
-        for scene in &input.scenes {
-            let dilemma = scene.dilemma.as_ref().map(|dilemma| {
-                (
-                    dilemma.character_id.as_str(),
-                    dilemma.contradiction.as_str(),
-                )
-            });
-            let errors = spindle_core::scene_value::scene_value_errors(
-                scene.primary_value_axis.as_ref(),
-                &scene.secondary_value_axes,
-                scene.risk,
-                scene.gap.as_ref(),
-                dilemma,
-            );
-            if !errors.is_empty() {
-                anyhow::bail!(
-                    "scene {} has an invalid value plan: {}",
-                    scene.scene_order,
-                    errors
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join("; ")
+        // Typed validity of a scene's value plan at write time, for McKee
+        // projects only. A planning artifact records the same shapes as findings
+        // before acceptance; this guard keeps a direct plan_chapter write from
+        // storing a plan the value-chain rules can never accept (risk 1..=5, at
+        // most two secondary axes, unique non-empty axis names, non-blank Gap and
+        // dilemma). Non-McKee projects never opt into the value plan, so their
+        // payloads keep their previous behaviour byte for byte — including any
+        // optional value fields they happen to send.
+        if project.mckee_structured {
+            for scene in &input.scenes {
+                let dilemma = scene.dilemma.as_ref().map(|dilemma| {
+                    (
+                        dilemma.character_id.as_str(),
+                        dilemma.contradiction.as_str(),
+                    )
+                });
+                let errors = spindle_core::scene_value::scene_value_errors(
+                    scene.primary_value_axis.as_ref(),
+                    &scene.secondary_value_axes,
+                    scene.risk,
+                    scene.gap.as_ref(),
+                    dilemma,
                 );
+                if !errors.is_empty() {
+                    anyhow::bail!(
+                        "scene {} has an invalid value plan: {}",
+                        scene.scene_order,
+                        errors
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    );
+                }
             }
         }
 

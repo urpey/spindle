@@ -25,6 +25,24 @@ pub const MIN_SCENE_RISK: i32 = 1;
 /// Highest allowed planned scene risk.
 pub const MAX_SCENE_RISK: i32 = 5;
 
+/// Prefix of a Character Design reference that has not been applied yet.
+///
+/// A [`SceneDilemma`] records its tested character either as a record id
+/// (`character:…`, after planning apply has resolved the reference) or, while
+/// the dilemma still lives in a planning artifact, as `proposal:<output_ref>`.
+/// These two helpers own that one encoding so every reader agrees on it.
+const PROPOSAL_REFERENCE_PREFIX: &str = "proposal:";
+
+/// Encode an unapplied planning output reference as a dilemma character key.
+pub fn proposal_character_reference(output_ref: &str) -> String {
+    format!("{PROPOSAL_REFERENCE_PREFIX}{output_ref}")
+}
+
+/// Decode a dilemma character key, or `None` when it is already a record id.
+pub fn proposal_output_ref(character_id: &str) -> Option<&str> {
+    character_id.strip_prefix(PROPOSAL_REFERENCE_PREFIX)
+}
+
 /// One Value Axis a planned Scene turns, with the Charge it opens and closes at.
 ///
 /// A Scene's primary axis is required for McKee projects; its secondary axes
@@ -308,5 +326,14 @@ mod tests {
             Some(("character:1", "generous")),
         );
         assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn proposal_character_references_round_trip_through_one_helper() {
+        let encoded = proposal_character_reference("cast:hero");
+        assert_eq!(encoded, "proposal:cast:hero");
+        assert_eq!(proposal_output_ref(&encoded), Some("cast:hero"));
+        // An already-applied record id is not a proposal reference.
+        assert_eq!(proposal_output_ref("character:abc123"), None);
     }
 }

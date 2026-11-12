@@ -12,15 +12,21 @@ use crate::planning::{PlannedSequence, PlanningStoryPlacement};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-/// Merge Sequence lists by `sequence_key`, with `overlay` overriding an entry
-/// with the same key. The result is sorted by `sequence_key`.
+/// Merge Sequence lists by `sequence_key`: a later entry **refines** a Sequence
+/// instead of replacing it. The result is sorted by `sequence_key`.
+///
+/// For the same key the overlay overrides the scalar fields (`plot_line_id`,
+/// `question`, `inciting_scene`, `climax_scene`) and **unions**
+/// `member_scenes` — members the base already lists survive, new members are
+/// added, duplicates (same story position) collapse, and the union is kept in
+/// strict story order. A Sequence the overlay does not mention keeps the base
+/// entry unchanged.
 ///
 /// Accepted Sequences are the merge of every applied Chapter proposal's
 /// non-empty Sequence list in decision order, then the staged ancestors in the
-/// same approved closure, then the current artifact. A later entry therefore
-/// refines a Sequence (adds members, moves the climax) instead of duplicating
-/// it, and a Sequence the later entry does not mention keeps the earlier one.
-/// This is the precedence rule documented in `docs/planning-engine-design.md`.
+/// same approved closure, then the current artifact. A later Chapter artifact
+/// therefore extends a Sequence another chapter opened. This is the precedence
+/// rule documented in `docs/planning-engine-design.md`.
 pub fn merge_planned_sequences(
     base: &[PlannedSequence],
     overlay: &[PlannedSequence],
@@ -30,7 +36,32 @@ pub fn merge_planned_sequences(
         .map(|sequence| (sequence.sequence_key.clone(), sequence.clone()))
         .collect();
     for sequence in overlay {
-        by_key.insert(sequence.sequence_key.clone(), sequence.clone());
+        match by_key.entry(sequence.sequence_key.clone()) {
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let existing = entry.get_mut();
+                existing.plot_line_id = sequence.plot_line_id.clone();
+                existing.question = sequence.question.clone();
+                existing.inciting_scene = sequence.inciting_scene.clone();
+                existing.climax_scene = sequence.climax_scene.clone();
+                for member in &sequence.member_scenes {
+                    if !existing
+                        .member_scenes
+                        .iter()
+                        .any(|known| same_scene_position(known, member))
+                    {
+                        existing.member_scenes.push(member.clone());
+                    }
+                }
+                // Refinement may add a member anywhere in the Sequence; keep the
+                // union in story order so the structural rule still reads it.
+                existing
+                    .member_scenes
+                    .sort_by(|left, right| left.cmp_story_order(right));
+            }
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(sequence.clone());
+            }
+        }
     }
     by_key.into_values().collect()
 }
@@ -91,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_overrides_by_key_and_keeps_unmentioned_sequences() {
+    fn merge_refines_by_key_and_keeps_unmentioned_sequences() {
         let base = vec![
             sequence("seq:opening", vec![place(1, 1, 1), place(1, 1, 2)]),
             sequence("seq:close", vec![place(1, 2, 1)]),
@@ -102,6 +133,36 @@ mod tests {
         assert_eq!(merged[0].sequence_key, "seq:close");
         assert_eq!(merged[0].member_scenes.len(), 2);
         assert_eq!(merged[1].sequence_key, "seq:opening");
+    }
+
+    #[test]
+    fn merge_unions_members_and_keeps_earlier_ones_in_story_order() {
+        let base = vec![sequence("seq:ledger", vec![place(1, 1, 1), place(1, 1, 2)])];
+        // The later artifact adds a member between the existing two and repeats
+        // one it already knows; the union is deduped and sorted in story order.
+        let mut overlay = sequence(
+            "seq:ledger",
+            vec![place(1, 2, 1), place(1, 1, 2), place(1, 3, 1)],
+        );
+        overlay.question = "Who forged the ledger?".into();
+        let merged = merge_planned_sequences(&base, &[overlay]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].question, "Who forged the ledger?");
+        assert_eq!(
+            merged[0]
+                .member_scenes
+                .iter()
+                .map(|member| (
+                    member.book_number,
+                    member.chapter_number,
+                    member.scene_order.unwrap()
+                ))
+                .collect::<Vec<_>>(),
+            vec![(1, 1, 1), (1, 1, 2), (1, 2, 1), (1, 3, 1)]
+        );
+        assert!(members_strictly_ordered(&merged[0].member_scenes));
+        // The overlay's climax wins, and members the base listed survive.
+        assert_eq!(merged[0].climax_scene, Some(place(1, 3, 1)));
     }
 
     #[test]

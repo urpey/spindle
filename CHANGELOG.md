@@ -3,25 +3,34 @@
 ## Unreleased
 
 - Add Sequence planning to the chapter-level `PlanningSchedule.sequences`
-  metadata (ADR 0006): a stable key, one plot line reference, a question, an
-  optional inciting Scene, a climax Scene and member Scenes in strict story
-  order. Sequences may cross chapters and books and merge by key across
-  accepted and staged plans; they live in the proposal schedule, so there is no
-  new table or migration.
+  metadata (ADR 0006): a stable key, one plot line reference, a question, a
+  required inciting Scene, a climax Scene and member Scenes in strict story
+  order. The climax must be the last member, and a later same-key entry refines
+  the Sequence (overrides the scalar fields, unions the members). Sequences may
+  cross chapters and books and merge by key across accepted and staged plans;
+  they live in the proposal schedule, so there is no new table or migration.
+  A non-empty Sequence list outside the Chapter level is blocked for McKee
+  projects instead of being silently ignored.
 - Add additive, serde-defaulted value-planning fields to planned Scenes: a
   primary Value Axis plus up to two secondary axes (axis name and opening /
   closing Charge), opposition, Gap, scene question, Inaction Cost, risk (1–5)
   and a dilemma naming the tested Character Design contradiction. Existing plans
-  keep their exact output, and a direct `plan_chapter` write rejects invalid
-  shapes.
+  keep their exact output; a direct `plan_chapter` write on a McKee project
+  rejects invalid shapes, while unmarked projects store the optional fields
+  exactly as before.
 - Add the McKee value-chain validator across the planned range: blocking
   findings for a non-event, a broken chain on any axis (across chapters and
   batches), a Scene in no Sequence, a missing Inaction Cost, a Sequence or Act
   climax without a dilemma, an unknown character contradiction and malformed
   value plans; advisory findings for same-direction runs, risk drops inside a
-  Sequence, chapter endings off a Value Turn and untested contradictions.
-  Findings stage with the proposal and refuse acceptance, and non-McKee
-  projects are exempt.
+  Sequence, chapter endings that do not land on a Value Turn (including a
+  net-zero chapter that returns its primary axis to the first Scene's opening
+  Charge) and untested contradictions. Findings stage with the proposal and
+  refuse acceptance, and non-McKee projects are exempt.
+- Refuse `scene_add` plan amendments on McKee projects instead of writing a
+  value-less Scene that no Sequence lists; `scene_replace` carries the existing
+  value plan through untouched, and the other chapter classes stay available.
+  Sequence-aware amendment cascades are follow-up #34.
 - Mark projects created through the `new-book` planning root as
   McKee-structured. Every other project and every existing project stays
   unmarked and its payloads are unchanged.

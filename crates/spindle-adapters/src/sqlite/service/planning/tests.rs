@@ -5950,12 +5950,6 @@ fn phase_d_scene_input(
                     "location_id": reference("loc:watchtower"),
                     "content_rating": "general",
                     "purpose": "Plant the impossible bell mystery",
-                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "positive", "depth": "positive"}, "closing": {"sign": "negative", "depth": "contrary"}},
-                                "opposition": "The watchtower fog",
-                                "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
-                                "scene_question": "What does the bell want?",
-                                "inaction_cost": "The harbor misses the warning",
-                                "risk": 1,
                     "primary_value_axis": phase_d_value_axis("positive", "positive", "negative", "contrary"),
                     "opposition": "The silent bell tower",
                     "gap": {"expected": "The bell is silent", "actual": "It rings a warning only Mara hears"},
@@ -5971,13 +5965,6 @@ fn phase_d_scene_input(
                     "location_id": reference("loc:watchtower"),
                     "content_rating": "general",
                     "purpose": "Confirm the bell clapper is missing",
-                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contrary"}, "closing": {"sign": "positive", "depth": "positive"}},
-                                "opposition": "The watchtower fog",
-                                "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
-                                "scene_question": "What does the bell want?",
-                                "inaction_cost": "The harbor misses the warning",
-                                "risk": 2,
-                                "dilemma": {"character_id": {"kind": "proposal_ref", "value": "cast:mara"}, "contradiction": "guarded"},
                     "primary_value_axis": phase_d_value_axis("negative", "contrary", "positive", "positive"),
                     "opposition": "The fog on the stair",
                     "gap": {"expected": "The clapper was stolen", "actual": "The clapper was never fitted"},
@@ -6917,7 +6904,7 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
                                 "purpose": "Confirm the bell clapper is missing",
-                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contrary"}, "closing": {"sign": "positive", "depth": "positive"}},
+                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contrary"}, "closing": {"sign": "negative", "depth": "contradictory"}},
                                 "opposition": "The watchtower fog",
                                 "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
                                 "scene_question": "What does the bell want?",
@@ -6950,7 +6937,7 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
                                 "purpose": "Reveal the erased harbour entry",
-                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "positive", "depth": "positive"}, "closing": {"sign": "negative", "depth": "contrary"}},
+                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contradictory"}, "closing": {"sign": "negative", "depth": "contrary"}},
                                 "opposition": "The watchtower fog",
                                 "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
                                 "scene_question": "What does the bell want?",
@@ -7067,7 +7054,7 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
                                 "purpose": "Confirm the bell clapper is missing",
-                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contrary"}, "closing": {"sign": "positive", "depth": "positive"}},
+                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contrary"}, "closing": {"sign": "negative", "depth": "contradictory"}},
                                 "opposition": "The watchtower fog",
                                 "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
                                 "scene_question": "What does the bell want?",
@@ -7100,7 +7087,7 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
                                 "location_id": {"kind": "proposal_ref", "value": "loc:watchtower"},
                                 "content_rating": "general",
                                 "purpose": "Reveal the erased harbour entry",
-                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "positive", "depth": "positive"}, "closing": {"sign": "negative", "depth": "contrary"}},
+                                "primary_value_axis": {"axis": "truth", "opening": {"sign": "negative", "depth": "contradictory"}, "closing": {"sign": "negative", "depth": "contrary"}},
                                 "opposition": "The watchtower fog",
                                 "gap": {"expected": "A quiet watch", "actual": "A warning only Mara hears"},
                                 "scene_question": "What does the bell want?",
@@ -11085,14 +11072,17 @@ async fn value_chain_fixture() -> ValueChainFixture {
     accept(&svc, &s, &chapters).await;
 
     let mut scenes = vec![
+        // The chapter opens on the axis's negative side and ends on its
+        // positive side, so the chapter is not net-zero: the ending advisory
+        // must stay silent on this passing plan.
         value_scene(
             1,
-            value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
             value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
         ),
         value_scene(
             2,
-            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
             value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
         ),
     ];
@@ -11145,7 +11135,7 @@ async fn mckee_value_chain_passes_and_round_trips_scene_value_fields() {
     );
     assert_eq!(
         first.primary_value_axis.as_ref().unwrap().opening.depth(),
-        ChargeDepth::Positive
+        ChargeDepth::Contrary
     );
     assert_eq!(
         first.primary_value_axis.as_ref().unwrap().closing.sign(),
@@ -11246,6 +11236,94 @@ async fn mckee_value_chain_passes_and_round_trips_scene_value_fields() {
             .len(),
         4
     );
+}
+
+#[tokio::test]
+async fn mckee_sequence_refinement_unions_members_across_chapter_artifacts() {
+    use serde_json::json;
+    let fixture = value_chain_fixture().await;
+
+    // A later Chapter artifact refines the accepted seq:truth: it repeats only
+    // one earlier member, adds Scene (book 1, chapter 3, scene 1), and moves the
+    // climax there. The
+    // refine rule must keep the earlier members (so chapter 1's accepted Scenes
+    // stay inside the Sequence) while the overlay's scalar fields win.
+    let mut refined_sequence = value_sequence("seq:truth", &[(1, 2), (3, 1)], (3, 1));
+    refined_sequence.question = "Who forged the ledger?".into();
+    let refined = bundle_with_schedule(
+        &fixture.svc,
+        &fixture.session,
+        PlanningLevel::Chapter,
+        &[&fixture.root, &fixture.series],
+        vec![planned(
+            "chapter:3",
+            "create_chapter",
+            json!({"book_id":reference("project:root:book"),"book_number":1,"chapter_number":3,"title":"Three"}),
+        )],
+        PlanningSchedule {
+            sequences: vec![refined_sequence],
+            ..PlanningSchedule::default()
+        },
+    )
+    .await;
+    assert!(
+        refined.findings.is_empty(),
+        "a valid refinement stages cleanly: {:?}",
+        refined.findings
+    );
+
+    // Plan the Scene the refinement added. The chapter-1 Scenes are not part of
+    // this artifact; only the merged Sequence membership can keep them valid.
+    let mut added = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    added.risk = Some(4);
+    added.dilemma = Some(value_dilemma("guarded"));
+    let proposal = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters, &refined],
+            vec![(3, vec![added])],
+        ))
+        .await
+        .unwrap();
+    let codes = value_codes(&proposal);
+    assert!(
+        !codes.contains("scene_no_sequence"),
+        "earlier members survive the refinement: {:?}",
+        proposal.findings
+    );
+    assert!(
+        proposal
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "the merged Sequence satisfies every blocking rule: {:?}",
+        proposal.findings
+    );
+    // The staged refinement must be accepted in the same batch as the Scene
+    // plan that depends on it (the dependency closure rule).
+    let scope = fixture.session.scope.clone().unwrap();
+    let report = fixture
+        .svc
+        .apply_planning(DecidePlanningInput {
+            session_id: fixture.session.id.clone(),
+            scope: Some(scope),
+            expected_hashes: BTreeMap::from([
+                (refined.id.clone(), refined.payload_hash.clone()),
+                (proposal.id.clone(), proposal.payload_hash.clone()),
+            ]),
+            decision: PlanningDecision::Accept,
+            actor: "author".into(),
+            note: "Accept the refined Sequence and the Scene it adds".into(),
+        })
+        .await
+        .unwrap();
+    assert!(report.error.is_none(), "{:?}", report.error);
+    assert!(report.complete);
 }
 
 #[tokio::test]
@@ -11518,7 +11596,7 @@ async fn mckee_value_chain_requires_dilemmas_at_climaxes_and_known_contradiction
     let mut valid = value_scene(
         2,
         value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
-        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
     );
     valid.risk = Some(5);
     valid.dilemma = Some(value_dilemma("guarded"));
@@ -11765,6 +11843,62 @@ async fn mckee_value_chain_chapter_ending_advisory_and_untested_contradictions()
 }
 
 #[tokio::test]
+async fn mckee_value_chain_chapter_ending_advisory_fires_on_a_net_zero_chapter() {
+    let fixture = value_chain_fixture().await;
+
+    // Both Scenes turn, so there is no blocking non-event — but the chapter
+    // opens and closes the truth axis at the same Charge, so it lands net-zero.
+    let mut opening = value_scene(
+        1,
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+    );
+    opening.dilemma = Some(value_dilemma("resolute"));
+    let mut closing = value_scene(
+        2,
+        value_turn_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        value_turn_charge(ChargeSign::Positive, ChargeDepth::Positive),
+    );
+    closing.dilemma = Some(value_dilemma("guarded"));
+    let proposal = fixture
+        .svc
+        .stage_planning(value_scene_artifact(
+            &fixture.session,
+            &[&fixture.cast, &fixture.series, &fixture.chapters],
+            vec![(1, vec![opening, closing])],
+        ))
+        .await
+        .unwrap();
+    let codes = value_codes(&proposal);
+    assert!(
+        codes.contains("chapter_ending_no_value_turn"),
+        "{:?}",
+        proposal.findings
+    );
+    assert!(!codes.contains("scene_non_event"), "{codes:?}");
+    let advisory = proposal
+        .findings
+        .iter()
+        .find(|finding| finding.code == "chapter_ending_no_value_turn")
+        .unwrap();
+    assert_eq!(advisory.severity, PlanningFindingSeverity::Advisory);
+    assert!(
+        advisory.actual.contains("net-zero chapter"),
+        "{}",
+        advisory.actual
+    );
+    assert!(
+        proposal
+            .findings
+            .iter()
+            .all(|finding| finding.severity != PlanningFindingSeverity::Blocking),
+        "a net-zero chapter is advisory, never blocking: {:?}",
+        proposal.findings
+    );
+    accept(&fixture.svc, &fixture.session, &proposal).await;
+}
+
+#[tokio::test]
 async fn mckee_value_chain_batched_acceptance_uses_staged_ancestor_sequences_and_designs() {
     use serde_json::json;
     let fixture = value_chain_fixture().await;
@@ -11899,6 +12033,8 @@ async fn mckee_sequences_validate_structure_and_stay_at_the_chapter_level() {
     inciting.member_scenes = vec![value_place(1, 1, 1)];
     inciting.inciting_scene = Some(value_place(1, 2, 1));
     inciting.climax_scene = Some(value_place(1, 1, 1));
+    let mut no_inciting = make("seq:no-inciting");
+    no_inciting.inciting_scene = None;
     let duplicate = make("seq:dup");
     let proposal = bundle_with_schedule(
         &fixture.svc,
@@ -11916,6 +12052,7 @@ async fn mckee_sequences_validate_structure_and_stay_at_the_chapter_level() {
                 bad_climax,
                 unordered,
                 inciting,
+                no_inciting,
                 duplicate.clone(),
                 duplicate,
             ],
@@ -11932,6 +12069,8 @@ async fn mckee_sequences_validate_structure_and_stay_at_the_chapter_level() {
         "sequence_members_empty",
         "sequence_missing_climax",
         "sequence_climax_not_member",
+        "sequence_climax_not_last",
+        "sequence_missing_inciting",
         "sequence_members_unordered",
         "sequence_inciting_after_climax",
     ] {

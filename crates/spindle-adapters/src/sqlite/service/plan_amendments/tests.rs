@@ -468,8 +468,119 @@ mod plan_ratify {
             research_required: None,
             research_tags: Vec::new(),
             explicit_query: None,
-            ..Default::default()
+            primary_value_axis: None,
+            secondary_value_axes: Vec::new(),
+            opposition: None,
+            gap: None,
+            scene_question: None,
+            inaction_cost: None,
+            risk: None,
+            dilemma: None,
         }
+    }
+
+    /// A minimal valid charge pair for the McKee amendment fixtures.
+    fn value_charge(
+        sign: spindle_core::charge::ChargeSign,
+        depth: spindle_core::charge::ChargeDepth,
+    ) -> spindle_core::charge::Charge {
+        spindle_core::charge::Charge::new(sign, depth).expect("valid charge pair")
+    }
+
+    fn value_axis(
+        opening: spindle_core::charge::Charge,
+        closing: spindle_core::charge::Charge,
+    ) -> spindle_core::scene_value::SceneValueAxis {
+        spindle_core::scene_value::SceneValueAxis {
+            axis: "truth".into(),
+            opening,
+            closing,
+        }
+    }
+
+    /// A scene carrying a complete, shape-valid McKee value plan.
+    fn value_scene(
+        order: i32,
+        summary: &str,
+        opening: spindle_core::charge::Charge,
+        closing: spindle_core::charge::Charge,
+    ) -> PlanChapterSceneInput {
+        PlanChapterSceneInput {
+            scene_order: order,
+            summary: summary.to_string(),
+            beat_structure: vec!["turn".into()],
+            character_ids: vec!["character:alice".to_string()],
+            location_id: Some("location:hall".to_string()),
+            content_rating: Some(spindle_core::models::ContentRating::General),
+            purpose: format!("turn the truth axis in {order}"),
+            research_required: None,
+            research_tags: Vec::new(),
+            explicit_query: None,
+            primary_value_axis: Some(value_axis(opening, closing)),
+            secondary_value_axes: Vec::new(),
+            opposition: Some("the rival".into()),
+            gap: Some(spindle_core::scene_value::SceneGap {
+                expected: "a welcome".into(),
+                actual: "a refusal".into(),
+            }),
+            scene_question: Some("Will the truth hold?".into()),
+            inaction_cost: Some("the harbor loses its warning".into()),
+            risk: Some(order),
+            dilemma: Some(spindle_core::scene_value::SceneDilemma {
+                character_id: "character:alice".into(),
+                contradiction: "guarded".into(),
+            }),
+        }
+    }
+
+    /// A McKee-marked project with one planned, undrafted future chapter whose
+    /// scenes carry full value plans.
+    async fn mckee_project_with_value_plan(
+        svc: &SqliteSpindleService,
+        name: &str,
+        chapter_number: i32,
+    ) -> CreateProjectOutput {
+        use spindle_core::charge::{ChargeDepth, ChargeSign};
+        let project = svc
+            .create_mckee_project(CreateProjectInput {
+                name: name.to_string(),
+                project_type: "novel".to_string(),
+                genre: "fantasy".to_string(),
+                reader_contract: ReaderContract {
+                    promise: "McKee living outline".to_string(),
+                    style_notes: Vec::new(),
+                    boundaries: Vec::new(),
+                },
+            })
+            .await
+            .unwrap();
+        svc.plan_chapter(PlanChapterInput {
+            project_id: project.project_id.clone(),
+            book_number: 1,
+            chapter_number,
+            pov_character_id: None,
+            synopsis: "the planned McKee future".to_string(),
+            target_theme_ids: Vec::new(),
+            target_conflict_ids: Vec::new(),
+            target_plot_line_ids: Vec::new(),
+            scenes: vec![
+                value_scene(
+                    1,
+                    "open",
+                    value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                ),
+                value_scene(
+                    2,
+                    "close",
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                ),
+            ],
+        })
+        .await
+        .unwrap();
+        project
     }
 
     /// Stage one plan amendment directly on the active branch (bypassing the
@@ -1252,7 +1363,14 @@ mod plan_ratify {
                     research_required: None,
                     research_tags: Vec::new(),
                     explicit_query: None,
-                    ..Default::default()
+                    primary_value_axis: None,
+                    secondary_value_axes: Vec::new(),
+                    opposition: None,
+                    gap: None,
+                    scene_question: None,
+                    inaction_cost: None,
+                    risk: None,
+                    dilemma: None,
                 },
                 PlanChapterSceneInput {
                     scene_order: 2,
@@ -1265,7 +1383,14 @@ mod plan_ratify {
                     research_required: None,
                     research_tags: Vec::new(),
                     explicit_query: None,
-                    ..Default::default()
+                    primary_value_axis: None,
+                    secondary_value_axes: Vec::new(),
+                    opposition: None,
+                    gap: None,
+                    scene_question: None,
+                    inaction_cost: None,
+                    risk: None,
+                    dilemma: None,
                 },
             ],
             Vec::new(),
@@ -1527,6 +1652,320 @@ mod plan_ratify {
                 (1, vec!["character:bob".to_string()]),
                 (2, vec!["character:carol".to_string()]),
             ]
+        );
+    }
+
+    // ── McKee value-chain amendments ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn mckee_scene_add_amendment_is_refused_with_a_readable_error() {
+        let (_tmp, svc) = fresh_service_local().await;
+        let project = mckee_project_with_value_plan(&svc, "PA McKee add", 2).await;
+        let before = plan_of(&svc, &project.project_id, 2).await;
+        let id = stage(
+            &svc,
+            &project.project_id,
+            "scene_add",
+            Some(2),
+            serde_json::json!({
+                "scene_order": 99, "summary": "inserted", "purpose": "bridge",
+                "character_ids": ["character:alice"], "insert_at": 2
+            }),
+        )
+        .await;
+
+        let err = svc
+            .decide_plan_amendments(DecidePlanAmendmentsInput {
+                project_id: project.project_id.clone(),
+                decisions: vec![PlanAmendmentDecisionInput {
+                    amendment_id: id.clone(),
+                    action: "apply".to_string(),
+                    edit: None,
+                    note: None,
+                }],
+                decided_by: None,
+            })
+            .await
+            .expect_err("scene_add on a McKee project must be refused");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("scene_add is refused for McKee-structured projects"),
+            "{message}"
+        );
+        assert!(
+            message.contains("Restage the Chapter planning artifact"),
+            "{message}"
+        );
+        assert!(message.contains("#34"), "{message}");
+
+        // Zero writes: the plan is unchanged and the amendment stays staged.
+        let after = plan_of(&svc, &project.project_id, 2).await;
+        assert_eq!(after.scenes.len(), before.scenes.len());
+        let staged = svc
+            .list_plan_amendments(ListPlanAmendmentsInput {
+                project_id: project.project_id.clone(),
+                status: Some("staged".to_string()),
+                book_number: None,
+                source_chapter: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(staged.amendments.len(), 1, "{staged:?}");
+    }
+
+    #[tokio::test]
+    async fn mckee_scene_replace_amendment_keeps_the_value_plan() {
+        let (_tmp, svc) = fresh_service_local().await;
+        let project = mckee_project_with_value_plan(&svc, "PA McKee replace", 2).await;
+        let before = plan_of(&svc, &project.project_id, 2).await;
+        let id = stage(
+            &svc,
+            &project.project_id,
+            "scene_replace",
+            Some(2),
+            serde_json::json!({
+                "scene_order": 1, "summary": "new summary", "purpose": "new purpose",
+                "character_ids": ["character:bob"]
+            }),
+        )
+        .await;
+        let out = apply_one(&svc, &project.project_id, &id).await;
+        assert_eq!(out.results[0].outcome, "applied", "{out:?}");
+
+        let after = plan_of(&svc, &project.project_id, 2).await;
+        assert_eq!(after.scenes[0].summary, "new summary");
+        assert_eq!(after.scenes[0].purpose, "new purpose");
+        assert_eq!(
+            after.scenes[0].character_ids,
+            vec!["character:bob".to_string()]
+        );
+        assert_eq!(
+            after.scenes[0].primary_value_axis, before.scenes[0].primary_value_axis,
+            "scene_replace must not drop the primary Value Axis"
+        );
+        assert_eq!(
+            after.scenes[0].secondary_value_axes,
+            before.scenes[0].secondary_value_axes
+        );
+        assert_eq!(after.scenes[0].opposition, before.scenes[0].opposition);
+        assert_eq!(after.scenes[0].gap, before.scenes[0].gap);
+        assert_eq!(
+            after.scenes[0].scene_question,
+            before.scenes[0].scene_question
+        );
+        assert_eq!(
+            after.scenes[0].inaction_cost,
+            before.scenes[0].inaction_cost
+        );
+        assert_eq!(after.scenes[0].risk, before.scenes[0].risk);
+        assert_eq!(after.scenes[0].dilemma, before.scenes[0].dilemma);
+
+        // The surviving new plan is still shape-valid for the value-chain rules.
+        let errors = spindle_core::scene_value::scene_value_errors(
+            after.scenes[0].primary_value_axis.as_ref(),
+            &after.scenes[0].secondary_value_axes,
+            after.scenes[0].risk,
+            after.scenes[0].gap.as_ref(),
+            after.scenes[0].dilemma.as_ref().map(|dilemma| {
+                (
+                    dilemma.character_id.as_str(),
+                    dilemma.contradiction.as_str(),
+                )
+            }),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[tokio::test]
+    async fn mckee_drop_reorder_and_synopsis_amendments_keep_the_value_plan() {
+        let (_tmp, svc) = fresh_service_local().await;
+        let project = mckee_project_with_value_plan(&svc, "PA McKee other classes", 2).await;
+        let before = plan_of(&svc, &project.project_id, 2).await;
+
+        // synopsis_update never touches scene value plans.
+        let synopsis_id = stage(
+            &svc,
+            &project.project_id,
+            "synopsis_update",
+            Some(2),
+            serde_json::json!({"synopsis": "a different synopsis"}),
+        )
+        .await;
+        apply_one(&svc, &project.project_id, &synopsis_id).await;
+        let after_synopsis = plan_of(&svc, &project.project_id, 2).await;
+        assert_eq!(
+            after_synopsis.scenes[0].primary_value_axis,
+            before.scenes[0].primary_value_axis
+        );
+
+        // scene_reorder keeps each scene's value plan attached to that scene.
+        let reorder_id = stage(
+            &svc,
+            &project.project_id,
+            "scene_reorder",
+            Some(2),
+            serde_json::json!({"new_order": [2, 1]}),
+        )
+        .await;
+        apply_one(&svc, &project.project_id, &reorder_id).await;
+        let after_reorder = plan_of(&svc, &project.project_id, 2).await;
+        let open = after_reorder
+            .scenes
+            .iter()
+            .find(|scene| scene.summary == "open")
+            .expect("open scene survives the reorder");
+        assert_eq!(open.primary_value_axis, before.scenes[0].primary_value_axis);
+        assert!(open.inaction_cost.is_some());
+
+        // scene_drop leaves the survivors' value plans intact.
+        let drop_id = stage(
+            &svc,
+            &project.project_id,
+            "scene_drop",
+            Some(2),
+            serde_json::json!({"scene_order": 2}),
+        )
+        .await;
+        apply_one(&svc, &project.project_id, &drop_id).await;
+        let after_drop = plan_of(&svc, &project.project_id, 2).await;
+        assert_eq!(after_drop.scenes.len(), 1);
+        assert!(after_drop.scenes[0].primary_value_axis.is_some());
+        assert!(after_drop.scenes[0].inaction_cost.is_some());
+    }
+
+    #[tokio::test]
+    async fn mckee_direct_plan_write_rejects_invalid_value_shapes() {
+        use spindle_core::charge::{ChargeDepth, ChargeSign};
+        let (_tmp, svc) = fresh_service_local().await;
+        let project = svc
+            .create_mckee_project(CreateProjectInput {
+                name: "PA McKee direct write".to_string(),
+                project_type: "novel".to_string(),
+                genre: "fantasy".to_string(),
+                reader_contract: ReaderContract {
+                    promise: "McKee direct write".to_string(),
+                    style_notes: Vec::new(),
+                    boundaries: Vec::new(),
+                },
+            })
+            .await
+            .unwrap();
+        let mut malformed = value_scene(
+            1,
+            "malformed",
+            value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+            value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        );
+        malformed.secondary_value_axes = vec![
+            value_axis(
+                value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            ),
+            value_axis(
+                value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            ),
+            value_axis(
+                value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            ),
+        ];
+        malformed.risk = Some(9);
+        let err = svc
+            .plan_chapter(PlanChapterInput {
+                project_id: project.project_id.clone(),
+                book_number: 1,
+                chapter_number: 2,
+                pov_character_id: None,
+                synopsis: "invalid value plan".to_string(),
+                target_theme_ids: Vec::new(),
+                target_conflict_ids: Vec::new(),
+                target_plot_line_ids: Vec::new(),
+                scenes: vec![malformed],
+            })
+            .await
+            .expect_err("a McKee plan_chapter write rejects invalid value shapes");
+        assert!(format!("{err:#}").contains("invalid value plan"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn non_mckee_projects_keep_optional_value_fields_and_scene_add() {
+        use spindle_core::charge::{ChargeDepth, ChargeSign};
+        let (_tmp, svc) = fresh_service_local().await;
+        let project = svc
+            .create_project(CreateProjectInput {
+                name: "PA non-McKee value fields".to_string(),
+                project_type: "novel".to_string(),
+                genre: "fantasy".to_string(),
+                reader_contract: ReaderContract {
+                    promise: "unmarked project keeps its payloads".to_string(),
+                    style_notes: Vec::new(),
+                    boundaries: Vec::new(),
+                },
+            })
+            .await
+            .unwrap();
+        // The value fields are optional for an unmarked project: even a shape
+        // that the McKee rules would refuse is stored exactly as sent (previous
+        // behaviour byte for byte) instead of being judged by McKee rules.
+        let mut unmarked = value_scene(
+            1,
+            "unmarked",
+            value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+            value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+        );
+        unmarked.secondary_value_axes = vec![
+            value_axis(
+                value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            ),
+            value_axis(
+                value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            ),
+            value_axis(
+                value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+            ),
+        ];
+        unmarked.risk = Some(9);
+        svc.plan_chapter(PlanChapterInput {
+            project_id: project.project_id.clone(),
+            book_number: 1,
+            chapter_number: 2,
+            pov_character_id: None,
+            synopsis: "the unmarked future".to_string(),
+            target_theme_ids: Vec::new(),
+            target_conflict_ids: Vec::new(),
+            target_plot_line_ids: Vec::new(),
+            scenes: vec![unmarked],
+        })
+        .await
+        .expect("an unmarked project is not judged by McKee shape rules");
+        let stored = plan_of(&svc, &project.project_id, 2).await;
+        assert_eq!(stored.scenes[0].secondary_value_axes.len(), 3);
+        assert_eq!(stored.scenes[0].risk, Some(9));
+
+        // scene_add stays available for an unmarked project.
+        let id = stage(
+            &svc,
+            &project.project_id,
+            "scene_add",
+            Some(2),
+            serde_json::json!({
+                "scene_order": 99, "summary": "inserted", "purpose": "bridge",
+                "character_ids": [], "insert_at": 2
+            }),
+        )
+        .await;
+        let out = apply_one(&svc, &project.project_id, &id).await;
+        assert_eq!(out.results[0].outcome, "applied", "{out:?}");
+        let after = plan_of(&svc, &project.project_id, 2).await;
+        assert_eq!(after.scenes.len(), 2);
+        assert_eq!(
+            after.scenes[0].secondary_value_axes.len(),
+            3,
+            "existing value fields stay byte-identical across the amendment"
         );
     }
 }
