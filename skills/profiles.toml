@@ -37,8 +37,8 @@ units = ["new-book"]
 
 [[profiles]]
 name = "mckee"
-description = "McKee story-structure core with the Story Spine, Character Design, Value Turns, Scene Design and Dialogue Tactics references."
-units = ["story-structure", "story-structure/story-spine", "story-structure/character-design", "story-structure/value-turns", "story-structure/scene-design", "story-structure/dialogue-tactics"]
+description = "McKee story-structure core with the Story Spine, Character Design, Value Turns, Scene Design, Dialogue Tactics and Dialogue Line references."
+units = ["story-structure", "story-structure/story-spine", "story-structure/character-design", "story-structure/value-turns", "story-structure/scene-design", "story-structure/dialogue-tactics", "story-structure/dialogue-line"]
 
 [[profiles]]
 name = "research"
