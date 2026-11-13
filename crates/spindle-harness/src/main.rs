@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use spindle_harness::editorial;
 use spindle_harness::execution::execute_one;
@@ -89,6 +89,11 @@ struct ReviewCheckpointCommand {
     end_chapter: i32,
     #[arg(long = "directive")]
     directives: Vec<String>,
+    #[arg(
+        long = "redraft",
+        help = "Reset a scene to pending-draft so the run re-drafts it, as CHAPTER.SCENE (repeatable)"
+    )]
+    redrafts: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -414,12 +419,27 @@ fn execute_one_editorial(command: &ResumeCommand, state: &HarnessState) -> Resul
 
 fn review_checkpoint_command(command: ReviewCheckpointCommand) -> Result<()> {
     let mut state = HarnessState::load(&command.state)?;
+    let mut redrafts = Vec::new();
+    for raw in &command.redrafts {
+        let (chapter_number, scene_order) = raw
+            .split_once('.')
+            .with_context(|| format!("invalid --redraft '{raw}': expected CHAPTER.SCENE"))?;
+        redrafts.push((
+            chapter_number
+                .parse::<i32>()
+                .with_context(|| format!("invalid --redraft '{raw}': chapter must be a number"))?,
+            scene_order
+                .parse::<i32>()
+                .with_context(|| format!("invalid --redraft '{raw}': scene must be a number"))?,
+        ));
+    }
     let message = review_checkpoint(
         &mut state,
         &command.state,
         command.start_chapter,
         command.end_chapter,
         &command.directives,
+        &redrafts,
     )?;
     println!("{message}");
     Ok(())

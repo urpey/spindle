@@ -1097,6 +1097,9 @@ impl ToolRouter {
         if let Some(ref mut diag) = live_scene.draft_diagnostics {
             diag.handoff_plan_revision = None;
             diag.superseded_handoff_plan_revision = None;
+            // The fresh draft satisfies a deliberate redraft request: reconcile
+            // may promote this Scene again from now on.
+            diag.redraft_requested = false;
         }
 
         // Summary invalidation (defect item 3): re-saving a scene in a chapter

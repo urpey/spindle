@@ -13,10 +13,10 @@ pub(super) fn authoring_checkpoint_sampled_scene_ids(
 
 pub(super) fn authoring_status_after_checkpoint_review(state: &HarnessState) -> &'static str {
     if state.chapters.iter().any(|chapter| {
-        chapter
-            .scenes
-            .iter()
-            .any(|scene| scene.blocked_reason.is_some())
+        chapter.scenes.iter().any(|scene| {
+            scene.blocked_reason.is_some()
+                || scene.phase == spindle_harness::state::ScenePhase::ParkedForCheckpoint
+        })
     }) {
         return "blocked";
     }
@@ -268,18 +268,28 @@ pub(super) fn authoring_sample_checkpoint_scene_ids(
             .iter()
             .find(|chapter| chapter.chapter_number == chapter_number)
             .with_context(|| format!("checkpoint chapter {} missing from state", chapter_number))?;
+        // Save-aware selection: a park checkpoint covers a chapter that is
+        // still mid-draft, so sample the last (or first) scene that actually has
+        // a persisted scene_id rather than a not-yet-saved placeholder.
         let scene = if chapter_number == end_chapter {
-            chapter.scenes.last()
+            chapter
+                .scenes
+                .iter()
+                .rev()
+                .find(|scene| scene.scene_id.is_some())
         } else {
-            chapter.scenes.first()
+            chapter.scenes.iter().find(|scene| scene.scene_id.is_some())
         }
-        .with_context(|| format!("checkpoint chapter {} has no scenes", chapter_number))?;
-        let scene_id = scene.scene_id.clone().with_context(|| {
+        .with_context(|| {
             format!(
-                "checkpoint chapter {} scene {} has no scene_id",
-                chapter_number, scene.scene_order
+                "checkpoint chapter {} has no saved scene to sample",
+                chapter_number
             )
         })?;
+        let scene_id = scene
+            .scene_id
+            .clone()
+            .context("sampled checkpoint scene lost its scene_id")?;
         candidates.push(scene_id);
     }
     Ok(candidates)
@@ -875,12 +885,18 @@ impl ToolRouter {
 
         harness_state.save(&state_path)?;
 
+        let redraft_scenes = input
+            .redraft_scenes
+            .iter()
+            .map(|target| (target.chapter_number, target.scene_order))
+            .collect::<Vec<_>>();
         let review_result = spindle_harness::operator::review_checkpoint(
             &mut harness_state,
             &state_path,
             input.start_chapter,
             input.end_chapter,
             &input.directives,
+            &redraft_scenes,
         );
 
         let _ = std::fs::remove_file(&state_path);
@@ -1068,6 +1084,7 @@ impl ToolRouter {
                     branch_id: Some(harness_state.active_branch_id.clone()),
                     scene_id: scene_id.clone(),
                     rounds: Some(2),
+                    critic_output: None,
                 })
                 .await
             {
@@ -1193,6 +1210,31 @@ impl ToolRouter {
             ));
         }
 
+        // A parked Scene is never auto-approved. The deep audit can be clean
+        // while a Scene's scene-verify ended parked, so this check is explicit:
+        // approving would otherwise ask `review_checkpoint` to clear a park it
+        // must refuse, turning an honest blocked run into a tool error.
+        let parked = spindle_harness::operator::parked_scene_refs_in_range(
+            harness_state,
+            start_chapter,
+            end_chapter,
+        );
+        if !parked.is_empty() {
+            let _ = std::fs::remove_file(&state_path);
+            let refs = parked
+                .iter()
+                .map(|(chapter_number, scene_order)| format!("{chapter_number}.{scene_order}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Ok(auto_checkpoint_block(
+                harness_state,
+                start_chapter,
+                end_chapter,
+                &format!("parked_scene_review_required: {refs}"),
+                Vec::new(),
+            ));
+        }
+
         // ── Step 3: verdict from the deep-consistency severity counts ──
         let errors = *finding_counts.get("error").unwrap_or(&0);
         let warnings = *finding_counts.get("warning").unwrap_or(&0);
@@ -1215,12 +1257,16 @@ impl ToolRouter {
             // honest auto-approval directive, then operator::review_checkpoint.
             let directives = vec![format!("auto-approved under {policy}: 0 blocking findings")];
             harness_state.save(&state_path)?;
+            // Auto-approval cannot clear a parked Scene: `review_checkpoint`
+            // refuses while any Scene in the window is parked, so a McKee
+            // mismatch can never self-approve into a commit.
             let review_result = spindle_harness::operator::review_checkpoint(
                 harness_state,
                 &state_path,
                 start_chapter,
                 end_chapter,
                 &directives,
+                &[],
             );
             let _ = std::fs::remove_file(&state_path);
             review_result?;

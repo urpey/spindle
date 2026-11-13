@@ -94,6 +94,7 @@ pub(super) fn map_harness_to_records(
                 spindle_harness::state::ScenePhase::DraftSaved => "draft_saved",
                 spindle_harness::state::ScenePhase::ChangesCommitted => "changes_committed",
                 spindle_harness::state::ScenePhase::BeatsAnnotated => "beats_annotated",
+                spindle_harness::state::ScenePhase::ParkedForCheckpoint => "parked_for_checkpoint",
             };
             scenes.push(spindle_adapters::sqlite::records::AuthoringRunScene {
                 authoring_run_id: run_id.to_string(),
@@ -164,6 +165,9 @@ pub(super) fn map_records_to_harness(
                     "draft_saved" => spindle_harness::state::ScenePhase::DraftSaved,
                     "changes_committed" => spindle_harness::state::ScenePhase::ChangesCommitted,
                     "beats_annotated" => spindle_harness::state::ScenePhase::BeatsAnnotated,
+                    "parked_for_checkpoint" => {
+                        spindle_harness::state::ScenePhase::ParkedForCheckpoint
+                    }
                     _ => spindle_harness::state::ScenePhase::Pending,
                 };
                 let content_rating = match sc.content_rating.to_ascii_lowercase().as_str() {
@@ -258,6 +262,10 @@ pub(super) fn map_records_to_harness(
         replan_policy: run.replan_policy.clone(),
         resolved_editorial: None,
         editorial_controller_path: None,
+        // Refreshed from the live project snapshot by `reconcile_state`; the run
+        // record cannot carry the marker, and a stale value must never gate the
+        // McKee park behaviour.
+        mckee_structured: false,
         chapters: ch_states,
         checkpoint_history: cp_history,
     };
@@ -274,6 +282,7 @@ impl ToolRouter {
         state: &HarnessState,
     ) -> anyhow::Result<ProjectSnapshot> {
         let repo = self.service.repository();
+        let project = repo.get_project(&state.project_id).await?;
         let active_branch = repo.get_active_branch(&state.project_id).await?;
         let scenes = repo
             .list_scenes_by_project_and_branch(&state.project_id, &active_branch.id)
@@ -417,6 +426,7 @@ impl ToolRouter {
             active_branch_name: active_branch.name,
             chapters,
             summarized_chapters,
+            mckee_structured: project.mckee_structured,
         })
     }
 

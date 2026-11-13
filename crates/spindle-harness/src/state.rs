@@ -121,6 +121,14 @@ pub struct HarnessState {
     pub resolved_editorial: Option<ResolvedEditorialSettingsV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editorial_controller_path: Option<String>,
+    /// True when the project is McKee-structured (created through `new-book`
+    /// after the McKee gate). Refreshed from the live project snapshot on every
+    /// reconcile, so it is never trusted from a stale state file. McKee runs park
+    /// a Scene whose verify never became clean for checkpoint review instead of
+    /// committing it; every other run keeps today's commit-on-parked behaviour.
+    /// Additive with a serde default so pre-#33 state fixtures still deserialize.
+    #[serde(default)]
+    pub mckee_structured: bool,
     #[serde(default)]
     pub chapters: Vec<ChapterState>,
     #[serde(default)]
@@ -175,6 +183,10 @@ impl HarnessState {
             replan_policy,
             resolved_editorial,
             editorial_controller_path,
+            // Seed value; `reconcile_state` refreshes it from the live project
+            // snapshot on every pass so a stale state file can never gate a
+            // McKee park.
+            mckee_structured: false,
             chapters: seed
                 .chapters
                 .into_iter()
@@ -414,6 +426,11 @@ pub enum ScenePhase {
     DraftSaved,
     ChangesCommitted,
     BeatsAnnotated,
+    /// A McKee Scene whose verify ended `parked_findings` (a deterministic
+    /// mismatch, a critic/writer disagreement, or any actionable finding after
+    /// the revise budget). The run parks it for checkpoint review and never
+    /// commits it; redrafting the Scene at checkpoint review clears the phase.
+    ParkedForCheckpoint,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -461,6 +478,18 @@ pub struct SceneDraftDiagnostics {
     pub handoff_plan_revision: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub superseded_handoff_plan_revision: Option<i64>,
+    /// Set when an operator checkpoint review (or `authoring_resolve_block`)
+    /// deliberately resets a Scene to `Pending` while its old prose still exists
+    /// in Spindle. Reconcile must NOT promote such a Scene back to
+    /// `draft_saved`; the intent is a fresh draft. Cleared when that draft is
+    /// saved. Additive, serde-default, and skipped when false so existing rows
+    /// serialize byte-identically.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub redraft_requested: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 pub fn load_seed(path: &Path) -> Result<HarnessSeed> {

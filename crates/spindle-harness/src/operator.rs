@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::state::{CheckpointStatus, HarnessState, ScenePhase};
+use crate::state::{CheckpointStatus, HarnessState, SceneDraftDiagnostics, ScenePhase};
 
 pub fn render_status(state: &HarnessState, state_path: &Path, verbose: bool) -> String {
     let mut out = String::new();
@@ -153,11 +153,12 @@ pub fn review_checkpoint(
     start_chapter: i32,
     end_chapter: i32,
     directives: &[String],
+    redraft_scenes: &[(i32, i32)],
 ) -> Result<String> {
     let artifacts_root = artifacts_root(state_path, state);
     let checkpoint = state
         .checkpoint_history
-        .iter_mut()
+        .iter()
         .find(|checkpoint| {
             checkpoint.start_chapter == start_chapter && checkpoint.end_chapter == end_chapter
         })
@@ -193,14 +194,102 @@ pub fn review_checkpoint(
         );
     }
 
+    // Validate redraft targets BEFORE mutating anything, so a rejected review
+    // never leaves a half-applied reset. Every parked Scene in the window must
+    // be addressed: a parked Scene is exactly what this checkpoint exists to
+    // decide, and clearing it without deciding would commit a mismatch by
+    // another name.
+    for (chapter_number, scene_order) in redraft_scenes {
+        if !(start_chapter..=end_chapter).contains(chapter_number) {
+            anyhow::bail!(
+                "scene {chapter_number}.{scene_order} is outside checkpoint {start_chapter}-{end_chapter}"
+            );
+        }
+        let exists = state
+            .chapters
+            .iter()
+            .find(|chapter| chapter.chapter_number == *chapter_number)
+            .is_some_and(|chapter| {
+                chapter
+                    .scenes
+                    .iter()
+                    .any(|scene| scene.scene_order == *scene_order)
+            });
+        if !exists {
+            anyhow::bail!("scene {chapter_number}.{scene_order} not found in state");
+        }
+    }
+    let unaddressed = parked_scene_refs_in_range(state, start_chapter, end_chapter)
+        .into_iter()
+        .filter(|(chapter_number, scene_order)| {
+            !redraft_scenes
+                .iter()
+                .any(|target| target == &(*chapter_number, *scene_order))
+        })
+        .map(|(chapter_number, scene_order)| format!("{chapter_number}.{scene_order}"))
+        .collect::<Vec<_>>();
+    if !unaddressed.is_empty() {
+        anyhow::bail!(
+            "checkpoint {}-{} cannot be reviewed while scenes [{}] are parked for checkpoint \
+             review; pass each parked scene in redraft_scenes so it is re-drafted, or amend the \
+             plan first and then redraft it",
+            start_chapter,
+            end_chapter,
+            unaddressed.join(", ")
+        );
+    }
+
+    for (chapter_number, scene_order) in redraft_scenes {
+        redraft_scene_block(state, state_path, *chapter_number, *scene_order)?;
+    }
+
+    // Re-borrow after the redrafts above (each one saves the state).
+    let checkpoint = state
+        .checkpoint_history
+        .iter_mut()
+        .find(|checkpoint| {
+            checkpoint.start_chapter == start_chapter && checkpoint.end_chapter == end_chapter
+        })
+        .context("checkpoint vanished while its review was applied")?;
     checkpoint.status = CheckpointStatus::Reviewed;
     let added_directives = append_directives(&mut state.editorial_directives, directives);
     state.save(state_path)?;
 
+    let redraft_note = if redraft_scenes.is_empty() {
+        String::new()
+    } else {
+        let refs = redraft_scenes
+            .iter()
+            .map(|(chapter_number, scene_order)| format!("{chapter_number}.{scene_order}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(" Reset {refs} to pending-draft.")
+    };
     Ok(format!(
-        "Marked checkpoint {}-{} as reviewed; added {} new directive(s).",
+        "Marked checkpoint {}-{} as reviewed; added {} new directive(s).{redraft_note}",
         start_chapter, end_chapter, added_directives
     ))
+}
+
+/// Scenes in `[start_chapter, end_chapter]` currently parked for checkpoint
+/// review, as `(chapter, scene)` pairs.
+pub fn parked_scene_refs_in_range(
+    state: &HarnessState,
+    start_chapter: i32,
+    end_chapter: i32,
+) -> Vec<(i32, i32)> {
+    state
+        .chapters
+        .iter()
+        .filter(|chapter| (start_chapter..=end_chapter).contains(&chapter.chapter_number))
+        .flat_map(|chapter| {
+            chapter
+                .scenes
+                .iter()
+                .filter(|scene| scene.phase == ScenePhase::ParkedForCheckpoint)
+                .map(|scene| (chapter.chapter_number, scene.scene_order))
+        })
+        .collect()
 }
 
 /// Advance a blocked scene one phase forward after operator review.
@@ -239,6 +328,18 @@ pub fn resolve_scene_block(
                 chapter_number, scene_order
             )
         })?;
+
+    // A parked Scene is not a forward-advance: the operator must decide whether
+    // to re-draft it (which clears the park) rather than push it to committed.
+    if scene.phase == ScenePhase::ParkedForCheckpoint {
+        anyhow::bail!(
+            "scene {}.{} is parked for checkpoint review and cannot be advanced manually; \
+             re-draft it at checkpoint review (redraft_scenes) or with authoring_resolve_block \
+             target_phase='redraft'",
+            chapter_number,
+            scene_order
+        );
+    }
 
     let blocked_reason = scene.blocked_reason.clone();
     if blocked_reason.is_none() && !run_level_blocked {
@@ -383,7 +484,13 @@ pub fn redraft_scene_block(
     scene.phase = ScenePhase::Pending;
     scene.blocked_reason = None;
     scene.scene_id = None;
-    scene.draft_diagnostics = None;
+    // Keep an explicit "this Pending is a deliberate redraft" marker: the old
+    // prose still exists in Spindle, and reconcile must not promote the Scene
+    // back to `draft_saved` because of it.
+    scene.draft_diagnostics = Some(SceneDraftDiagnostics {
+        redraft_requested: true,
+        ..Default::default()
+    });
     // Verify state no longer applies to a scene being re-drafted from scratch.
     scene.verify_status = None;
     scene.verify_detail = None;
@@ -421,6 +528,9 @@ fn next_scene_phase(phase: ScenePhase) -> Option<ScenePhase> {
         ScenePhase::DraftSaved => Some(ScenePhase::ChangesCommitted),
         ScenePhase::ChangesCommitted => Some(ScenePhase::BeatsAnnotated),
         ScenePhase::BeatsAnnotated => None,
+        // A parked Scene is not advanced; it is decided (redraft) or left
+        // parked. `resolve_scene_block` refuses this phase explicitly.
+        ScenePhase::ParkedForCheckpoint => None,
     }
 }
 
@@ -452,6 +562,7 @@ fn phase_label(phase: ScenePhase) -> &'static str {
         ScenePhase::DraftSaved => "draft_saved",
         ScenePhase::ChangesCommitted => "changes_committed",
         ScenePhase::BeatsAnnotated => "beats_annotated",
+        ScenePhase::ParkedForCheckpoint => "parked_for_checkpoint",
     }
 }
 
@@ -537,6 +648,7 @@ mod tests {
                 "tighten scene transitions".to_string(),
                 "hold continuity".to_string(),
             ],
+            &[],
         )
         .expect("review checkpoint");
 
@@ -711,5 +823,89 @@ mod tests {
             .expect("redraft with absent artifact");
         assert!(message.contains("Reset scene 1.1"));
         assert_eq!(state.chapters[0].scenes[0].phase, ScenePhase::Pending);
+    }
+
+    // ── McKee parked-for-checkpoint clearance (issue #33) ──
+
+    #[test]
+    fn review_checkpoint_requires_parked_scenes_to_be_redrafted() {
+        let state_path = temp_state_path("parked-review");
+        let mut state = HarnessState::from_seed(seed(), "branch:main".to_string());
+        let report_rel = "checkpoints/chapter-0001-0001.json".to_string();
+        let report_path = artifacts_root(&state_path, &state).join(&report_rel);
+        fs::create_dir_all(report_path.parent().expect("report parent")).expect("mkdirs");
+        fs::write(&report_path, "{}").expect("write report");
+        state.checkpoint_history.push(CheckpointRecord {
+            start_chapter: 1,
+            end_chapter: 1,
+            save_point_id: "save_point:park".to_string(),
+            status: CheckpointStatus::PendingReview,
+            report_artifact_path: Some(report_rel.clone()),
+            auto_outcome: None,
+            pending_manual_scene_ids: Vec::new(),
+        });
+        {
+            let scene = &mut state.chapters[0].scenes[0];
+            scene.phase = ScenePhase::ParkedForCheckpoint;
+            scene.scene_id = Some("scene:1".to_string());
+            scene.verify_status = Some("parked_findings".to_string());
+            scene.verify_detail = Some("1 finding parked".to_string());
+        }
+
+        // An auto-approval (or any review) that leaves the parked Scene in
+        // place is refused: a mismatch can never be cleared by marking the
+        // checkpoint reviewed.
+        let err = review_checkpoint(&mut state, &state_path, 1, 1, &[], &[])
+            .expect_err("a parked scene must block checkpoint review");
+        assert!(
+            format!("{err:#}").contains("parked for checkpoint review"),
+            "{err:#}"
+        );
+        assert_eq!(
+            state.checkpoint_history[0].status,
+            CheckpointStatus::PendingReview
+        );
+
+        // The redraft directive clears it and the checkpoint review completes.
+        let message = review_checkpoint(&mut state, &state_path, 1, 1, &[], &[(1, 1)])
+            .expect("redrafting the parked scene clears the review");
+        assert!(message.contains("Reset 1.1"), "{message}");
+        assert_eq!(
+            state.checkpoint_history[0].status,
+            CheckpointStatus::Reviewed
+        );
+        let scene = &state.chapters[0].scenes[0];
+        assert_eq!(scene.phase, ScenePhase::Pending);
+        assert!(scene.scene_id.is_none());
+        assert!(
+            scene
+                .draft_diagnostics
+                .as_ref()
+                .is_some_and(|diagnostics| diagnostics.redraft_requested),
+            "the deliberate-redraft marker must survive the review"
+        );
+    }
+
+    #[test]
+    fn redraft_refuses_to_advance_a_parked_scene_forward() {
+        let state_path = temp_state_path("parked-advance");
+        let mut state = HarnessState::from_seed(seed(), "branch:main".to_string());
+        let scene = &mut state.chapters[0].scenes[0];
+        scene.phase = ScenePhase::ParkedForCheckpoint;
+        scene.scene_id = Some("scene:1".to_string());
+
+        let err = resolve_scene_block(
+            &mut state,
+            &state_path,
+            1,
+            1,
+            ScenePhase::ChangesCommitted,
+            false,
+        )
+        .expect_err("a parked scene is decided, not advanced");
+        assert!(
+            format!("{err:#}").contains("parked for checkpoint review"),
+            "{err:#}"
+        );
     }
 }

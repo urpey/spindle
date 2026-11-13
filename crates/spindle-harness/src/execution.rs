@@ -344,6 +344,8 @@ async fn draft_scene(
         content_rating_warnings: save_output.content_rating_warnings.clone(),
         handoff_plan_revision: None,
         superseded_handoff_plan_revision: None,
+        // A fresh draft satisfies any deliberate redraft request.
+        redraft_requested: false,
     });
     state.save(state_path)?;
 
@@ -867,6 +869,15 @@ async fn verify_scene(
     live_scene.verify_detail = Some(detail.clone());
     if let Some(fingerprint) = fingerprint {
         live_scene.last_finding_fingerprint = Some(fingerprint);
+    }
+    // McKee only: actionable findings that outlived the revise budget park the
+    // Scene for checkpoint review instead of committing it. Non-McKee keeps the
+    // established commit-on-parked behaviour (the phase stays `draft_saved`).
+    if status == "parked_findings" && state.mckee_structured {
+        live_scene.phase = ScenePhase::ParkedForCheckpoint;
+        live_scene.verify_detail = Some(format!(
+            "parked for checkpoint review (never committed); {detail}"
+        ));
     }
     state.save(state_path)?;
     Ok(format!(
@@ -2629,18 +2640,29 @@ fn sample_checkpoint_scene_ids(
             .iter()
             .find(|chapter| chapter.chapter_number == chapter_number)
             .with_context(|| format!("checkpoint chapter {} missing from state", chapter_number))?;
+        // Pick a scene that has actually been saved. A park checkpoint covers a
+        // chapter that is still mid-draft (later scenes may be Pending), so the
+        // "last scene" rule must mean the last SAVED scene, not a placeholder
+        // that has no scene_id yet.
         let scene = if chapter_number == end_chapter {
-            chapter.scenes.last()
+            chapter
+                .scenes
+                .iter()
+                .rev()
+                .find(|scene| scene.scene_id.is_some())
         } else {
-            chapter.scenes.first()
+            chapter.scenes.iter().find(|scene| scene.scene_id.is_some())
         }
-        .with_context(|| format!("checkpoint chapter {} has no scenes", chapter_number))?;
-        let scene_id = scene.scene_id.clone().with_context(|| {
+        .with_context(|| {
             format!(
-                "checkpoint chapter {} scene {} has no scene_id",
-                chapter_number, scene.scene_order
+                "checkpoint chapter {} has no saved scene to sample",
+                chapter_number
             )
         })?;
+        let scene_id = scene
+            .scene_id
+            .clone()
+            .context("sampled checkpoint scene lost its scene_id")?;
         candidates.push(scene_id);
     }
     Ok(candidates)
@@ -2714,6 +2736,7 @@ mod tests {
             replan_policy: None,
             resolved_editorial: None,
             editorial_controller_path: None,
+            mckee_structured: false,
             chapters: Vec::new(),
             checkpoint_history: Vec::new(),
         }
@@ -3195,6 +3218,7 @@ mod tests {
             replan_policy: None,
             resolved_editorial: None,
             editorial_controller_path: None,
+            mckee_structured: false,
             chapters: Vec::new(),
             checkpoint_history: Vec::new(),
         };
