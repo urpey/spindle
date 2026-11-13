@@ -766,6 +766,8 @@ mod planning;
 pub(crate) use planning::apply::resolve_operation as resolve_planning_operation;
 pub(crate) use planning::describe_blocking_finding;
 pub(crate) use planning::output_refs as planning_output_refs;
+pub(crate) use planning::promises::{PromiseGate, cascade_promise_findings, merge_promise_gates};
+pub(crate) use planning::values::{CascadeSceneFinding, cascade_value_findings};
 pub(crate) use planning::{
     PlanningAttemptClaim, PlanningSessionMetadataUpdate, PlanningStagedCommitCandidate,
 };
@@ -777,6 +779,11 @@ mod relationships;
 mod research;
 mod reviews;
 mod scene_commit;
+mod scene_plan_stale;
+pub(crate) use scene_plan_stale::{
+    MarkScenePlanStaleParams, ScenePlanStaleBatch, ScenePlanStaleClearWrite,
+    ScenePlanStaleMarkWrite,
+};
 mod scenes;
 mod search;
 mod snapshots;

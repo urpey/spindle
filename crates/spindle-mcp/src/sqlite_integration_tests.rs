@@ -4194,6 +4194,218 @@ async fn replan_run_rejects_bad_policy_string() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_amendment_cascade_is_visible_through_the_tool_router() {
+    // Issue #34 public contract: a McKee amendment that breaks the downstream
+    // value chain is visible through `list_plan_amendments` as an active
+    // `stale_scenes` entry plus a normally staged `scene_replace` reconciliation.
+    // A non-McKee project's list output keeps its exact previous shape.
+    use crate::tools::{ToolRouter, ToolSerializationState};
+    use spindle_adapters::sqlite::repository::StagePlanAmendmentParams;
+    use spindle_core::charge::{Charge, ChargeDepth, ChargeSign};
+    use spindle_core::scene_value::SceneValueAxis;
+    use std::sync::Arc;
+
+    fn charge(sign: ChargeSign, depth: ChargeDepth) -> Charge {
+        Charge::new(sign, depth).unwrap()
+    }
+    fn axis(opening: Charge, closing: Charge) -> SceneValueAxis {
+        SceneValueAxis {
+            axis: "truth".into(),
+            opening,
+            closing,
+        }
+    }
+    fn scene(order: i32, summary: &str, opening: Charge, closing: Charge) -> PlanChapterSceneInput {
+        PlanChapterSceneInput {
+            scene_order: order,
+            summary: summary.into(),
+            purpose: format!("purpose {order}"),
+            primary_value_axis: Some(axis(opening, closing)),
+            ..Default::default()
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let pool = SqlitePool::open(&tmp.path().join("cascade.db"))
+        .await
+        .unwrap();
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let repo = Repository::with_model_router(pool, data_dir, ModelRouter::local_only());
+    let svc = SqliteSpindleService::new(repo);
+    let (project, branch, _, _) = svc
+        .repository()
+        .create_project_with_mckee_marker(&CreateProjectInput {
+            name: "MCP Cascade".into(),
+            project_type: "novel".into(),
+            genre: "fantasy".into(),
+            reader_contract: ReaderContract {
+                promise: "cascade visibility".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    for (chapter_number, scenes) in [
+        (
+            1,
+            vec![
+                scene(
+                    1,
+                    "c1s1",
+                    charge(ChargeSign::Positive, ChargeDepth::Positive),
+                    charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                ),
+                scene(
+                    2,
+                    "c1s2",
+                    charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                    charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                ),
+            ],
+        ),
+        (
+            2,
+            vec![scene(
+                1,
+                "c2s1",
+                charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                charge(ChargeSign::Negative, ChargeDepth::NegationOfTheNegation),
+            )],
+        ),
+    ] {
+        svc.plan_chapter(PlanChapterInput {
+            project_id: project.id.clone(),
+            book_number: 1,
+            chapter_number,
+            pov_character_id: None,
+            synopsis: format!("chapter {chapter_number}"),
+            target_theme_ids: Vec::new(),
+            target_conflict_ids: Vec::new(),
+            target_plot_line_ids: Vec::new(),
+            scenes,
+        })
+        .await
+        .unwrap();
+    }
+    let amendment = svc
+        .repository()
+        .stage_plan_amendment(StagePlanAmendmentParams {
+            project_id: project.id.clone(),
+            branch_id: branch.id,
+            source_chapter: 1,
+            book_number: 1,
+            authoring_run_id: None,
+            amendment_class: "scene_replace".into(),
+            target_chapter: Some(1),
+            payload: serde_json::json!({
+                "scene_order": 2,
+                "summary": "c1s2",
+                "purpose": "purpose 2",
+                "character_ids": [],
+                "primary_value_axis": axis(
+                    charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                    charge(ChargeSign::Positive, ChargeDepth::Positive),
+                ),
+            }),
+            rationale: "tighten c1s2".into(),
+            confidence: "high".into(),
+        })
+        .await
+        .unwrap();
+
+    let router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        Some("write".to_string()),
+        Arc::new(ToolSerializationState::default()),
+    );
+    let decide = router
+        .call_tool(
+            "decide_plan_amendments",
+            Some(
+                serde_json::json!({
+                    "project_id": project.id,
+                    "decisions": [{"amendment_id": amendment.id, "action": "apply"}],
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(decide["results"][0]["outcome"], "applied", "{decide:?}");
+
+    let list = router
+        .call_tool(
+            "list_plan_amendments",
+            Some(
+                serde_json::json!({"project_id": project.id})
+                    .as_object()
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    let stale = list["stale_scenes"]
+        .as_array()
+        .expect("McKee list output carries stale_scenes");
+    assert_eq!(stale.len(), 1, "{list:?}");
+    assert_eq!(stale[0]["chapter_number"], 2, "{list:?}");
+    assert_eq!(stale[0]["scene_order"], 1, "{list:?}");
+    assert_eq!(stale[0]["status"], "stale", "{list:?}");
+    assert!(
+        stale[0]["reconciliation_amendment_id"].is_string(),
+        "the staged repair is linked: {list:?}"
+    );
+    let staged: Vec<&serde_json::Value> = list["amendments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|amendment| amendment["status"] == "staged")
+        .collect();
+    assert_eq!(staged.len(), 1, "{list:?}");
+    assert_eq!(staged[0]["amendment_class"], "scene_replace", "{list:?}");
+    assert_eq!(staged[0]["target_chapter"], 2, "{list:?}");
+
+    // Non-McKee output unchanged: no additive key at all.
+    let plain = svc
+        .create_project(CreateProjectInput {
+            name: "MCP Unmarked".into(),
+            project_type: "novel".into(),
+            genre: "fantasy".into(),
+            reader_contract: ReaderContract {
+                promise: "unchanged".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    let plain_list = router
+        .call_tool(
+            "list_plan_amendments",
+            Some(
+                serde_json::json!({"project_id": plain.project_id})
+                    .as_object()
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert!(
+        plain_list.get("stale_scenes").is_none(),
+        "a non-McKee list output is unchanged: {plain_list:?}"
+    );
+}
+
 // =============================================================================
 // In-run verify/revise integration (evolution §3.2 — P2.2)
 // =============================================================================

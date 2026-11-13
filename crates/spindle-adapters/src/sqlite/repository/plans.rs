@@ -1,5 +1,146 @@
 use super::*;
 
+/// Validate a stage request against the ADR 0003 D1/D2 class contract. Shared by
+/// the public staging path and the transactional cascade batch (which stages
+/// reconciliation rows through the same contract, never a parallel write).
+fn validate_plan_amendment_stage(params: &StagePlanAmendmentParams) -> Result<()> {
+    if !spindle_core::models::is_plan_amendment_class(&params.amendment_class) {
+        return Err(anyhow!(
+            "unknown plan amendment class '{}' (not in PLAN_AMENDMENT_CLASSES)",
+            params.amendment_class
+        ));
+    }
+    if params.rationale.trim().is_empty() {
+        return Err(anyhow!(
+            "plan amendment rationale is mandatory — an amendment with no stated reasoning is not stageable"
+        ));
+    }
+    let rationale_chars = params.rationale.chars().count();
+    if rationale_chars > 500 {
+        return Err(anyhow!(
+            "plan amendment rationale must be ≤500 chars (got {rationale_chars})"
+        ));
+    }
+    if !matches!(params.confidence.as_str(), "high" | "medium" | "low") {
+        return Err(anyhow!(
+            "plan amendment confidence must be one of high|medium|low (got '{}')",
+            params.confidence
+        ));
+    }
+    // `promise_followup` targets a future placement, not a chapter row: its
+    // target_chapter must be absent. Every other class amends a specific future
+    // chapter and must name it (ADR D1/D2).
+    if params.amendment_class == "promise_followup" {
+        if params.target_chapter.is_some() {
+            return Err(anyhow!(
+                "plan amendment class 'promise_followup' must NOT carry a target_chapter (it targets a future placement)"
+            ));
+        }
+    } else if params.target_chapter.is_none() {
+        return Err(anyhow!(
+            "plan amendment class '{}' requires a target_chapter",
+            params.amendment_class
+        ));
+    }
+    Ok(())
+}
+
+/// Insert one already-validated staged amendment inside an existing writer
+/// transaction. Returns the minted id. Shared by
+/// [`Repository::stage_plan_amendment`] and the atomic cascade batch so the
+/// cascade can stage a reconciliation in the same transaction as its stale mark.
+pub(crate) fn insert_plan_amendment_in_conn(
+    conn: &rusqlite::Connection,
+    params: &StagePlanAmendmentParams,
+    now: i64,
+) -> rusqlite::Result<String> {
+    let payload_str = serde_json::to_string(&params.payload).map_err(|error| {
+        rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            error,
+        )))
+    })?;
+    let id = mint_id("plan_amendment");
+    conn.execute(
+        "INSERT INTO plan_amendment \
+         (id, project_id, branch_id, source_chapter, book_number, authoring_run_id, \
+          amendment_class, target_chapter, payload, rationale, confidence, status, \
+          decided_at, decided_by, decision_note, prior_state, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'staged', NULL, NULL, \
+                 NULL, NULL, ?12, ?13)",
+        rusqlite::params![
+            &id,
+            &params.project_id,
+            &params.branch_id,
+            params.source_chapter,
+            params.book_number,
+            &params.authoring_run_id,
+            &params.amendment_class,
+            params.target_chapter,
+            &payload_str,
+            &params.rationale,
+            &params.confidence,
+            now,
+            now,
+        ],
+    )?;
+    Ok(id)
+}
+
+/// Flip one still-`staged` amendment to `superseded` and stamp the ADR 0003 D2
+/// audit pair plus the recorded reason. `applied`/`rejected`/already-superseded
+/// rows are untouched: decisions are history. Shared by the replan supersede
+/// sweep, the merged-queue supersede and the amendment cascade.
+pub(crate) fn supersede_staged_amendment_in_conn(
+    conn: &rusqlite::Connection,
+    id: &str,
+    decided_by: &str,
+    reason: &str,
+    now: i64,
+) -> rusqlite::Result<u64> {
+    conn.execute(
+        "UPDATE plan_amendment \
+         SET status = 'superseded', decided_at = ?1, decided_by = ?2, decision_note = ?3, \
+             updated_at = ?1 \
+         WHERE id = ?4 AND status = 'staged'",
+        rusqlite::params![now, decided_by, reason, id],
+    )
+    .map(|affected| affected as u64)
+}
+
+/// The supersede-on-replan sweep, inside a writer transaction. Kept as one
+/// shared statement so the cascade's per-Scene supersede and this scoped sweep
+/// can never diverge in which rows they retire or how they are stamped.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn supersede_staged_amendment_in_conn_scoped(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    branch_id: &str,
+    book_number: i32,
+    source_chapter: i32,
+    decided_by: &str,
+    reason: &str,
+    now: i64,
+) -> rusqlite::Result<u64> {
+    conn.execute(
+        "UPDATE plan_amendment \
+         SET status = 'superseded', decided_at = ?1, decided_by = ?2, decision_note = ?3, \
+             updated_at = ?1 \
+         WHERE project_id = ?4 AND branch_id = ?5 AND book_number = ?6 AND source_chapter = ?7 \
+           AND status = 'staged'",
+        rusqlite::params![
+            now,
+            decided_by,
+            reason,
+            project_id,
+            branch_id,
+            book_number,
+            source_chapter
+        ],
+    )
+    .map(|affected| affected as u64)
+}
+
 impl Repository {
     // ── Plan amendments (ADR 0003 — living-outline replanning) ────────────────
 
@@ -21,91 +162,17 @@ impl Repository {
         &self,
         params: StagePlanAmendmentParams,
     ) -> Result<crate::sqlite::records::StoredPlanAmendment> {
-        let StagePlanAmendmentParams {
-            project_id,
-            branch_id,
-            source_chapter,
-            book_number,
-            authoring_run_id,
-            amendment_class,
-            target_chapter,
-            payload,
-            rationale,
-            confidence,
-        } = params;
+        validate_plan_amendment_stage(&params)?;
 
-        if !spindle_core::models::is_plan_amendment_class(&amendment_class) {
-            return Err(anyhow!(
-                "unknown plan amendment class '{amendment_class}' (not in PLAN_AMENDMENT_CLASSES)"
-            ));
-        }
-        if rationale.trim().is_empty() {
-            return Err(anyhow!(
-                "plan amendment rationale is mandatory — an amendment with no stated reasoning is not stageable"
-            ));
-        }
-        let rationale_chars = rationale.chars().count();
-        if rationale_chars > 500 {
-            return Err(anyhow!(
-                "plan amendment rationale must be ≤500 chars (got {rationale_chars})"
-            ));
-        }
-        if !matches!(confidence.as_str(), "high" | "medium" | "low") {
-            return Err(anyhow!(
-                "plan amendment confidence must be one of high|medium|low (got '{confidence}')"
-            ));
-        }
-        // `promise_followup` targets a future placement, not a chapter row: its
-        // target_chapter must be absent. Every other class amends a specific
-        // future chapter and must name it (ADR D1/D2). The rule is
-        // class-conditional, so it lives here, not in a SQL CHECK.
-        if amendment_class == "promise_followup" {
-            if target_chapter.is_some() {
-                return Err(anyhow!(
-                    "plan amendment class 'promise_followup' must NOT carry a target_chapter (it targets a future placement)"
-                ));
-            }
-        } else if target_chapter.is_none() {
-            return Err(anyhow!(
-                "plan amendment class '{amendment_class}' requires a target_chapter"
-            ));
-        }
-
-        let payload_str =
-            serde_json::to_string(&payload).context("serializing plan amendment payload")?;
-        let id = mint_id("plan_amendment");
-        let id_lookup = id.clone();
-        self.inner
+        let id = self
+            .inner
             .pool
             .write(move |conn| {
                 let now = timestamp_to_micros(chrono::Utc::now());
-                conn.execute(
-                    "INSERT INTO plan_amendment \
-                     (id, project_id, branch_id, source_chapter, book_number, authoring_run_id, \
-                      amendment_class, target_chapter, payload, rationale, confidence, status, \
-                      decided_at, decided_by, prior_state, created_at, updated_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'staged', NULL, NULL, \
-                             NULL, ?12, ?13)",
-                    rusqlite::params![
-                        &id,
-                        &project_id,
-                        &branch_id,
-                        source_chapter,
-                        book_number,
-                        &authoring_run_id,
-                        &amendment_class,
-                        target_chapter,
-                        &payload_str,
-                        &rationale,
-                        &confidence,
-                        now,
-                        now,
-                    ],
-                )?;
-                Ok(())
+                insert_plan_amendment_in_conn(conn, &params, now)
             })
             .await?;
-        self.read_plan_amendment(&id_lookup)
+        self.read_plan_amendment(&id)
             .await?
             .ok_or_else(|| anyhow!("plan_amendment vanished after insert"))
     }
@@ -248,7 +315,8 @@ impl Repository {
     /// `staged` plan amendments to `superseded`. `applied`/`rejected`/already-
     /// `superseded` rows are untouched — decisions are history. Scoped to one
     /// branch + book + source chapter so a rerun for a different chapter never
-    /// touches these. Returns the number of rows flipped.
+    /// touches these. Stamps `decided_at`/`decided_by` and the reason, so the
+    /// superseded row is auditable. Returns the number of rows flipped.
     pub async fn supersede_source_chapter_amendments(
         &self,
         project_id: &str,
@@ -258,17 +326,25 @@ impl Repository {
     ) -> Result<u64> {
         let project_id = project_id.to_string();
         let branch_id = branch_id.to_string();
+        let reason = format!(
+            "superseded by a newer replan pass for book {book_number} source chapter \
+             {source_chapter}"
+        );
         self.inner
             .pool
             .write(move |conn| {
                 let now = timestamp_to_micros(chrono::Utc::now());
-                let affected = conn.execute(
-                    "UPDATE plan_amendment SET status = 'superseded', updated_at = ?1 \
-                     WHERE project_id = ?2 AND branch_id = ?3 AND book_number = ?4 \
-                       AND source_chapter = ?5 AND status = 'staged'",
-                    rusqlite::params![now, project_id, branch_id, book_number, source_chapter],
+                let affected = supersede_staged_amendment_in_conn_scoped(
+                    conn,
+                    &project_id,
+                    &branch_id,
+                    book_number,
+                    source_chapter,
+                    "replan",
+                    &reason,
+                    now,
                 )?;
-                Ok(affected as u64)
+                Ok(affected)
             })
             .await
     }

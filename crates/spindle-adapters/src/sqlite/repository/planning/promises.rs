@@ -40,27 +40,201 @@ fn is_long_range_level(level: PlanningLevel) -> bool {
 
 /// A promise as the deus-ex-machina gate reads it: where it is planted and
 /// every planned payoff placement known for it.
-struct PromiseGate {
-    planted_at: Option<PlanningStoryPlacement>,
-    payoffs: Vec<PlanningStoryPlacement>,
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PromiseGate {
+    pub(crate) planted_at: Option<PlanningStoryPlacement>,
+    pub(crate) payoffs: Vec<PlanningStoryPlacement>,
 }
 
 impl PromiseGate {
-    fn planted_before(&self, scene: &PlanningStoryPlacement) -> bool {
-        self.planted_at
-            .as_ref()
-            .is_some_and(|planted| planted.cmp_story_order(scene) == std::cmp::Ordering::Less)
+    pub(crate) fn planted_before(&self, scene: &PlanningStoryPlacement) -> bool {
+        promise_planted_before(self.planted_at.as_ref(), scene)
     }
 
-    fn pays_off_at(&self, scene: &PlanningStoryPlacement) -> bool {
-        self.payoffs.iter().any(|payoff| same_scene(payoff, scene))
+    pub(crate) fn pays_off_at(&self, scene: &PlanningStoryPlacement) -> bool {
+        promise_pays_off_at(&self.payoffs, scene)
     }
+}
+
+/// The one "planted strictly before this Scene" rule. Shared by the planning
+/// gate and the McKee amendment cascade so the two can never disagree.
+pub(crate) fn promise_planted_before(
+    planted_at: Option<&PlanningStoryPlacement>,
+    scene: &PlanningStoryPlacement,
+) -> bool {
+    planted_at.is_some_and(|planted| planted.cmp_story_order(scene) == std::cmp::Ordering::Less)
+}
+
+/// The one "pays off exactly at this Scene" rule. Shared by the planning gate
+/// and the McKee amendment cascade.
+pub(crate) fn promise_pays_off_at(
+    payoffs: &[PlanningStoryPlacement],
+    scene: &PlanningStoryPlacement,
+) -> bool {
+    payoffs.iter().any(|payoff| same_scene(payoff, scene))
 }
 
 fn same_scene(left: &PlanningStoryPlacement, right: &PlanningStoryPlacement) -> bool {
     left.book_number == right.book_number
         && left.chapter_number == right.chapter_number
         && left.scene_order == right.scene_order
+}
+
+/// One planned Scene as the shared #28 promise rules read it. The planning gate
+/// and the amendment cascade both build this (from a staged artifact and from an
+/// accepted plan respectively) and hand it to the same rule functions.
+#[derive(Debug, Clone)]
+pub(crate) struct PromiseRuleScene {
+    pub(crate) placement: PlanningStoryPlacement,
+    /// 1-based Turning Beat position, when set.
+    pub(crate) turning_beat: Option<u32>,
+    pub(crate) beats: Vec<PromiseRuleBeat>,
+}
+
+/// One Beat as the shared #28 promise rules read it.
+#[derive(Debug, Clone)]
+pub(crate) struct PromiseRuleBeat {
+    pub(crate) information_dependent: bool,
+    pub(crate) promise: Option<PlanningRef>,
+}
+
+impl PromiseRuleScene {
+    /// Build the shared rule input from one accepted planned Scene.
+    pub(crate) fn from_planned_scene(
+        book_number: i32,
+        chapter_number: i32,
+        scene: &PlannedScene,
+    ) -> Self {
+        Self {
+            placement: PlanningStoryPlacement {
+                book_number,
+                chapter_number,
+                scene_order: Some(scene.scene_order),
+                note: None,
+            },
+            turning_beat: scene.turning_beat,
+            beats: scene
+                .beats
+                .iter()
+                .map(|beat| PromiseRuleBeat {
+                    information_dependent: beat.information_dependent,
+                    promise: beat.promise_id.clone().map(PlanningRef::ExistingRecordId),
+                })
+                .collect(),
+        }
+    }
+
+    fn turning_beat_entry(&self) -> Option<&PromiseRuleBeat> {
+        let index = self.turning_beat?.checked_sub(1)? as usize;
+        self.beats.get(index)
+    }
+}
+
+/// The outcome of the single information-dependent Turning Beat rule. The
+/// planning gate maps each variant onto its stage-recordable finding; the
+/// cascade maps it onto a stale finding. The decision itself lives here once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TurningBeatPromiseRule {
+    /// The Beat is not information-dependent, or its earlier-planted promise
+    /// resolves.
+    Satisfied,
+    /// Information-dependent without a promise reference.
+    MissingPromise,
+    /// The referenced promise is not visible on this branch.
+    Unknown { key: String },
+    /// The referenced promise exists but is not planted before this Scene.
+    NotPlantedEarlier {
+        key: String,
+        planted_at: Option<PlanningStoryPlacement>,
+    },
+}
+
+/// Evaluate the #28 information-dependent Turning Beat rule for one Scene.
+pub(crate) fn turning_beat_promise_rule(
+    scene: &PromiseRuleScene,
+    promises: &BTreeMap<String, PromiseGate>,
+    normalize: impl Fn(&PlanningRef) -> String,
+) -> TurningBeatPromiseRule {
+    let Some(beat) = scene.turning_beat_entry() else {
+        // A missing or out-of-range Turning Beat is already reported by the Beat
+        // shape checks; there is nothing to judge here.
+        return TurningBeatPromiseRule::Satisfied;
+    };
+    if !beat.information_dependent {
+        return TurningBeatPromiseRule::Satisfied;
+    }
+    let Some(promise_ref) = beat.promise.as_ref() else {
+        return TurningBeatPromiseRule::MissingPromise;
+    };
+    let key = normalize(promise_ref);
+    let Some(promise) = promises.get(&key) else {
+        return TurningBeatPromiseRule::Unknown { key };
+    };
+    if promise.planted_before(&scene.placement) {
+        TurningBeatPromiseRule::Satisfied
+    } else {
+        TurningBeatPromiseRule::NotPlantedEarlier {
+            key,
+            planted_at: promise.planted_at.clone(),
+        }
+    }
+}
+
+/// The one #28 secret-reveal/promise rule: a `revealed_secret` Key Fact needs an
+/// earlier-planted promise whose planned payoff lands in the reveal Scene. The
+/// planning gate and the amendment cascade both call this predicate.
+pub(crate) fn secret_reveal_is_promised(
+    promises: &BTreeMap<String, PromiseGate>,
+    placement: &PlanningStoryPlacement,
+) -> bool {
+    promises
+        .values()
+        .any(|promise| promise.planted_before(placement) && promise.pays_off_at(placement))
+}
+
+/// Merge accepted promise definitions with the promise events a staged artifact
+/// (or a staged ancestor) declares. This is the ONE source-set assembly the
+/// planning gate and the amendment cascade share: accepted rows plus
+/// staged-ancestor/current events, in that precedence order.
+pub(crate) fn merge_promise_gates(
+    accepted: impl IntoIterator<
+        Item = (
+            String,
+            PlanningStoryPlacement,
+            Option<PlanningStoryPlacement>,
+        ),
+    >,
+    events: impl IntoIterator<Item = PlannedPromiseEvent>,
+    normalize: impl Fn(&PlanningRef) -> String,
+) -> BTreeMap<String, PromiseGate> {
+    let mut promises: BTreeMap<String, PromiseGate> = BTreeMap::new();
+    for (key, planted_at, planned_payoff) in accepted {
+        let gate = promises.entry(key).or_default();
+        if gate.planted_at.is_none() {
+            gate.planted_at = Some(planted_at);
+        }
+        if let Some(payoff) = planned_payoff
+            && !gate.pays_off_at(&payoff)
+        {
+            gate.payoffs.push(payoff);
+        }
+    }
+    for event in events {
+        let key = normalize(&event.promise_ref);
+        let gate = promises.entry(key).or_default();
+        match event.action {
+            PlannedPromiseAction::Plant => {
+                if gate.planted_at.is_none() {
+                    gate.planted_at = Some(event.placement);
+                }
+            }
+            PlannedPromiseAction::Payoff if !gate.pays_off_at(&event.placement) => {
+                gate.payoffs.push(event.placement);
+            }
+            _ => {}
+        }
+    }
+    promises
 }
 
 /// Gate entry point. Records findings and never changes data.
@@ -206,47 +380,26 @@ fn validate_promise_operations(
 /// The merged promise view: accepted rows visible from the branch lineage,
 /// promises declared by staged ancestors and the current artifact (already
 /// folded into `ctx.promises`), plus the planned payoff placements recorded by
-/// the merged promise schedule.
+/// the merged promise schedule. Thin wrapper over the shared
+/// [`merge_promise_gates`] source-set assembly.
 fn merged_promise_gates(
     input: &StagePlanningInput,
     ctx: &ValidatorContext,
 ) -> BTreeMap<String, PromiseGate> {
-    let mut promises: BTreeMap<String, PromiseGate> = ctx
-        .promises
-        .iter()
-        .map(|(key, def)| {
+    merge_promise_gates(
+        ctx.promises.iter().map(|(key, def)| {
             (
                 key.clone(),
-                PromiseGate {
-                    planted_at: Some(def.planted_at.clone()),
-                    payoffs: def.planned_payoff.iter().cloned().collect(),
-                },
+                def.planted_at.clone(),
+                def.planned_payoff.clone(),
             )
-        })
-        .collect();
-    for event in ctx
-        .ancestor_promise_events
-        .iter()
-        .chain(input.schedule.promise_events.iter())
-    {
-        let key = ctx.normalize_ref(&event.promise_ref);
-        let gate = promises.entry(key).or_insert_with(|| PromiseGate {
-            planted_at: None,
-            payoffs: Vec::new(),
-        });
-        match event.action {
-            PlannedPromiseAction::Plant => {
-                if gate.planted_at.is_none() {
-                    gate.planted_at = Some(event.placement.clone());
-                }
-            }
-            PlannedPromiseAction::Payoff if !gate.pays_off_at(&event.placement) => {
-                gate.payoffs.push(event.placement.clone());
-            }
-            _ => {}
-        }
-    }
-    promises
+        }),
+        ctx.ancestor_promise_events
+            .iter()
+            .chain(input.schedule.promise_events.iter())
+            .cloned(),
+        |reference| ctx.normalize_ref(reference),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -260,18 +413,25 @@ fn validate_information_dependent_turning_beats(
     findings: &mut Vec<PlanningFinding>,
 ) {
     for scene in scenes {
-        let Some(beat) = scene.turning_beat_entry() else {
-            // A missing or out-of-range Turning Beat is already reported by the
-            // Beat shape checks; there is nothing to judge here.
-            continue;
+        let rule_scene = PromiseRuleScene {
+            placement: scene.placement(),
+            turning_beat: scene.turning_beat,
+            beats: scene
+                .beats
+                .iter()
+                .map(|beat| PromiseRuleBeat {
+                    information_dependent: beat.information_dependent,
+                    promise: beat.promise.clone(),
+                })
+                .collect(),
         };
-        if !beat.information_dependent {
-            continue;
-        }
         let position = scene.turning_beat.unwrap_or_default() as usize;
         let path = format!("{}/beats/{}", scene.path, position.saturating_sub(1));
-        let Some(promise_ref) = beat.promise.as_ref() else {
-            findings.push(planning_finding(
+        match turning_beat_promise_rule(&rule_scene, promises, |reference| {
+            ctx.normalize_ref(reference)
+        }) {
+            TurningBeatPromiseRule::Satisfied => {}
+            TurningBeatPromiseRule::MissingPromise => findings.push(planning_finding(
                 "turning_beat_information_dependent_without_promise",
                 PlanningFindingSeverity::Blocking,
                 path,
@@ -282,12 +442,8 @@ fn validate_information_dependent_turning_beats(
                     "{} Name the earlier-planted promise the reader was given, or make the Turn depend on what the Scene itself establishes.",
                     scene.repair_hint
                 ),
-            ));
-            continue;
-        };
-        let key = ctx.normalize_ref(promise_ref);
-        let Some(promise) = promises.get(&key) else {
-            findings.push(planning_finding(
+            )),
+            TurningBeatPromiseRule::Unknown { key } => findings.push(planning_finding(
                 "turning_beat_promise_unknown",
                 PlanningFindingSeverity::Blocking,
                 path,
@@ -298,36 +454,32 @@ fn validate_information_dependent_turning_beats(
                     "{} Reference a promise created in an accepted or earlier staged artifact.",
                     scene.repair_hint
                 ),
-            ));
-            continue;
-        };
-        if !promise.planted_before(&scene.placement()) {
-            findings.push(planning_finding(
-                "turning_beat_promise_not_planted_earlier",
-                PlanningFindingSeverity::Blocking,
-                path,
-                vec![key.clone()],
-                format!(
-                    "a promise planted earlier than book {} chapter {} scene {}",
-                    scene.book_number,
-                    scene.chapter_number,
-                    scene.scene_order
-                ),
-                promise
-                    .planted_at
-                    .as_ref()
-                    .map(|planted| {
-                        format!(
-                            "promise planted at book {} chapter {} scene {:?}",
-                            planted.book_number, planted.chapter_number, planted.scene_order
-                        )
-                    })
-                    .unwrap_or_else(|| "promise has no planned plant placement".to_string()),
-                format!(
-                    "{} Plant the promise in an earlier planned Scene before this Turning Beat pays it off.",
-                    scene.repair_hint
-                ),
-            ));
+            )),
+            TurningBeatPromiseRule::NotPlantedEarlier { key, planted_at } => {
+                findings.push(planning_finding(
+                    "turning_beat_promise_not_planted_earlier",
+                    PlanningFindingSeverity::Blocking,
+                    path,
+                    vec![key.clone()],
+                    format!(
+                        "a promise planted earlier than book {} chapter {} scene {}",
+                        scene.book_number, scene.chapter_number, scene.scene_order
+                    ),
+                    planted_at
+                        .as_ref()
+                        .map(|planted| {
+                            format!(
+                                "promise planted at book {} chapter {} scene {:?}",
+                                planted.book_number, planted.chapter_number, planted.scene_order
+                            )
+                        })
+                        .unwrap_or_else(|| "promise has no planned plant placement".to_string()),
+                    format!(
+                        "{} Plant the promise in an earlier planned Scene before this Turning Beat pays it off.",
+                        scene.repair_hint
+                    ),
+                ));
+            }
         }
     }
 }
@@ -447,9 +599,7 @@ fn validate_key_facts(
                     "A revealed_secret Key Fact is registered as a secret canonical fact whose initial holder is its subject character; name that character, or keep the secret in the existing secret-knowledge flow.",
                 ));
             }
-            let promised = promises
-                .values()
-                .any(|promise| promise.planted_before(placement) && promise.pays_off_at(placement));
+            let promised = secret_reveal_is_promised(promises, placement);
             if !promised {
                 findings.push(planning_finding(
                     "key_fact_secret_reveal_without_promise",
@@ -625,4 +775,123 @@ fn chapter_plan_shape_in_conn(
         chapter_number,
         scenes.into_iter().map(|scene| scene.scene_order).collect(),
     )))
+}
+
+// ---------------------------------------------------------------------------
+// Amendment cascade (issue #34)
+// ---------------------------------------------------------------------------
+
+/// Re-run the #28 promise/Key-Fact rules over the accepted plans and rows.
+///
+/// The caller supplies the same merged source set the planning gate builds
+/// (accepted promise rows plus any staged-ancestor/current promise events), so
+/// this applies the one shared [`turning_beat_promise_rule`] and
+/// [`secret_reveal_is_promised`] decision to the accepted plans rather than a
+/// copy of the gate. Finding codes match the planning gate exactly.
+pub(crate) fn cascade_promise_findings(
+    scenes: &[(i32, i32, PlannedScene)],
+    promises: &BTreeMap<String, PromiseGate>,
+    key_facts: &[crate::sqlite::records::CanonicalFact],
+    normalize: impl Fn(&PlanningRef) -> String,
+) -> Vec<super::values::CascadeSceneFinding> {
+    let mut findings = Vec::new();
+    for (book_number, chapter_number, scene) in scenes {
+        let rule_scene = PromiseRuleScene::from_planned_scene(*book_number, *chapter_number, scene);
+        if let Some(code) = match turning_beat_promise_rule(&rule_scene, promises, &normalize) {
+            TurningBeatPromiseRule::Satisfied => None,
+            TurningBeatPromiseRule::MissingPromise => {
+                Some("turning_beat_information_dependent_without_promise")
+            }
+            TurningBeatPromiseRule::Unknown { .. } => Some("turning_beat_promise_unknown"),
+            TurningBeatPromiseRule::NotPlantedEarlier { .. } => {
+                Some("turning_beat_promise_not_planted_earlier")
+            }
+        } {
+            findings.push(super::values::CascadeSceneFinding {
+                book_number: *book_number,
+                chapter_number: *chapter_number,
+                scene_order: scene.scene_order,
+                code: code.to_string(),
+                message: format!(
+                    "book {book_number} chapter {chapter_number} scene {}: the Turning Beat \
+                     depends on information without an earlier-planted promise ({code})",
+                    scene.scene_order
+                ),
+                axis: None,
+                expected_opening: None,
+            });
+        }
+    }
+
+    for fact in key_facts {
+        let Some(kind) = spindle_core::key_fact::key_fact_kind_from_predicate(&fact.predicate)
+        else {
+            continue;
+        };
+        if !kind.is_secret_reveal() || fact.superseded_by.is_some() {
+            continue;
+        }
+        if crate::format::is_planning_only_secret_fact(fact) {
+            continue;
+        }
+        let Some(from) = fact.valid_from.as_ref() else {
+            continue;
+        };
+        if from.scene_order.is_none() {
+            continue;
+        }
+        let Some(scene) = scenes.iter().find(|(book, chapter, scene)| {
+            *book == from.book_number
+                && *chapter == from.chapter_number
+                && scene.scene_order == from.scene_order.unwrap_or_default()
+        }) else {
+            continue;
+        };
+        let placement = PlanningStoryPlacement {
+            book_number: from.book_number,
+            chapter_number: from.chapter_number,
+            scene_order: from.scene_order,
+            note: None,
+        };
+        if fact.valid_until.as_ref().is_some_and(|until| {
+            crate::format::story_index_from_placement(until)
+                < crate::format::story_index(
+                    placement.book_number,
+                    placement.chapter_number,
+                    placement.scene_order.unwrap_or_default(),
+                )
+        }) {
+            continue;
+        }
+        let code = if fact.subject_table != "character"
+            || fact
+                .subject_id
+                .as_deref()
+                .is_none_or(|id| !id.starts_with("character:"))
+        {
+            Some("key_fact_secret_reveal_requires_character_subject")
+        } else if !secret_reveal_is_promised(promises, &placement) {
+            Some("key_fact_secret_reveal_without_promise")
+        } else {
+            None
+        };
+        if let Some(code) = code {
+            findings.push(super::values::CascadeSceneFinding {
+                book_number: scene.0,
+                chapter_number: scene.1,
+                scene_order: scene.2.scene_order,
+                code: code.to_string(),
+                message: format!(
+                    "book {} chapter {} scene {}: Key Fact '{}' fails the reveal rule ({code})",
+                    scene.0,
+                    scene.1,
+                    scene.2.scene_order,
+                    spindle_core::key_fact::key_fact_display_predicate(&fact.predicate)
+                ),
+                axis: None,
+                expected_opening: None,
+            });
+        }
+    }
+    findings
 }

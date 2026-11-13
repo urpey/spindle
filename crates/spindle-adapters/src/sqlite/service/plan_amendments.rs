@@ -1,5 +1,7 @@
 use super::*;
 
+mod cascade;
+
 impl SqliteSpindleService {
     // =========================================================================
     // Plan-amendment ratification (ADR 0003 — the living-outline apply
@@ -32,6 +34,7 @@ impl SqliteSpindleService {
             ),
         };
 
+        let project = self.repository.get_project(&input.project_id).await?;
         let stored = self
             .repository
             .list_plan_amendments(
@@ -41,8 +44,22 @@ impl SqliteSpindleService {
                 provenance,
             )
             .await?;
+        // Active downstream stale marks (McKee only; the table is never written
+        // for any other project, and the field is skipped when empty so a
+        // non-McKee response stays byte-identical).
+        let stale_scenes = if project.mckee_structured {
+            self.repository
+                .list_scene_plan_stale(&input.project_id, &active_branch.id, Some("stale"))
+                .await?
+                .into_iter()
+                .map(|row| row.into_core())
+                .collect()
+        } else {
+            Vec::new()
+        };
         Ok(ListPlanAmendmentsOutput {
             amendments: stored.into_iter().map(|a| a.into_core()).collect(),
+            stale_scenes,
         })
     }
 
@@ -101,7 +118,7 @@ impl SqliteSpindleService {
         use crate::sqlite::repository::PlanAmendmentDecision;
         use spindle_core::models::{DecidePlanAmendmentsOutput, PlanAmendmentDecisionResult};
 
-        self.repository.get_project(&input.project_id).await?;
+        let project = self.repository.get_project(&input.project_id).await?;
         let active_branch = self.repository.get_active_branch(&input.project_id).await?;
         let decided_by = input
             .decided_by
@@ -226,6 +243,8 @@ impl SqliteSpindleService {
                     error: None,
                     applied_record_id: None,
                     note: item.note,
+                    cascade: None,
+                    cascade_error: None,
                 });
                 continue;
             }
@@ -247,6 +266,8 @@ impl SqliteSpindleService {
                         error: None,
                         applied_record_id: None,
                         note: item.note,
+                        cascade: None,
+                        cascade_error: None,
                     });
                 }
                 Action::Apply => {
@@ -258,6 +279,7 @@ impl SqliteSpindleService {
                     .await
                     {
                         Ok((applied_record_id, prior_state)) => {
+                            let prior_state_snapshot = prior_state.clone();
                             self.repository
                                 .decide_plan_amendment(
                                     &item.amendment_id,
@@ -275,12 +297,45 @@ impl SqliteSpindleService {
                                 )
                                 .await?;
                             applied_count += 1;
+                            // The apply has really happened (it is never rolled
+                            // back). The cascade is best-effort: a failure is
+                            // reported on the decision, never disguised as a
+                            // failed apply.
+                            let (cascade, cascade_error) = if project.mckee_structured {
+                                let effect = cascade::AmendmentApplyEffect {
+                                    prior_state: prior_state_snapshot.as_deref(),
+                                    created_promise_id: applied_record_id.as_deref(),
+                                    payload: &item.effective_payload,
+                                };
+                                match Box::pin(self.run_amendment_cascade(
+                                    &project,
+                                    &item.amendment,
+                                    effect,
+                                    &active_branch.id,
+                                    &decided_by,
+                                ))
+                                .await
+                                {
+                                    Ok(outcome) => {
+                                        let keep = !outcome.triggers.is_empty()
+                                            || outcome.marked_stale > 0
+                                            || outcome.cleared_stale > 0
+                                            || !outcome.reconciliation_amendment_ids.is_empty();
+                                        (keep.then_some(outcome), None)
+                                    }
+                                    Err(err) => (None, Some(format!("{err:#}"))),
+                                }
+                            } else {
+                                (None, None)
+                            };
                             results.push(PlanAmendmentDecisionResult {
                                 amendment_id: item.amendment_id,
                                 outcome: "applied".to_string(),
                                 error: None,
                                 applied_record_id,
                                 note: item.note,
+                                cascade,
+                                cascade_error,
                             });
                         }
                         Err(err) => {
@@ -291,6 +346,8 @@ impl SqliteSpindleService {
                                 error: Some(format!("{err:#}")),
                                 applied_record_id: None,
                                 note: item.note,
+                                cascade: None,
+                                cascade_error: None,
                             });
                             stopped = true;
                         }
@@ -299,11 +356,34 @@ impl SqliteSpindleService {
             }
         }
 
+        let mut staged_reconciliation_ids = Vec::new();
+        for result in &results {
+            if let Some(cascade) = result.cascade.as_ref() {
+                for id in &cascade.reconciliation_amendment_ids {
+                    if !staged_reconciliation_ids.contains(id) {
+                        staged_reconciliation_ids.push(id.clone());
+                    }
+                }
+            }
+        }
+        let stale_scenes = if project.mckee_structured {
+            self.repository
+                .list_scene_plan_stale(&input.project_id, &active_branch.id, Some("stale"))
+                .await?
+                .into_iter()
+                .map(|row| row.into_core())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         Ok(DecidePlanAmendmentsOutput {
             results,
             applied_count,
             rejected_count,
             failed_count,
+            stale_scenes,
+            staged_reconciliation_ids,
         })
     }
 
@@ -390,8 +470,8 @@ impl SqliteSpindleService {
     /// **no amendment class can add Sequence membership** either. Rather than
     /// silently writing a value-less scene, the dispatcher directs the author to
     /// restage the Chapter planning artifact (which re-validates the whole plan
-    /// and its `schedule.sequences`). The downstream amendment-class cascade for
-    /// Sequences is the #34 follow-up, not part of this fix.
+    /// and its `schedule.sequences`). Adding Sequence membership through an
+    /// amendment is not supported.
     pub(super) async fn ensure_amendment_class_supported(
         &self,
         amendment: &crate::sqlite::records::StoredPlanAmendment,
@@ -411,7 +491,35 @@ impl SqliteSpindleService {
              membership, which planning acceptance refuses. Restage the Chapter planning \
              artifact instead — plan a new chapter-plan proposal with the Scene's value plan and \
              the updated schedule.sequences — so the whole plan is re-validated. Adding Sequence \
-             membership through an amendment is follow-up #34."
+             membership through a plan amendment is not supported."
+        )
+    }
+
+    /// Refuse a `scene_replace` payload that carries the issue #34 value-plan
+    /// repair keys on a project with no value plan (non-McKee). The apply path
+    /// would otherwise accept the keys and silently discard them; an explicit
+    /// error is the only honest contract.
+    pub(super) async fn ensure_value_plan_payload_supported(
+        &self,
+        amendment: &crate::sqlite::records::StoredPlanAmendment,
+        payload: &serde_json::Value,
+    ) -> Result<()> {
+        let carries_value_plan = payload
+            .get("primary_value_axis")
+            .is_some_and(|value| !value.is_null())
+            || payload
+                .get("secondary_value_axes")
+                .is_some_and(|value| !value.is_null());
+        if !carries_value_plan {
+            return Ok(());
+        }
+        let project = self.repository.get_project(&amendment.project_id).await?;
+        if project.mckee_structured {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "scene_replace carries value-plan keys (primary_value_axis / secondary_value_axes),              but project '{}' is not McKee-structured and stores no value plan. Remove those keys              — a non-McKee scene replacement only changes summary/purpose/cast/location/rating —              or convert the project to the McKee structure and restage the amendment.",
+            amendment.project_id
         )
     }
 
@@ -436,8 +544,29 @@ impl SqliteSpindleService {
         // any write so the batch stays atomic.
         self.ensure_amendment_class_supported(amendment, class)
             .await?;
+        // `scene_replace` accepts the value-plan repair keys only on a McKee
+        // project: on any other project the apply path would silently discard
+        // them, so reject the payload instead of losing data (issue #34).
+        if class == "scene_replace" {
+            self.ensure_value_plan_payload_supported(amendment, payload)
+                .await?;
+        }
 
         if class == "promise_followup" {
+            // The optional payoff-Turning-Beat reference is meaningless without a
+            // planned payoff: the direct promise write refuses the pair, so the
+            // amendment is refused here before any write.
+            if payload
+                .get("planned_payoff_turning_beat")
+                .is_some_and(|value| !value.is_null())
+                && payload
+                    .get("planned_payoff")
+                    .is_none_or(|value| value.is_null())
+            {
+                anyhow::bail!(
+                    "promise_followup has planned_payoff_turning_beat without planned_payoff;                      set the planned payoff Scene that owns the Beat, or drop the Beat reference"
+                );
+            }
             // Placement guard (ADR D3): the followup must plant at or after the
             // earliest undrafted chapter in its book — never into drafted reality.
             let placement = payload
@@ -554,6 +683,10 @@ impl SqliteSpindleService {
         // caller reaches it directly.
         self.ensure_amendment_class_supported(amendment, class)
             .await?;
+        // Project marker: only a McKee project has a value plan for
+        // `scene_replace` to repair (issue #34). Reading it here keeps a
+        // non-McKee apply byte-identical to before.
+        let project = self.repository.get_project(&amendment.project_id).await?;
 
         if class == "promise_followup" {
             let placement = payload
@@ -574,6 +707,10 @@ impl SqliteSpindleService {
                 .and_then(|v| v.as_str())
                 .context("promise_followup missing description")?
                 .to_string();
+            let planned_payoff_turning_beat = payload
+                .get("planned_payoff_turning_beat")
+                .and_then(|value| value.as_i64())
+                .map(|value| value as i32);
             let out = self
                 .create_narrative_promise(CreateNarrativePromiseInput {
                     project_id: amendment.project_id.clone(),
@@ -582,8 +719,7 @@ impl SqliteSpindleService {
                     planted_at,
                     planned_payoff,
                     notes: Vec::new(),
-
-                    planned_payoff_turning_beat: None,
+                    planned_payoff_turning_beat,
                     target_act: None,
                 })
                 .await?;
@@ -646,9 +782,10 @@ impl SqliteSpindleService {
         // McKee project: they do not invent value-plan fields, and their known
         // structural side effects are documented rather than blocked here. A
         // dropped Scene that a Sequence still lists leaves a dangling member, and
-        // a reorder can break the axis chain; this pass does not cascade into
-        // `schedule.sequences` (#34), so the next Chapter planning acceptance
-        // reports the result instead. Refusing these would strand the living
+        // a reorder can break the axis chain. The McKee cascade (issue #34) does
+        // not touch `schedule.sequences`, so the next Chapter planning acceptance
+        // reports a dangling member; a broken axis chain IS re-validated
+        // downstream by the cascade. Refusing these would strand the living
         // outline without removing the actual inconsistency.
         match class {
             "synopsis_update" => {
@@ -758,19 +895,26 @@ impl SqliteSpindleService {
                 scenes.retain(|(_, s)| s.scene_order != order);
             }
             "scene_replace" => {
+                // Defence in depth for the explicit non-McKee contract: preflight
+                // already refuses the keys, but a direct apply must not silently
+                // discard them either.
+                self.ensure_value_plan_payload_supported(amendment, payload)
+                    .await?;
                 let order = payload
                     .get("scene_order")
                     .and_then(|v| v.as_i64())
                     .context("scene_replace missing scene_order")?
                     as i32;
                 if let Some((_, target)) = scenes.iter_mut().find(|(_, s)| s.scene_order == order) {
-                    // Deliberately only prose/cast/place edits. The value plan
-                    // (primary and secondary axes, opposition, Gap, scene
-                    // question, Inaction Cost, risk, dilemma) and the structured
-                    // Beats (`beats` plus the `turning_beat` reference) are
-                    // carried through untouched, so a replacement can never drop
-                    // a McKee Scene out of the value chain or its Sequence
-                    // membership.
+                    // Prose/cast/place edits, plus (issue #34) an optional
+                    // value-plan repair: `primary_value_axis` and
+                    // `secondary_value_axes` replace the stored axes when the
+                    // payload carries them, and are carried through untouched
+                    // when it does not (the pre-#34 contract, so a replacement
+                    // can never silently drop a McKee Scene out of the value
+                    // chain). The rest of the value plan (opposition, Gap,
+                    // scene question, Inaction Cost, risk, dilemma) and the
+                    // structured Beats stay untouched.
                     target.summary = payload
                         .get("summary")
                         .and_then(|v| v.as_str())
@@ -798,6 +942,27 @@ impl SqliteSpindleService {
                         && let Ok(parsed) = serde_json::from_value(rating.clone())
                     {
                         target.content_rating = Some(parsed);
+                    }
+                    // Additive value-plan repair (issue #34). Absent keys keep
+                    // the previous contract (the value plan is carried through
+                    // untouched); present keys replace the whole axis. Only a
+                    // McKee project stores a value plan at all, so a non-McKee
+                    // project's apply behaviour is unchanged.
+                    if project.mckee_structured {
+                        if let Some(value) = payload.get("primary_value_axis")
+                            && !value.is_null()
+                        {
+                            target.primary_value_axis = Some(
+                                serde_json::from_value(value.clone())
+                                    .context("scene_replace has an invalid primary_value_axis")?,
+                            );
+                        }
+                        if let Some(value) = payload.get("secondary_value_axes")
+                            && !value.is_null()
+                        {
+                            target.secondary_value_axes = serde_json::from_value(value.clone())
+                                .context("scene_replace has invalid secondary_value_axes")?;
+                        }
                     }
                 }
             }

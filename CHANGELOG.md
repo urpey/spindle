@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+- Add the **McKee amendment cascade over unwritten Scenes** (issue #34). On a
+  McKee project, accepting a plan amendment re-validates the later planned,
+  undrafted Scenes when the applied effect changed (a) a planned Scene's
+  **opening or closing Charge** on any Value Axis, (b) a Key Fact's planned-Scene
+  binding, or (c) a Narrative Promise payoff's planned-Scene/Turning-Beat binding.
+  The trigger is detected by comparing the amendment's recorded `prior_state` with
+  the plan the apply actually wrote — never inferred from the amendment class —
+  and the **first changed position is a positional diff of the prior/post
+  planned-scene arrays** (summary/value plan/cast/location/beats as identity), so
+  a length-only change can no longer anchor at index 0 and sweep earlier Scenes.
+  For a drop or reorder the renumbering puts everything from the first differing
+  index onward in scope; a `scene_replace` that rewrites only an opening Charge
+  still triggers and includes the amended Scene. Scope is the amended Scene plus
+  later Scenes in the amended chapter and all later chapters — never earlier
+  Scenes.
+  The pass re-runs the SAME shared rule functions the planning gate uses — the
+  #26 value-chain walk, the #28 information-dependent Turning Beat decision and
+  secret-reveal promise predicate, and one merged promise-gate assembly built
+  from accepted rows plus the staged-ancestor/all-proposal promise events the gate
+  can see (via the branch-wide applied receipt map) — so the two cannot drift. A
+  failing Scene is persisted as stale (`scene_plan_stale`, additive migration
+  V0062; one row per Scene, repeat cascades update it) with the finding codes, a
+  reason and the triggering amendment id, exposed additively through
+  `list_plan_amendments` / `decide_plan_amendments` as `stale_scenes`. Drafting is
+  decided **per Scene placement**, so an undrafted Scene in a partly drafted
+  chapter is still validated; a drafted Scene is never marked or rewritten.
+  A broken value-chain link stages one `scene_replace` reconciliation whose
+  optional `primary_value_axis` / `secondary_value_axes` payload sets the opening
+  Charge the amended chain requires (ADR
+  [0008](docs/adr/0008-plan-amendment-value-plan-payload.md)); a
+  `key_fact_secret_reveal_without_promise` stages a `promise_followup` at the
+  latest earlier valid planned placement with its payoff at the failing Scene.
+  A repeat cascade reuses a still-staged repair only while it is still correct and
+  otherwise supersedes it (recording `decided_at`/`decided_by` and the reason,
+  additive V0063 `plan_amendment.decision_note`), so a Scene never accumulates
+  duplicate proposals. A failure with no expressible repair (a planned Beat's
+  promise reference, a Key Fact row, a non-event Charge repair) is marked stale
+  proposal-less with an explicit reason, never a fabricated empty repair.
+  Applying a reconciliation clears the mark only when the Scene passes; a mark
+  whose Scene became drafted is kept as honest stale/drafted history, never
+  silently "cleared", and mark + stage + supersede + clear commit in one writer
+  transaction. A `promise_followup` apply is not a no-op: its executed promise is
+  part of the shared source set and later Scenes are re-validated so the mark it
+  repairs clears (or is re-marked with the remaining codes). `scene_replace`'s
+  value-plan keys are refused with a readable error on a non-McKee project instead
+  of being silently discarded. A non-McKee project's other plan-amendment
+  behaviour and tool outputs are unchanged (the new outputs are skipped when
+  empty). Honest limitation: no current amendment class can edit a Key Fact row,
+  an existing Narrative Promise, or a planned Beat's promise reference, so a
+  direct change to any of those is not expressible; the detection hook covers the
+  plan-shape binding effect a class can produce. Public discovery surface: the
+  additive output fields grow full `tools/list` bytes for the profiles that carry
+  `decide_plan_amendments` — default and legacy-all 876,530 → 877,618, write
+  577,224 → 578,312, authoring 444,744 → 445,832, workflow-authoring 213,349 →
+  214,437 (input bytes unchanged: 192,969 / 136,832 / 109,601 / 106,703) — so
+  `tools/profile-budgets.json` raises exactly those measured compatibility
+  ceilings; the `tools/list` snapshots and the generated legacy schema inventory
+  are regenerated in the same PR, and no canonical ceiling or lint waiver changes.
 - Add the **independent McKee critic and park-for-checkpoint rule**, with
   provenance-gated independence (ADR 0005). A McKee project now selects
   `scene-critic-mckee-v1` (`spindle_core::drafting::critic`) instead of

@@ -2952,7 +2952,8 @@ fn parse_replan_output(output: &str) -> anyhow::Result<Vec<RawPlanAmendment>> {
 ///   * `promise_followup` — the `create_narrative_promise` delta:
 ///     `{promise_type: String, description: String,
 ///       planted_at_placement: {book_number: i32, chapter_number: i32, scene_order?: i32},
-///       planned_payoff?: {book_number: i32, chapter_number: i32, scene_order?: i32}}`
+///       planned_payoff?: {book_number: i32, chapter_number: i32, scene_order?: i32},
+///       planned_payoff_turning_beat?: i32 (1-based, requires planned_payoff)}`
 fn plan_amendment_payload_is_valid(class: &str, payload: &serde_json::Value) -> bool {
     fn nonempty_str(v: &serde_json::Value, key: &str) -> bool {
         v.get(key)
@@ -2989,6 +2990,29 @@ fn plan_amendment_payload_is_valid(class: &str, payload: &serde_json::Value) -> 
                     .get("character_ids")
                     .map(|c| c.is_array())
                     .unwrap_or(false)
+                // Optional value-plan repair (issue #34): the payload may carry
+                // a complete primary axis and/or the secondary axes. Absent
+                // means "carry the stored value plan through untouched", which
+                // is the pre-#34 contract. The McKee apply path only uses these
+                // on a McKee project.
+                && payload
+                    .get("primary_value_axis")
+                    .is_none_or(|value| {
+                        value.is_null()
+                            || serde_json::from_value::<
+                                spindle_core::scene_value::SceneValueAxis,
+                            >(value.clone())
+                            .is_ok()
+                    })
+                && payload
+                    .get("secondary_value_axes")
+                    .is_none_or(|value| {
+                        value.is_null()
+                            || serde_json::from_value::<
+                                Vec<spindle_core::scene_value::SceneValueAxis>,
+                            >(value.clone())
+                            .is_ok()
+                    })
         }
         "scene_reorder" => payload
             .get("new_order")
@@ -3013,6 +3037,14 @@ fn plan_amendment_payload_is_valid(class: &str, payload: &serde_json::Value) -> 
                     None | Some(serde_json::Value::Null) => true,
                     Some(payoff) => placement_ok(payoff),
                 }
+                // Optional payoff-Turning-Beat reference (issue #34 cascade
+                // reconciliation): additive, absent keeps the old shape. The
+                // planned_payoff pairing is checked at pre-flight/apply.
+                && payload
+                    .get("planned_payoff_turning_beat")
+                    .is_none_or(|value| {
+                        value.is_null() || value.as_i64().is_some_and(|position| position >= 1)
+                    })
         }
         _ => false,
     }
