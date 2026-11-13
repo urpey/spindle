@@ -601,6 +601,95 @@ impl Repository {
             .await?
     }
 
+    /// The promise events declared by every staged or applied planning proposal
+    /// on one project branch.
+    ///
+    /// The planning gate sees events from an artifact's staged ancestors and the
+    /// current artifact. The amendment cascade has no current artifact, so it
+    /// uses this branch-wide superset of the same source kind: any event a future
+    /// gate could inherit as an ancestor. Using the superset can only make the
+    /// cascade *less* eager to mark a Scene stale, never more, so the cascade
+    /// still never contradicts what the gate would accept.
+    pub async fn planning_promise_events(
+        &self,
+        project_id: &str,
+        branch_id: &str,
+    ) -> Result<Vec<PlannedPromiseEvent>> {
+        let project_id = project_id.to_owned();
+        let branch_id = branch_id.to_owned();
+        self.pool()
+            .read(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT p.data FROM planning_proposal p \
+                     JOIN planning_session s ON s.id=p.session_id \
+                     WHERE p.status IN ('staged','applied') AND s.project_id=?1 \
+                       AND s.branch_id=?2 ORDER BY p.created_at, p.id",
+                )?;
+                let rows = stmt
+                    .query_map(rusqlite::params![project_id, branch_id], |row| {
+                        row.get::<_, String>(0)
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut events: Vec<PlannedPromiseEvent> = Vec::new();
+                for data in rows {
+                    if let Ok(proposal) = serde_json::from_str::<PlanningProposal>(&data) {
+                        for event in proposal.artifact.schedule.promise_events {
+                            if !events.contains(&event) {
+                                events.push(event);
+                            }
+                        }
+                    }
+                }
+                Ok(events)
+            })
+            .await
+    }
+
+    /// Proposal-ref → resolved record-id map from every applied planning receipt
+    /// on one project branch.
+    ///
+    /// Accepted chapter plans keep the promise references the producing artifact
+    /// used (an output ref, or a record id from an earlier session). The planning
+    /// gate normalizes those through its session receipt map; the amendment
+    /// cascade has no session, so it uses this branch-wide equivalent to compare
+    /// a planned Beat's promise reference with an accepted promise row.
+    pub async fn applied_planning_ref_map(
+        &self,
+        project_id: &str,
+        branch_id: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>> {
+        let project_id = project_id.to_owned();
+        let branch_id = branch_id.to_owned();
+        self.pool()
+            .read(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT r.returned_ids FROM planning_operation_receipt r \
+                     JOIN planning_proposal p ON p.id=r.proposal_id \
+                     JOIN planning_session s ON s.id=p.session_id \
+                     WHERE r.outcome='applied' AND s.project_id=?1 AND s.branch_id=?2 \
+                     ORDER BY r.recorded_at, r.proposal_id, r.operation_index",
+                )?;
+                let rows = stmt
+                    .query_map(rusqlite::params![project_id, branch_id], |row| {
+                        row.get::<_, String>(0)
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut map: std::collections::BTreeMap<String, String> =
+                    std::collections::BTreeMap::new();
+                for json in rows {
+                    if let Ok(pairs) =
+                        serde_json::from_str::<std::collections::BTreeMap<String, String>>(&json)
+                    {
+                        for (reference, id) in pairs {
+                            map.entry(reference).or_insert(id);
+                        }
+                    }
+                }
+                Ok(map)
+            })
+            .await
+    }
+
     /// The Acts accepted on one project branch, merged by order in decision
     /// order (a later decision overrides the same order). This is the
     /// deterministic read behind derived pacing breakpoints and the climax

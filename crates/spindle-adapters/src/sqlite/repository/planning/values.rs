@@ -62,12 +62,6 @@ impl SceneGateEntry {
             note: None,
         }
     }
-
-    /// The Turning Beat itself, when the reference resolves.
-    pub(super) fn turning_beat_entry(&self) -> Option<&SceneGateBeat> {
-        let index = self.turning_beat?.checked_sub(1)? as usize;
-        self.beats.get(index)
-    }
 }
 
 /// One planned Scene with the value fields the chain rules read, plus the

@@ -871,6 +871,8 @@ resume unchanged). The continuity and editorial-loop migrations:
 | V0059 | McKee Character Design: one `character_design` row per character (2–5 contradictions, public / personal / private layers, conscious desire, pressure on the protagonist, behaviour cues) with `hidden_self_fact_id` / `unconscious_desire_fact_id` pointing at secret canonical facts rather than duplicating those texts. Additive: existing projects keep no rows |
 | V0060 | McKee Narrative Promise payoff structure: `narrative_promise.planned_payoff_turning_beat` and `target_act` (both additive, nullable) |
 | V0061 | McKee realized report on `scene.realized_report`: nullable JSON holding the realized Value Turns, Character Effects, realized promise events and dramatised planned Key Facts. Additive: existing rows keep NULL and every read skips an unset report |
+| V0062 | McKee amendment cascade: `scene_plan_stale` (one readable row per planned Scene, `stale`/`cleared` history, finding codes, triggering amendment and optional `reconciliation_amendment_id` link to a normal `plan_amendment`). Additive: only a McKee project ever writes it |
+| V0063 | Plan-amendment audit note: nullable `plan_amendment.decision_note` recording why a still-staged row was superseded (ADR 0003 D2); existing rows keep NULL |
 
 ## Where to make changes
 
@@ -1333,40 +1335,72 @@ exactly as before; they cannot use Key Facts at all (the staging error above).
 On a McKee project a `scene_add` plan amendment is refused at pre-flight: the
 class cannot add Sequence membership or a value plan, so it must restage the
 Chapter planning artifact instead. `scene_replace` keeps the value-plan fields
-untouched unless its payload carries `primary_value_axis`/`secondary_value_axes`
-(the issue #34 repair shape), while `scene_drop`/`scene_reorder`/`synopsis_update`
-remain available and do not cascade into `schedule.sequences`.
+untouched unless its payload carries the optional `primary_value_axis` /
+`secondary_value_axes` repair keys (ADR
+[0008](adr/0008-plan-amendment-value-plan-payload.md)); those keys are refused on
+a non-McKee project instead of being silently discarded. `scene_drop`,
+`scene_reorder` and `synopsis_update` remain available and do not cascade into
+`schedule.sequences`.
 
 **Amendment cascade (issue #34, McKee only).** Accepting a plan amendment that
-changes a planned Scene's closing Charge on a Value Axis, a Key Fact's
+changes a planned Scene's **opening or closing Charge**, a Key Fact's
 planned-Scene binding, or a Narrative Promise payoff's planned-Scene/Turning-Beat
 binding triggers a downstream pass. The trigger is detected from the amendment's
 recorded `prior_state` against the plan the apply actually wrote, never from the
-amendment class. The pass re-runs the same pure value-chain and promise/Key-Fact
-rules the planning gate uses (`cascade_value_findings` /
-`cascade_promise_findings` call the shared rule functions, not copies) over the
-branch's accepted plans, and reports only later planned, undrafted Scenes. A
-drafted chapter — any persisted Scene row on the active branch — is never marked,
-rewritten or re-planned; its plan JSON and prose stay byte-identical. A no-op
-amendment stages nothing and marks nothing.
+amendment class, and the **first changed position comes from a positional diff of
+the prior/post planned-scene arrays** (summary/value plan/cast/location/beats),
+not from the closing-Charge vector: a length-only change no longer anchors at
+index 0. For a drop or reorder the renumbering puts everything from the first
+differing index onward in scope. Scope is the amended Scene (in particular when its
+opening Charge changed) plus later Scenes in the amended chapter and all later
+chapters — never earlier Scenes.
+
+The pass re-runs the SAME rule functions the planning gate uses. `values.rs`
+exposes the one value-chain walk; `promises.rs` exposes the one
+information-dependent Turning Beat decision, the one secret-reveal promise
+predicate, and the one merged promise-gate assembly (accepted rows plus the
+staged-ancestor/all-proposal promise events the gate can see). The cascade builds
+that same source set from the branch (`planning_promise_events` +
+`applied_planning_ref_map`) instead of re-implementing the rules, so the two can
+never drift. Findings are reported only for **later planned, undrafted Scenes**;
+drafting is decided **per Scene placement** (a saved Scene row for that
+book/chapter/scene_order), so an undrafted Scene in a partly drafted chapter is
+still validated. A drafted Scene is never marked, rewritten or re-planned; its
+plan JSON and prose stay byte-identical. A no-op amendment stages nothing and
+marks nothing, and a prose-only summary edit never fires a trigger (the binding
+identity excludes prose).
 
 A failing Scene is persisted in `scene_plan_stale` (V0062: one row per Scene, a
 repeat cascade updates it) with the finding codes, a reason and the triggering
-amendment id. When the failure is a broken value-chain link, one `scene_replace`
-reconciliation proposal is staged through the normal `plan_amendment` queue
-(ADR 0003, no parallel table) whose payload sets the Scene's opening Charge to
-the amended chain's required Charge; a changed repair supersedes the still-staged
-proposal instead of duplicating it. A failure with no expressible Charge repair
-is marked stale proposal-less. Applying a reconciliation clears the mark (the row
-is retained as `cleared`), supersedes a moot still-staged repair and re-runs the
-cascade once for that apply (reconciliations are staged, never auto-applied, so
-the re-run is bounded). `list_plan_amendments` and `decide_plan_amendments`
-expose the active marks additively (`stale_scenes`), and the staged reconciliation
-rows appear in the ordinary amendment list; a non-McKee project's outputs are
-unchanged. No amendment class can edit a Key Fact row or an existing Narrative
-Promise, so a direct change to either is not expressible — the detection hook
-exists and covers the plan-shape binding effect a class can produce, and says so
-rather than pretending coverage.
+amendment id. Reconciliation is staged through the normal `plan_amendment` queue
+(ADR 0003, no parallel table): a broken value-chain link gets a `scene_replace`
+whose value-plan payload sets the opening Charge the amended chain requires, and
+a `key_fact_secret_reveal_without_promise` gets a `promise_followup` planting a
+promise at the latest earlier valid planned placement with its payoff at the
+failing Scene (and the payoff Turning Beat when it is a Turn). A changed repair
+supersedes the still-staged proposal (stamping `decided_at`/`decided_by` and the
+reason, V0063); a repeat cascade reuses it while it still repairs the Scene. A
+failure with no expressible repair — a planned Beat's promise reference, a Key
+Fact row, or a non-event Charge repair — is marked stale proposal-less with an
+explicit reason, never a fabricated empty repair.
+
+Applying a reconciliation clears the mark (the row is retained as `cleared`),
+supersedes a moot still-staged repair and re-runs the cascade once for that apply.
+A `promise_followup` apply is not a no-op: its executed promise is part of the
+shared source set, and the Scenes after its executed placement are re-validated so
+the mark it was staged for clears — or, if another failure remains, is re-marked
+with the remaining codes. A mark is only cleared when the Scene passes in a
+validated set; a mark whose Scene became drafted is kept as honest stale/drafted
+history, never silently "cleared". Mark + stage + supersede + clear commit in one
+writer transaction, so a failure cannot leave an orphan proposal or a cleared mark
+beside a live one. `list_plan_amendments` and `decide_plan_amendments` expose the
+active marks additively (`stale_scenes`), the per-decision `cascade.triggers` use
+the typed `PlanAmendmentCascadeTrigger` enum, and the staged reconciliation rows
+appear in the ordinary amendment list; a non-McKee project's outputs are
+unchanged. No amendment class can edit a Key Fact row, an existing Narrative
+Promise, or a planned Beat's `promise` reference, so a direct change to any of
+those is not expressible — the detection hook covers the plan-shape effect a class
+can produce, and the no-proposal reason says so rather than pretending coverage.
 
 ### McKee realized reports and deterministic scene verify
 

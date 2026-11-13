@@ -302,12 +302,17 @@ impl SqliteSpindleService {
                             // reported on the decision, never disguised as a
                             // failed apply.
                             let (cascade, cascade_error) = if project.mckee_structured {
-                                let snapshot = prior_state_snapshot.as_deref().unwrap_or("{}");
+                                let effect = cascade::AmendmentApplyEffect {
+                                    prior_state: prior_state_snapshot.as_deref(),
+                                    created_promise_id: applied_record_id.as_deref(),
+                                    payload: &item.effective_payload,
+                                };
                                 match Box::pin(self.run_amendment_cascade(
                                     &project,
                                     &item.amendment,
-                                    snapshot,
+                                    effect,
                                     &active_branch.id,
+                                    &decided_by,
                                 ))
                                 .await
                                 {
@@ -490,6 +495,34 @@ impl SqliteSpindleService {
         )
     }
 
+    /// Refuse a `scene_replace` payload that carries the issue #34 value-plan
+    /// repair keys on a project with no value plan (non-McKee). The apply path
+    /// would otherwise accept the keys and silently discard them; an explicit
+    /// error is the only honest contract.
+    pub(super) async fn ensure_value_plan_payload_supported(
+        &self,
+        amendment: &crate::sqlite::records::StoredPlanAmendment,
+        payload: &serde_json::Value,
+    ) -> Result<()> {
+        let carries_value_plan = payload
+            .get("primary_value_axis")
+            .is_some_and(|value| !value.is_null())
+            || payload
+                .get("secondary_value_axes")
+                .is_some_and(|value| !value.is_null());
+        if !carries_value_plan {
+            return Ok(());
+        }
+        let project = self.repository.get_project(&amendment.project_id).await?;
+        if project.mckee_structured {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "scene_replace carries value-plan keys (primary_value_axis / secondary_value_axes),              but project '{}' is not McKee-structured and stores no value plan. Remove those keys              — a non-McKee scene replacement only changes summary/purpose/cast/location/rating —              or convert the project to the McKee structure and restage the amendment.",
+            amendment.project_id
+        )
+    }
+
     /// Cheap referential + immutability pre-flight for one `apply` decision (ADR
     /// 0003 D3). Re-validates the payload per class, runs the immutability guard,
     /// and confirms the amendment coheres with the CURRENT plan. No writes. Runs
@@ -511,8 +544,29 @@ impl SqliteSpindleService {
         // any write so the batch stays atomic.
         self.ensure_amendment_class_supported(amendment, class)
             .await?;
+        // `scene_replace` accepts the value-plan repair keys only on a McKee
+        // project: on any other project the apply path would silently discard
+        // them, so reject the payload instead of losing data (issue #34).
+        if class == "scene_replace" {
+            self.ensure_value_plan_payload_supported(amendment, payload)
+                .await?;
+        }
 
         if class == "promise_followup" {
+            // The optional payoff-Turning-Beat reference is meaningless without a
+            // planned payoff: the direct promise write refuses the pair, so the
+            // amendment is refused here before any write.
+            if payload
+                .get("planned_payoff_turning_beat")
+                .is_some_and(|value| !value.is_null())
+                && payload
+                    .get("planned_payoff")
+                    .is_none_or(|value| value.is_null())
+            {
+                anyhow::bail!(
+                    "promise_followup has planned_payoff_turning_beat without planned_payoff;                      set the planned payoff Scene that owns the Beat, or drop the Beat reference"
+                );
+            }
             // Placement guard (ADR D3): the followup must plant at or after the
             // earliest undrafted chapter in its book — never into drafted reality.
             let placement = payload
@@ -653,6 +707,10 @@ impl SqliteSpindleService {
                 .and_then(|v| v.as_str())
                 .context("promise_followup missing description")?
                 .to_string();
+            let planned_payoff_turning_beat = payload
+                .get("planned_payoff_turning_beat")
+                .and_then(|value| value.as_i64())
+                .map(|value| value as i32);
             let out = self
                 .create_narrative_promise(CreateNarrativePromiseInput {
                     project_id: amendment.project_id.clone(),
@@ -661,8 +719,7 @@ impl SqliteSpindleService {
                     planted_at,
                     planned_payoff,
                     notes: Vec::new(),
-
-                    planned_payoff_turning_beat: None,
+                    planned_payoff_turning_beat,
                     target_act: None,
                 })
                 .await?;
@@ -838,6 +895,11 @@ impl SqliteSpindleService {
                 scenes.retain(|(_, s)| s.scene_order != order);
             }
             "scene_replace" => {
+                // Defence in depth for the explicit non-McKee contract: preflight
+                // already refuses the keys, but a direct apply must not silently
+                // discard them either.
+                self.ensure_value_plan_payload_supported(amendment, payload)
+                    .await?;
                 let order = payload
                     .get("scene_order")
                     .and_then(|v| v.as_i64())

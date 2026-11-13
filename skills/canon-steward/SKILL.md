@@ -51,6 +51,7 @@ When a run uses `replan_policy: "propose_all"`, `replan_chapter` stages proposed
 - Judge each amendment's `rationale` against summarized chapter reality.
 - **Immutability guard**: Amendments targeting chapters that already have drafted scenes are rejected.
 - Applying an amendment snapshots `prior_state` and increments `plan_revision` (`docs/adr/0003-plan-amendment-classes.md`).
+- On a McKee project, `list_plan_amendments` also returns the active `stale_scenes`: later planned, undrafted Scenes an accepted amendment invalidated. Their staged reconciliation rows (`scene_replace` value-plan repairs or `promise_followup` setup promises) appear in the ordinary amendment list and are decided like any other amendment; a stale Scene with no proposal needs a manual Chapter replan.
 
 ## Read-Only Subagent Review
 

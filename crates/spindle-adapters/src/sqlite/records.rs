@@ -3632,7 +3632,7 @@ impl<'a> TryFrom<&Row<'a>> for StoredStyleEditCandidate {
 
 pub const PLAN_AMENDMENT_COLUMNS: &str = "id, project_id, branch_id, source_chapter, book_number, \
      authoring_run_id, amendment_class, target_chapter, payload, rationale, confidence, \
-     status, decided_at, decided_by, prior_state, created_at, updated_at";
+     status, decided_at, decided_by, decision_note, prior_state, created_at, updated_at";
 
 pub const SCENE_PLAN_STALE_COLUMNS: &str = "id, project_id, branch_id, book_number, chapter_number, \
      scene_order, status, reason, finding_codes, triggering_amendment_id, \
@@ -3725,6 +3725,7 @@ pub struct StoredPlanAmendment {
     pub status: String,
     pub decided_at: Option<Timestamp>,
     pub decided_by: Option<String>,
+    pub decision_note: Option<String>,
     pub prior_state: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -3748,9 +3749,10 @@ impl<'a> TryFrom<&Row<'a>> for StoredPlanAmendment {
             status: row::text(r, 11)?,
             decided_at: row::opt_time(r, 12)?,
             decided_by: row::opt_text(r, 13)?,
-            prior_state: row::opt_text(r, 14)?,
-            created_at: row::time(r, 15)?,
-            updated_at: row::time(r, 16)?,
+            decision_note: row::opt_text(r, 14)?,
+            prior_state: row::opt_text(r, 15)?,
+            created_at: row::time(r, 16)?,
+            updated_at: row::time(r, 17)?,
         })
     }
 }
@@ -3774,6 +3776,7 @@ impl StoredPlanAmendment {
             status: self.status,
             decided_at: self.decided_at.map(|t| t.to_rfc3339()),
             decided_by: self.decided_by,
+            decision_note: self.decision_note,
             prior_state: self.prior_state,
             created_at: self.created_at.to_rfc3339(),
             updated_at: self.updated_at.to_rfc3339(),

@@ -9451,6 +9451,10 @@ pub struct PlanAmendment {
     /// Ratification audit — who recorded the decision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided_by: Option<String>,
+    /// Why a still-staged amendment was superseded. `None` on amendments that
+    /// have not been superseded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_note: Option<String>,
     // ADR D4 history: the affected plan slice snapshotted at apply time, before
     // the write. `None` until an apply captures it (Part B).
     /// The affected plan slice snapshotted at apply time, before the write.
@@ -9572,27 +9576,45 @@ pub struct ScenePlanStale {
     pub cleared_at: Option<String>,
 }
 
+/// The closed set of applied effects that can trigger the McKee amendment
+/// cascade (issue #34). The vocabulary is part of the public contract: it is
+/// transported as these variants, never as free-form strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanAmendmentCascadeTrigger {
+    /// A planned Scene's closing Charge changed on at least one Value Axis.
+    ClosingCharge,
+    /// A planned Scene's opening Charge changed on at least one Value Axis.
+    OpeningCharge,
+    /// A Key Fact's planned-Scene binding changed.
+    KeyFact,
+    /// A Narrative Promise payoff's planned-Scene or Turning-Beat binding
+    /// changed.
+    PromisePayoff,
+    /// The applied amendment is itself a cascade reconciliation, so its own
+    /// Scene is re-validated even without a further plan change.
+    ReconciliationRepair,
+    /// The applied amendment is a `promise_followup`; the promise placements it
+    /// executed are re-validated downstream.
+    PromiseFollowup,
+}
+
 /// What accepting one plan amendment did to the downstream plan (issue #34).
 ///
-/// `triggers` names the detected trigger kinds: `closing_charge` (a planned
-/// Scene's closing Charge on a Value Axis changed), `key_fact` (a Key Fact's
-/// planned-Scene binding changed), `promise_payoff` (a Narrative Promise payoff
-/// placement changed), or `reconciliation_repair` (the applied amendment is
-/// itself a cascade reconciliation, so its own Scene is re-validated even
-/// without a further trigger). `reconciliation_amendment_ids` are the staged
-/// `scene_replace` proposals this decision staged (a repeat cascade reuses a
-/// still-staged proposal instead of staging a duplicate).
+/// `triggers` names the detected trigger kinds. `reconciliation_amendment_ids`
+/// are the staged reconciliation proposals this decision staged (a repeat
+/// cascade reuses a still-staged proposal instead of staging a duplicate).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PlanAmendmentCascadeOutcome {
-    /// Detected trigger kinds: `closing_charge`, `key_fact`, `promise_payoff`
-    /// or `reconciliation_repair`.
+    /// Detected trigger kinds (deduplicated, detection order).
     #[serde(default)]
-    pub triggers: Vec<String>,
+    pub triggers: Vec<PlanAmendmentCascadeTrigger>,
     /// How many downstream Scenes were marked stale by this apply.
     pub marked_stale: usize,
     /// How many previously stale Scenes now pass and had their mark cleared.
     pub cleared_stale: usize,
-    /// The `scene_replace` reconciliation proposals staged by this apply.
+    /// The reconciliation proposals staged by this apply (`scene_replace` and
+    /// `promise_followup`).
     #[serde(default)]
     pub reconciliation_amendment_ids: Vec<String>,
 }
@@ -10256,6 +10278,7 @@ mod tests {
             status: "staged".to_string(),
             decided_at: None,
             decided_by: None,
+            decision_note: None,
             prior_state: None,
             created_at: "2026-07-20T00:00:00Z".to_string(),
             updated_at: "2026-07-20T00:00:00Z".to_string(),

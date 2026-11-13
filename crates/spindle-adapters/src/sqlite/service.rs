@@ -2952,7 +2952,8 @@ fn parse_replan_output(output: &str) -> anyhow::Result<Vec<RawPlanAmendment>> {
 ///   * `promise_followup` — the `create_narrative_promise` delta:
 ///     `{promise_type: String, description: String,
 ///       planted_at_placement: {book_number: i32, chapter_number: i32, scene_order?: i32},
-///       planned_payoff?: {book_number: i32, chapter_number: i32, scene_order?: i32}}`
+///       planned_payoff?: {book_number: i32, chapter_number: i32, scene_order?: i32},
+///       planned_payoff_turning_beat?: i32 (1-based, requires planned_payoff)}`
 fn plan_amendment_payload_is_valid(class: &str, payload: &serde_json::Value) -> bool {
     fn nonempty_str(v: &serde_json::Value, key: &str) -> bool {
         v.get(key)
@@ -3036,6 +3037,14 @@ fn plan_amendment_payload_is_valid(class: &str, payload: &serde_json::Value) -> 
                     None | Some(serde_json::Value::Null) => true,
                     Some(payoff) => placement_ok(payoff),
                 }
+                // Optional payoff-Turning-Beat reference (issue #34 cascade
+                // reconciliation): additive, absent keeps the old shape. The
+                // planned_payoff pairing is checked at pre-flight/apply.
+                && payload
+                    .get("planned_payoff_turning_beat")
+                    .is_none_or(|value| {
+                        value.is_null() || value.as_i64().is_some_and(|position| position >= 1)
+                    })
         }
         _ => false,
     }
