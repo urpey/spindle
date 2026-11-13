@@ -2440,6 +2440,85 @@ impl SqliteSpindleService {
             );
         }
 
+        // McKee realized-report checks (`spindle_core::realized`): the writer's
+        // report of what a written Scene actually did, compared deterministically
+        // with the plan. They join the fast scene-verify subset and issue no
+        // model calls. Non-McKee projects produce nothing at all, so their
+        // findings are unchanged.
+        let realized_checks = super::mckee::RealizedChecks::from_requested(&requested_checks_set);
+        if project.mckee_structured && realized_checks.any() {
+            let key_facts = if realized_checks.key_fact {
+                self.repository
+                    .list_canonical_facts_by_project_and_branch(&project_id, &active_branch.id)
+                    .await?
+            } else {
+                Vec::new()
+            };
+            let promises = if realized_checks.promise_event {
+                self.repository
+                    .list_narrative_promises_by_project_and_branch(&project_id, &active_branch.id)
+                    .await?
+            } else {
+                Vec::new()
+            };
+            let (arcs, character_names) = if realized_checks.character_effect {
+                let arcs = self
+                    .repository
+                    .list_character_arcs_by_project(&project_id)
+                    .await?;
+                let names = self
+                    .repository
+                    .list_characters_by_project_and_branch(&project_id, &active_branch.id)
+                    .await?
+                    .into_iter()
+                    .map(|character| (character.id, character.name))
+                    .collect::<BTreeMap<_, _>>();
+                (arcs, names)
+            } else {
+                (Vec::new(), BTreeMap::new())
+            };
+            for scene in &scenes {
+                // The planned Scene comes from this branch's own chapter plan;
+                // a chapter with no plan simply has no planned value plan to
+                // compare (the promise and Key Fact rules still run).
+                let planned_scene = scoped_plans
+                    .iter()
+                    .find(|plan| {
+                        plan.branch_id == active_branch.id
+                            && plan.book_number == scene.book_number
+                            && plan.chapter_number == scene.chapter_number
+                    })
+                    .and_then(|plan| {
+                        plan.scenes
+                            .iter()
+                            .find(|planned| planned.scene_order == scene.scene_order)
+                    });
+                // A chapter-level planned `change` milestone may be satisfied
+                // in any Scene of the chapter, so the character-effect rule
+                // needs the chapter's other saved reports even when the caller
+                // pinned a single Scene.
+                let chapter_scenes = if realized_checks.character_effect {
+                    self.repository
+                        .list_scenes_by_chapter_and_branch(&scene.chapter_id, &active_branch.id)
+                        .await?
+                } else {
+                    Vec::new()
+                };
+                issues.extend(super::mckee::realized_findings_for_scene(
+                    super::mckee::RealizedFindingsInputs {
+                        scene,
+                        planned_scene,
+                        checks: realized_checks,
+                        key_facts: &key_facts,
+                        promises: &promises,
+                        arcs: &arcs,
+                        character_names: &character_names,
+                        chapter_scenes: &chapter_scenes,
+                    },
+                ));
+            }
+        }
+
         if let Some(requested_severities) = requested_severities_set.as_ref() {
             issues.retain(|issue| requested_severities.contains(issue.severity.as_str()));
         }

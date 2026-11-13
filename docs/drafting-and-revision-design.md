@@ -119,6 +119,25 @@ payoff Turning Beat and target Act never enter the packet. A McKee Scene with no
 planned value plan (no plan, primary axis, opposition, Gap or Turning Beat)
 produces an unavailable packet entry with a reason, never placeholder text.
 
+After drafting, the writer reports what the Scene realized
+(`spindle_core::realized`): the realized Value Turn per planned Value Axis
+(opening/closing Charge, Gap, Turning Beat), the Character Effect per present
+major character, the Narrative Promise events the Scene advanced, and the planned
+Key Facts it dramatised. The report rides all three continuity-carrying entry
+points — `commit_scene`'s continuity package, `authoring_save_scene_draft`'s
+structured fields, and the raw `save_scene_draft` field (which also applies
+realized promise status) — is persisted on the Scene (V0061), reads back through
+`get_entity(table: "scene")`, and travels with earlier Scenes' results in the
+briefing and scene context. Four deterministic checks hold it to the plan (exact
+Charge comparison, Gap by presence, Turning Beat by 1-based position; a planned
+change milestone may be chapter-wide). They run when `check_consistency` is asked
+for the scene-verify set (the run's verify step), not inside a bare save, so a
+mismatch goes through the bounded revise loop in a run; parked-findings commit
+handling is #33. A confirmed promise event has its status written by the system
+with the Scene recorded as the source scene. A save replaces the stored
+report; a Scene saved without one — and every non-McKee project — keeps its
+previous payload exactly.
+
 Only approved prose excerpts enter `exemplars`; existing do-rules remain rules.
 If none exist, say `exemplars=[]`. Never manufacture a “voice sample.” Default
 memory covers the previous eight accepted scenes plus the current chapter:

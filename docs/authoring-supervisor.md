@@ -117,11 +117,11 @@ The supervisor exposes 9 MCP tools through the `spindle-mcp` server:
 
 | Tool Name | Description | Key Input Fields | Key Output Fields |
 |---|---|---|---|
-| `authoring_prepare_run` | Verifies plans and resources are ready before drafting. | `project_id`, `book_number`, `start_chapter`, `end_chapter` | `ready_to_draft`, `missing_requirements` |
+| `authoring_prepare_run` | Verifies plans and resources are ready before drafting. On a McKee project a run needs a non-zero `max_revise_attempts`; an absent budget means the run default of `0` and is reported as a missing requirement. | `project_id`, `book_number`, `start_chapter`, `end_chapter` | `ready_to_draft`, `missing_requirements` |
 | `authoring_start_run` | Initializes a new authoring run. | `project_id`, `book_number`, `start_chapter`, `end_chapter`, `checkpoint_interval`, `mining_policy` (optional; `disabled` default or `propose_all`), `max_revise_attempts` (optional; `0` default, `1` or `2` to enable in-run verify/revise), `checkpoint_policy` (optional; `manual` default, `auto_advisory` or `auto_strict` to self-clear checkpoints), `replan_policy` (optional; `disabled` default or `propose_all` to replan future plans after each chapter summary) | `run_id`, `status` |
 | `authoring_status` | Retrieves status and next actions of the active run. | `project_id`, `run_id` (optional) | `status`, `next_action`, `blocked_reason`, `chapters` |
 | `authoring_execute_next` | Advances exactly one bounded drafting/commit/checkpoint action. Default mode is interactive/hybrid: non-explicit draft steps return host-draft instructions instead of calling the draft route. | `project_id`, `run_id`, `mode` (optional; use `"agent"` only for intentional full offload) | `run_id`, `executed_action`, `next_action`, `status` |
-| `authoring_save_scene_draft` | Saves host-drafted prose plus its required structured continuity package. Re-saving a scene in a chapter whose summary is already persisted invalidates that summary (row + artifact + `summary_saved`) so the pipeline regenerates it after the scene recommits. | `project_id`, `run_id`, scene placement, `full_text`, `summary`, `character_states`, `canonical_facts`, `relationship_updates`, `beats`, `continuity_notes` | `run_id`, `scene_id`, `scene_artifact_path`, `structured_update_count` |
+| `authoring_save_scene_draft` | Saves host-drafted prose plus its required structured continuity package. On a McKee project the package may carry (or consist of) a `realized_report`: the realized Value Turns, Character Effects, realized promise events and dramatised planned Key Facts, which persists with the Scene and satisfies the package on its own. Re-saving a scene in a chapter whose summary is already persisted invalidates that summary (row + artifact + `summary_saved`) so the pipeline regenerates it after the scene recommits. | `project_id`, `run_id`, scene placement, `full_text`, `summary`, `character_states`, `canonical_facts`, `relationship_updates`, `beats`, `continuity_notes`, `realized_report` (McKee) | `run_id`, `scene_id`, `scene_artifact_path`, `structured_update_count` |
 | `authoring_record_checkpoint_audit` | Attaches the deep consistency result returned by a separate `check_consistency(deep_check=true)` call to a pending checkpoint. | `project_id`, `run_id`, `start_chapter`, `end_chapter`, `deep_consistency` | `run_id`, `status` |
 | `authoring_review_checkpoint` | Marks a checkpoint reviewed and appends directives to resume. | `project_id`, `run_id`, `start_chapter`, `end_chapter`, `directives` | `run_id`, `status` |
 | `authoring_resolve_block` | Clears a blocked scene after operator inspection and advances it to the next safe phase, or resets a poisoned scene to pending-draft with `target_phase: "redraft"`. Forward advances also apply to scenes in a run blocked at RUN level (reconcile findings) even when the scene itself carries no block; only a truly unblocked scene in an unblocked run is refused. | `project_id`, `run_id`, `chapter_number`, `scene_order`, `target_phase` | `run_id`, `status` |
@@ -184,7 +184,15 @@ this extra preflight and defaults to skipping it.
 
 `max_revise_attempts` on `authoring_start_run` is optional and defaults to `0`
 (disabled — a run that never opts in behaves exactly as before: a saved draft
-goes straight to `commit scene changes`). Set it to `1` or `2` (a bound; higher
+goes straight to `commit scene changes`). **On a McKee project a run must prepare
+with a non-zero budget**: `authoring_prepare_run` reports the requirement and
+`ready_to_draft=false`, so `authoring_start_run` refuses a run whose budget is
+`0` or absent (an absent budget is the run default of zero). Without a budget a
+Scene that realized a turn different from its plan would have no bounded revise
+attempt before the checkpoint. `planning_readiness` passes no budget, so it
+reports the same missing requirement (and `ready_to_draft=false`) instead of
+advertising a ready range the run would refuse; unmarked projects are unaffected.
+Set it to `1` or `2` (a bound; higher
 values are rejected as an input error) to insert a deterministic `verify scene`
 step between `draft` and `commit`. Verify runs the scene-scoped check subset
 (`SCENE_VERIFY_CHECKS`, no model calls); a finding at or above `warning` sends
@@ -200,6 +208,52 @@ after revision") rather than re-revising the same findings, and any parked
 findings inherit to the checkpoint. Verify is deterministic and revision reuses
 the already-preflighted draft route, so `authoring_prepare_run` adds **no** extra
 coverage check for this policy; verify never blocks the run.
+
+### Realized reports, deterministic McKee verify and system-written promise status
+
+On a McKee project every saved Scene should carry a **realized report** — what
+the prose actually did (`spindle_core::realized`): the realized Value Turn per
+planned Value Axis (opening/closing Charge, Gap, Turning Beat), the Character
+Effect per present major character (`reinforce` / `reveal` / `contradict` /
+`change` / `none`), the Narrative Promise events the Scene advanced, and the
+planned Key Facts it dramatised. All three continuity-carrying save entry points
+accept it: `commit_scene`'s continuity package, `authoring_save_scene_draft`'s
+structured `realized_report` field, and the raw `save_scene_draft` field (the raw
+path has no continuity package, but it does apply realized promise status). It
+persists on the Scene (V0061), reads back through `get_entity(table: "scene")`,
+and travels with earlier Scenes' results in the briefing and scene context. A
+save replaces the recorded report; omitting it leaves the Scene with none, and a
+non-McKee project is unchanged.
+
+The report is held to the plan by four deterministic checks in the fast
+scene-verify subset — `realized_value_turn`, `realized_key_fact`,
+`realized_promise_event` and `character_effect` — with no model calls. They
+report `error` findings attributed to the Scene when the realized Charge, Gap
+presence or Turning Beat differs from the plan, when a planned Key Fact or
+planned promise event is missing from the report, when `change` is reported
+outside a planned `change` arc milestone (a milestone may be pinned to a Scene or
+placed chapter-wide, in which case a `change` anywhere in the chapter satisfies
+it), or when a planned change is reported only as a reveal while no Scene in the
+chapter reports a `change`. These checks run in `check_consistency` — the
+scene-verify set a run calls — and do not run inside a bare `commit_scene` or
+`save_scene_draft` outside a run, so the convergence guarantee is the bounded
+revise loop, not the store itself. Parked-findings commit handling is ticket
+#33. A matching Scene verifies clean.
+
+Promise status is **system-written** on a McKee project: after a confirmed
+realized promise event saves, Spindle advances that promise's status with the
+Scene recorded as the source scene (`setup` -> `planted`, `reinforcement` ->
+`reinforced`, `payoff` -> `paid_off`, `subversion` -> `subverted`, `abandonment`
+-> `abandoned`). The host does not call `update_promise_status` for a McKee
+scene; on a McKee project `update_promise_status` is rejected with an error
+that points at the realized-events path (a no-op status call is allowed, and
+non-McKee projects keep the direct tool). Validation and status application run
+inside the same Scene transaction, so an unknown promise, a promise on an
+unrelated branch, or an event placed before the promise's planting rolls the
+Scene row back with the status rows. Re-saving a Scene whose new report no longer
+claims a previously reported event appends an append-only corrective status
+event that restores the pre-Scene status; an unchanged re-save is a no-op.
+
 
 `checkpoint_policy` on `authoring_start_run` is optional and defaults to
 `manual` (a run that never opts in runs the classic 4-step operator checkpoint

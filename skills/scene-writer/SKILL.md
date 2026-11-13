@@ -61,7 +61,7 @@ Preflight with `commit_scene` (`dry_run: true`) using the payload you intend to 
 
 ## Step 6: Commit the Scene Atomically
 
-Call `commit_scene` once with `full_text`, `summary`, `content_rating`, `authorship`, the preparation token and `expected_scene_version`, the typed `continuity` package, `beat_annotations`, an optional chapter-final `chapter_summary`, and a client `idempotency_key`. It applies prose, approved continuity, beats, summary, and cursor in one write.
+Call `commit_scene` once with `full_text`, `summary`, `content_rating`, `authorship`, the preparation token and `expected_scene_version`, the typed `continuity` package, `beat_annotations`, an optional chapter-final `chapter_summary`, and a client `idempotency_key`. It applies prose, approved continuity, beats, summary, and cursor in one write. On a McKee project include `realized_report` (value turns, character effects, promise events, reported Key Facts); scene verify adds the four deterministic `realized_value_turn`, `realized_key_fact`, `realized_promise_event` and `character_effect` checks.
 
 1. **Inspect the receipt**: Check `issues`, `warnings`, `blocking_count`, `coverage`, `applied`, `beat_count`, `chapter_summary_saved`, `writer_cursor`, `follow_ups`, and `undo_support`. Retry only with the same key and payload; a different payload fails.
 2. **Targeted repair**: Outside the ordinary loop, `set_scene_clock`, `commit_character_state`, `update_relationship`, `record_knowledge` (or `create_future_knowledge`), `update_promise_status`, `update_entity`, `update_world_rule`, `annotate_scene_beats`, `commit_scene_changes`, `save_summary`, and `update_writer_position` remain available.

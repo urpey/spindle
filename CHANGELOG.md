@@ -2,6 +2,66 @@
 
 ## Unreleased
 
+- Add **McKee realized reports and deterministic scene verify**. A written Scene
+  now reports what its prose actually did, and the plan is still the law. The
+  realized report (`spindle_core::realized`) carries the realized Value Turn per
+  planned Value Axis (opening/closing Charge, the realized Gap and the realized
+  Turning Beat), the Character Effect per present major character (`reinforce`,
+  `reveal`, `contradict`, `change`, `none`), the Narrative Promise events the
+  Scene advanced (`setup`, `reinforcement`, `payoff`, `subversion`,
+  `abandonment`) and the planned Key Facts it dramatised. It rides all three
+  continuity-carrying save entry points — `commit_scene`'s
+  `CommitSceneContinuityPackage.realized_report`,
+  `authoring_save_scene_draft`'s structured `realized_report` field, and the raw
+  `save_scene_draft` field used by agent-mode drafting; the structured field also
+  counts as structured continuity content on a McKee project only — persists in
+  the new nullable
+  `scene.realized_report` column (V0061) and reads back through
+  `get_entity(table="scene")` and each earlier Scene's
+  `novel.realized_scenes` entry. A save replaces the stored report; an unset
+  report is skipped entirely, so a report-less Scene and every non-McKee project
+  serialize byte-identically. Four deterministic checks join the fast
+  scene-verify subset with no model calls and run only on a McKee project:
+  `realized_value_turn` (planned versus realized Charge — exact comparison —,
+  Gap presence, Turning Beat position, a missing report, or an unplanned axis),
+  `realized_key_fact` (a planned Key Fact due in the Scene that the report does
+  not list), `realized_promise_event` (a planned plant or payoff the report does
+  not report) and `character_effect` (`change` only at a planned change
+  milestone — pinned to the Scene or placed chapter-wide, where `change` in any
+  Scene of the chapter satisfies it — and a planned change never downgraded to
+  `reveal`). Findings are `error`-severity in the existing consistency shape,
+  attributed to the Scene, and run only when `check_consistency` is asked for the
+  scene-verify set; a bare save outside a run does not run them, and parked
+  findings at commit remain #33. On a McKee project the system writes Narrative
+  Promise status inside the Scene's own transaction after a confirmed realized
+  event, with the saved Scene recorded as the source scene (`setup` -> `planted`,
+  `reinforcement` -> `reinforced`, `payoff` -> `paid_off`, `subversion` ->
+  `subverted`, `abandonment` -> `abandoned`): an unusable event rolls the Scene
+  row and status rows back together, an unchanged re-save is a no-op, a re-save
+  that drops a previously reported event appends an append-only correction
+  restoring the pre-Scene status, and a hand-written `update_promise_status` on a
+  McKee project is rejected in favour of the realized-events path. A McKee run
+  must prepare with a non-zero `max_revise_attempts` (absent means the run
+  default of zero): `authoring_prepare_run`, `planning_readiness` and therefore
+  `planning_decide(action=prepare_authoring_run)` report it as a missing
+  requirement and `authoring_start_run` refuses to start, while every unmarked
+  project is unaffected. Agent-mode drafting returns the same report through the
+  generated-scene package and dispatch prompt, and the `CharacterEffect` /
+  `RealizedPromiseEventKind` input schemas stay closed string enums after the
+  Gemini schema sanitiser.
+- Raise the **measured compatibility discovery ceilings** for the additive
+  realized-report DTOs; regenerating the legacy schema inventory does not itself
+  authorize a raise. Measured UTF-8 tools/list bytes before → after this ticket:
+  `default` and `legacy-all` 833,541 → 863,617 (input 180,181 → 191,793);
+  `authoring` 406,371 → 431,831 (input 96,813 → 108,425); `write` 538,851 →
+  564,311 (input 124,044 → 135,656); `minimal` 251,890 → 268,983 (input 30,863 →
+  38,724); `import` 248,146 → 252,762 (input unchanged); `workflow-authoring`
+  189,244 → 200,856 (input 93,915 → 105,527); `workflow-write` 119,834 →
+  127,695 (input 64,720 → 72,581). The delta includes replacing the degraded
+  `oneOf`-object schemas with the closed `CharacterEffect` /
+  `RealizedPromiseEventKind` string enums, so the closed sets are now
+  advertised. Tool names, tool counts and the canonical acceptance ceilings are
+  untouched.
 - Add **McKee writer visibility and the filled drafting packet**. For a
   McKee-structured project, `get_chapter_briefing` returns only the requested
   Scene's plan (`chapter_plan.scenes` is filtered to that Scene); the bundled

@@ -1469,7 +1469,12 @@ impl SqliteSpindleService {
         if table == "scene" {
             let scene = self.repository.get_scene(record_id_str).await?;
             let word_count = scene.full_text.split_whitespace().count();
-            return Ok(serde_json::json!({
+            let realized_report = scene
+                .realized_report
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()?;
+            let mut entity = serde_json::json!({
                 "id": scene.id,
                 "table": "scene",
                 "project_id": scene.project_id,
@@ -1487,7 +1492,14 @@ impl SqliteSpindleService {
                 "word_count": word_count,
                 "created_at": scene.created_at.to_rfc3339(),
                 "updated_at": scene.updated_at.to_rfc3339(),
-            }));
+            });
+            // Additive: a Scene saved with a realized report reads it back here
+            // (V0061). An unset report is omitted entirely, so a report-less
+            // Scene — and every non-McKee project — keeps its exact payload.
+            if let Some(realized_report) = realized_report {
+                entity["realized_report"] = realized_report;
+            }
+            return Ok(entity);
         }
         let not_found = || anyhow::anyhow!("entity {record_id_str} not found");
         let project_id = match table {

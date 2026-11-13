@@ -409,9 +409,10 @@ project, `get_chapter_briefing` returns only the requested Scene's plan: its
 `chapter_plan.scenes` list is filtered to that Scene (earlier and later planned
 Scenes stay on the planning surface). The bundled scene context carries the
 current Scene's plan in `novel.planned_scene`, earlier written Scenes of the same
-chapter as summaries in `novel.realized_scenes` (a dedicated record so a
-realized Value Turn can be added additively later), and the current Scene's
-Character Design slice in `novel.character_design_slice`. `get_scene_context`
+chapter as summaries plus their saved realized report in `novel.realized_scenes`
+(a dedicated record: `realized_report` is skipped when the Scene has none, so a
+report-less Scene reads exactly as before), and the current Scene's Character
+Design slice in `novel.character_design_slice`. `get_scene_context`
 returns the same three fields. A slice carries the character id and name, the
 contradiction the Scene's dilemma tests when the plan names one, the conscious
 desire and the planner-written behaviour cues; it has no field for
@@ -858,6 +859,41 @@ carries actual prose must join the rating-clearance chokepoint;
 backend coverage for the planned content ceiling; never reduce scene ratings
 to satisfy a route. Do not persist secrets or provider credentials in receipts.
 
+### Realized reports and deterministic verify (McKee)
+
+Drafting reports what it realized, and planning stays the law. A written Scene's
+realized report (`spindle_core::realized`) carries the realized **Value Turn** per
+planned Value Axis (opening and closing **Charge**, the realized **Gap**, the
+realized **Turning Beat**), the **Character Effect** per present major character,
+the Narrative Promise events the Scene advanced, and the planned **Key Facts** it
+dramatised. It rides all three continuity-carrying entry points (`commit_scene`'s
+continuity package, `authoring_save_scene_draft`'s structured field, and the raw
+`save_scene_draft` field, which also applies realized promise status), persists on
+the Scene row (V0061) and reads back through `get_entity(table="scene")` and the
+earlier-Scene results a writer sees.
+
+Four deterministic checks join the scene-verify subset: `realized_value_turn`
+(planned versus realized Charge, Gap presence and Turning Beat position, plus a
+missing report or an unplanned axis), `realized_key_fact` (a planned Key Fact due
+in the Scene that the report does not list), `realized_promise_event` (a planned
+plant or payoff the report does not report) and `character_effect` (`change`
+only at a planned change milestone; a planned change never downgraded). A planned
+milestone may be pinned to one Scene or placed chapter-wide
+(`scene_order: null`): a chapter-level milestone is satisfied by `change` in any
+Scene of the chapter, and only a Scene claiming `reveal` while no Scene in the
+chapter reports `change` is a finding. They are `error`-severity findings in the
+existing consistency shape, attributed to the Scene, and never run for a non-McKee
+project. They run when `check_consistency` is asked for the scene-verify set (the
+run's verify step), not inside a bare save, so parked-findings commit handling
+remains ticket #33. A confirmed realized promise event advances that promise's
+status through the existing status-history mechanism with the Scene recorded as
+the source scene, in the Scene's own transaction; the agent does not call
+`update_promise_status` by hand on a McKee project (that call is rejected), and a
+re-save that drops an event appends an append-only correction restoring the
+pre-Scene status. Tolerances are fixed and documented: exact Charge comparison,
+Gap compared by presence not wording, Turning Beat by 1-based position when
+reported.
+
 ## 5. Validation and readiness (proposal)
 
 Return structured findings `{code, severity, path, related_refs, expected,
@@ -1026,6 +1062,7 @@ allocated at implementation time to avoid Wave 2 collisions.
 Total: **18–25 engineer-days**, with the durable creation/apply recovery work
 as the largest uncertainty. Ship behind opt-in entry tools until phase F; no
 existing client or run should change merely by upgrading.
+
 
 ### Model budget assumptions
 

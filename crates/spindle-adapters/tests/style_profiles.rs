@@ -2183,6 +2183,7 @@ async fn test_style_revision_patch_lifecycle() {
         research_query_pack_input: None,
         research_context_hash: None,
         knowledge_learned: Vec::new(),
+        realized_report: None,
     };
     let scene_out_1 = svc.save_scene_draft(scene_input_1).await.unwrap();
     let scene_id_1 = scene_out_1.scene_id;
@@ -2207,6 +2208,7 @@ async fn test_style_revision_patch_lifecycle() {
         research_query_pack_input: None,
         research_context_hash: None,
         knowledge_learned: Vec::new(),
+        realized_report: None,
     };
     let scene_out_2 = svc.save_scene_draft(scene_input_2).await.unwrap();
     let scene_id_2 = scene_out_2.scene_id;
@@ -2424,6 +2426,7 @@ async fn test_style_revision_patch_lifecycle() {
         research_query_pack_input: None,
         research_context_hash: None,
         knowledge_learned: Vec::new(),
+        realized_report: None,
     };
     svc.save_scene_draft(scene_mutate_input).await.unwrap();
 
@@ -2616,6 +2619,7 @@ async fn test_style_revision_patch_rollback_lifecycle() {
         research_query_pack_input: None,
         research_context_hash: None,
         knowledge_learned: Vec::new(),
+        realized_report: None,
     };
     let scene_out = svc.save_scene_draft(scene_input).await.unwrap();
     let scene_id = scene_out.scene_id;
@@ -2835,6 +2839,7 @@ async fn test_style_revision_patch_rollback_lifecycle() {
         research_query_pack_input: None,
         research_context_hash: None,
         knowledge_learned: Vec::new(),
+        realized_report: None,
     };
     svc.save_scene_draft(mutate_input).await.unwrap();
 
@@ -2931,6 +2936,7 @@ async fn test_style_revision_patch_evaluation() {
         research_query_pack_input: None,
         research_context_hash: None,
         knowledge_learned: Vec::new(),
+        realized_report: None,
     };
     let scene_out = svc.save_scene_draft(scene_input).await.unwrap();
     let scene_id = scene_out.scene_id;

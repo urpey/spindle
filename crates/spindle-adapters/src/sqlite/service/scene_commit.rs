@@ -701,6 +701,7 @@ impl SqliteSpindleService {
                 scene.tone = input.tone.clone();
                 scene.draft_origin = draft_origin.clone();
                 scene.location_id = input.location_id.clone().or(scene.location_id);
+                scene.realized_report = input.continuity.realized_report.clone();
                 scene
             })
             .unwrap_or_else(|| {
@@ -722,6 +723,7 @@ impl SqliteSpindleService {
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                     location_id: input.location_id.clone(),
+                    realized_report: input.continuity.realized_report.clone(),
                 }
             });
         checks_run.push("retcon_reachability".to_string());
@@ -853,6 +855,7 @@ impl SqliteSpindleService {
             generation_id: None,
             source_path: None,
             location_id: input.location_id.clone(),
+            realized_report: input.continuity.realized_report.clone(),
             ..Default::default()
         };
 

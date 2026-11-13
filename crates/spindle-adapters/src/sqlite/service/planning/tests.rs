@@ -7486,7 +7486,9 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
     assert_eq!(sc_prop.status, PlanningProposalStatus::Applied);
     assert_eq!(sc_prop.decided_by.as_deref(), Some("policy:outline-fast:3"));
 
-    // 7. Now planning_readiness and prepare_authoring_run both agree that chapters 1..=2 are ready_to_draft!
+    // 7. Planning_readiness and prepare_authoring_run now agree on the McKee
+    // revise-budget requirement: readiness has no budget, so it reports the same
+    // blocker a run would; supplying the budget is the only remaining gap.
     let post_scene_readiness = svc
         .planning_readiness(PlanningReadinessInput {
             session_id: s.id.clone(),
@@ -7502,16 +7504,46 @@ async fn phase_d_delegation_policy_activation_and_planning_readiness_agree_with_
         })
         .await
         .unwrap();
-    assert!(post_scene_readiness.ready_to_draft);
     assert!(post_scene_readiness.planner_checks_passed);
     assert!(!post_scene_readiness.stale_projection);
-    assert!(post_scene_readiness.prepare_run.ready_to_draft);
+    assert!(!post_scene_readiness.ready_to_draft);
+    assert!(!post_scene_readiness.prepare_run.ready_to_draft);
+    assert!(
+        post_scene_readiness
+            .prepare_run
+            .missing_requirements
+            .iter()
+            .any(|requirement| requirement.contains("max_revise_attempts")),
+        "{:?}",
+        post_scene_readiness.prepare_run.missing_requirements
+    );
     assert_eq!(
         post_scene_readiness
             .pacing_metrics
             .pov_chapter_counts
             .get("cast:mara"),
         Some(&2)
+    );
+    // With the budget supplied, the same range is ready: the budget was the
+    // only thing readiness could not prove.
+    let with_budget = svc
+        .prepare_authoring_run(spindle_core::models::AuthoringPrepareRunInput {
+            project_id: scope.project_id.clone(),
+            book_number: 1,
+            start_chapter: 1,
+            end_chapter: Some(2),
+            chapter_count: None,
+            mining_policy: None,
+            max_revise_attempts: Some(1),
+            checkpoint_policy: None,
+            replan_policy: None,
+        })
+        .await
+        .unwrap();
+    assert!(
+        with_budget.ready_to_draft,
+        "{:?}",
+        with_budget.missing_requirements
     );
 
     // 8. Policy actors are rejected in decide_plan_amendments and decide_canon_deltas.

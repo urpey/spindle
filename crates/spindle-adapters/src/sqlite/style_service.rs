@@ -3047,6 +3047,7 @@ impl SqliteSpindleService {
                 research_query_pack_input: None,
                 research_context_hash: None,
                 knowledge_learned: Vec::new(),
+                realized_report: None,
             };
 
             self.save_scene_draft(save_input).await?;

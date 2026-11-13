@@ -153,6 +153,7 @@ impl SqliteSpindleService {
             });
         }
 
+        let project = repo.get_project(&project_id).await?;
         let active_branch = repo.get_active_branch(&project_id).await?;
 
         let db_chapters = repo
@@ -175,6 +176,23 @@ impl SqliteSpindleService {
         let mut missing_requirements = Vec::new();
         let mut details = Vec::new();
         let mut planned_ratings: BTreeSet<&'static str> = BTreeSet::new();
+
+        // McKee projects require a non-zero revise budget at prepare time. A
+        // zero/absent budget leaves a Scene that realized a turn different from
+        // its plan with no bounded revise attempt before the checkpoint, so the
+        // plan could never be upheld (issue #32). An absent budget means the
+        // run's documented default of zero, not "no run": `planning_readiness`
+        // passes `None` and must reach the same verdict as `authoring_start_run`,
+        // so planning readiness can no longer advertise a McKee range as ready
+        // while the run would refuse to start.
+        if project.mckee_structured && input.max_revise_attempts.unwrap_or(0) <= 0 {
+            missing_requirements.push(
+                "McKee project requires a non-zero max_revise_attempts (1 or 2): a scene that \
+                 realizes a turn different from its plan needs a bounded revise attempt before \
+                 the checkpoint"
+                    .to_string(),
+            );
+        }
 
         for ch_num in input.start_chapter..=end_chapter {
             let mut chapter_missing_items = Vec::new();

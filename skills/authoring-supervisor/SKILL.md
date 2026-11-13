@@ -32,7 +32,7 @@ You coordinate structured multi-chapter authoring runs safely, keeping SQLite ru
      - `checkpoint_policy`: `"manual"` (default 4-step operator flow), `"auto_advisory"` (self-clears when deep check has nothing at or above `warning`), or `"auto_strict"` (self-clears only on zero findings and `anti_slop.hard_count == 0`).
      - `mining_policy`: `"disabled"` (default) or `"propose_all"` (stages canon deltas after each committed scene).
      - `replan_policy`: `"disabled"` (default) or `"propose_all"` (runs `replan_chapter` after each chapter summary to stage future-chapter plan amendments).
-     - Optional `max_revise_attempts`: `0` (default off), `1`, or `2` for bounded in-run verify/revise passes.
+     - `max_revise_attempts`: required (`1` or `2`) on a McKee-structured project — a zero or absent budget blocks a McKee run at prepare time; optional elsewhere (`0` default off, `1`, or `2` for bounded in-run verify/revise passes).
 
 ---
 
@@ -42,7 +42,7 @@ Call `authoring_execute_next` (`project_id`, `run_id`, optional `mode: "hybrid" 
 
 - **Default `mode: "hybrid"` (host drafting)**:
   - For non-explicit scenes, `authoring_execute_next` stops at `draft book scene X.Y` with a host-draft instruction.
-  - Read `get_scene_context` and `get_chapter_briefing`, draft the scene in the host, and save with `authoring_save_scene_draft` (`authorship: "assistant"`, full prose, and required continuity package: `character_states`, `canonical_facts`, `relationship_updates`, `beats`, `continuity_notes`). Never use generic `save_scene_draft` inside an active authoring run (`save_scene_draft` is for standalone scenes outside a run).
+  - Read `get_scene_context` and `get_chapter_briefing`, draft the scene in the host, and save with `authoring_save_scene_draft` (`authorship: "assistant"`, full prose, and required continuity package: `character_states`, `canonical_facts`, `relationship_updates`, `beats`, `continuity_notes`, plus `realized_report` on a McKee project — realized value turns, character effects, promise events and reported Key Facts). Never use generic `save_scene_draft` inside an active authoring run (`save_scene_draft` is for standalone scenes outside a run).
   - Stamp `set_scene_clock` when a project calendar is active.
 - **Explicit offload (`mode: "agent"`)**:
   - Use `mode: "agent"` only when the user explicitly requests offloaded route generation or for explicit-rated scenes routed to a cleared backend.

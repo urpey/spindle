@@ -1998,6 +1998,8 @@ mod export;
 mod generation;
 #[path = "imports/tests.rs"]
 mod imports;
+#[path = "mckee/tests.rs"]
+mod mckee;
 mod memory;
 #[path = "plan_amendments/tests.rs"]
 mod plan_amendments;

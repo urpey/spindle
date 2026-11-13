@@ -149,6 +149,14 @@ pub struct GeneratedScenePackage {
     pub beats: Vec<AnnotatedBeatInput>,
     #[serde(default)]
     pub continuity_notes: Vec<String>,
+    /// The McKee realized report for the generated prose (issue #32).
+    ///
+    /// The agent-mode dispatch prompt asks the writer for the same typed report
+    /// the host path sends, and this carries it from the parsed package into the
+    /// save input. Omitted by a non-McKee writer, so existing packages parse
+    /// exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realized_report: Option<spindle_core::realized::RealizedReport>,
 }
 
 impl GeneratedScenePackage {
@@ -190,6 +198,7 @@ impl GeneratedScenePackage {
             relationship_updates: metadata.relationship_updates.clone(),
             beats: metadata.beats.clone(),
             continuity_notes: metadata.continuity_notes.clone(),
+            realized_report: None,
         })
     }
 }

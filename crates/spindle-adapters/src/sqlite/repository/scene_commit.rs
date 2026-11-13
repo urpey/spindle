@@ -130,6 +130,18 @@ impl CanonTransaction<'_> {
         let chapter_id =
             self.chapter_id_in_tx(project_id, input.book_number, input.chapter_number)?;
         let content_rating = input.content_rating.as_db_str();
+        // A save REPLACES the Scene's realized report (V0061): the report
+        // describes the text just saved, and omitting it leaves the Scene with
+        // none. Serialization and the column edit are shared with the other
+        // persist path; the promise-status consequences share this transaction.
+        let realized_report_json =
+            super::realized::realized_report_json(input.realized_report.as_ref())?;
+        let placement = StoryPlacement {
+            book_number: input.book_number,
+            chapter_number: input.chapter_number,
+            scene_order: Some(input.scene_order),
+            note: None,
+        };
         let now = timestamp_to_micros(chrono::Utc::now());
         let existing = self.find_scene_by_natural_key_in_tx(
             project_id,
@@ -180,7 +192,8 @@ impl CanonTransaction<'_> {
             self.conn().execute(
                 "UPDATE scene SET full_text = ?1, summary = ?2, content_rating = ?3, \
                  tone = ?4, location_id = COALESCE(?5, location_id), \
-                 draft_origin = COALESCE(?6, draft_origin), updated_at = ?7 WHERE id = ?8",
+                 draft_origin = COALESCE(?6, draft_origin), updated_at = ?7 \
+                 WHERE id = ?8",
                 rusqlite::params![
                     &input.full_text,
                     &input.summary,
@@ -191,6 +204,21 @@ impl CanonTransaction<'_> {
                     now,
                     &existing.id,
                 ],
+            )?;
+            super::realized::set_scene_realized_report_in_conn(
+                self.conn(),
+                &existing.id,
+                realized_report_json.as_deref(),
+            )?;
+            // The report and its promise-status consequences are part of the
+            // caller's commit unit: an unusable event aborts the whole commit.
+            super::realized::apply_realized_promise_events_in_conn(
+                self.conn(),
+                project_id,
+                branch_id,
+                &existing.id,
+                &placement,
+                input.realized_report.as_ref(),
             )?;
             if scene_changed {
                 self.conn().execute(
@@ -240,6 +268,19 @@ impl CanonTransaction<'_> {
                     &input.location_id,
                     now,
                 ],
+            )?;
+            super::realized::set_scene_realized_report_in_conn(
+                self.conn(),
+                &scene_id,
+                realized_report_json.as_deref(),
+            )?;
+            super::realized::apply_realized_promise_events_in_conn(
+                self.conn(),
+                project_id,
+                branch_id,
+                &scene_id,
+                &placement,
+                input.realized_report.as_ref(),
             )?;
             super::memory::invalidate_layered_memory_for_scene_in_conn(
                 self.conn(),
