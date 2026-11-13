@@ -2454,7 +2454,10 @@ impl SqliteSpindleService {
             } else {
                 Vec::new()
             };
-            let promises = if realized_checks.promise_event {
+            // Both the promise-event rule and the critic-disagreement rule need
+            // the planned promise placements: the critic's promise judgement is
+            // compared against what the Scene is planned to deliver.
+            let promises = if realized_checks.promise_event || realized_checks.critic_disagreement {
                 self.repository
                     .list_narrative_promises_by_project_and_branch(&project_id, &active_branch.id)
                     .await?
@@ -2504,6 +2507,20 @@ impl SqliteSpindleService {
                 } else {
                     Vec::new()
                 };
+                // Independent judgement (ADR 0005): read the critic's persisted
+                // verdict for THIS prose version. A missing or stale verdict is
+                // an unavailable pass — `critic_report_disagreement` stays
+                // silent rather than inventing a disagreement.
+                let critic_verdict = if realized_checks.critic_disagreement {
+                    let fingerprint = scene_revision_fingerprint(scene);
+                    self.persisted_review_rounds(&active_branch.id, &scene.id, &fingerprint)
+                        .await?
+                        .iter()
+                        .rev()
+                        .find_map(|round| round.critic_verdict.clone())
+                } else {
+                    None
+                };
                 issues.extend(super::mckee::realized_findings_for_scene(
                     super::mckee::RealizedFindingsInputs {
                         scene,
@@ -2514,6 +2531,7 @@ impl SqliteSpindleService {
                         arcs: &arcs,
                         character_names: &character_names,
                         chapter_scenes: &chapter_scenes,
+                        critic_verdict: critic_verdict.as_ref(),
                     },
                 ));
             }

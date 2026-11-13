@@ -260,6 +260,7 @@ async fn dual_persona_local_adapter_cites_shelves_and_structure() {
             branch_id: None,
             scene_id: saved.scene_id.clone(),
             rounds: Some(1),
+            critic_output: None,
         })
         .await
         .unwrap();

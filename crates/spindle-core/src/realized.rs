@@ -28,13 +28,17 @@
 //!   numbers one; a summary-only reference is accepted as reported and is not
 //!   position-compared.
 //! - Axis names compare exactly after trimming.
+//! - **Critic disagreement** compares the independent critic verdict (persisted
+//!   on the round) with the writer's report only when the report makes a
+//!   definite claim. A missing verdict, a stale one, or a report with no turn
+//!   for a planned axis is an *unavailable pass*: no finding is invented.
 
 use crate::charge::{Charge, ChargeDepth};
 use crate::scene_value::SceneGap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// One of the four deterministic realized-report verify rules.
+/// One of the five deterministic realized-report verify rules.
 ///
 /// This is the single source of the rule's `check_type` name and of the repair
 /// action its suggestions carry, so the exported constants, the requested-check
@@ -49,15 +53,19 @@ pub enum RealizedCheck {
     PromiseEvent,
     /// Character Effect rules.
     CharacterEffect,
+    /// The persisted critic verdict disagrees with the writer's realized report
+    /// (independent judgement, ADR 0005). A missing verdict is not a mismatch.
+    CriticReportDisagreement,
 }
 
 impl RealizedCheck {
     /// Every rule, in wire order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::ValueTurn,
         Self::KeyFact,
         Self::PromiseEvent,
         Self::CharacterEffect,
+        Self::CriticReportDisagreement,
     ];
 
     /// The consistency finding `check_type` and scene-verify check name.
@@ -67,6 +75,7 @@ impl RealizedCheck {
             Self::KeyFact => "realized_key_fact",
             Self::PromiseEvent => "realized_promise_event",
             Self::CharacterEffect => "character_effect",
+            Self::CriticReportDisagreement => "critic_report_disagreement",
         }
     }
 
@@ -89,6 +98,10 @@ impl RealizedCheck {
                 "report 'change' only where a planned change milestone lands, or re-plan the \
                  character arc milestone"
             }
+            Self::CriticReportDisagreement => {
+                "revise the scene so the prose and the writer's report agree, or re-plan the \
+                 scene; a disagreement is never committed silently"
+            }
         }
     }
 }
@@ -101,6 +114,10 @@ pub const REALIZED_KEY_FACT_CHECK: &str = RealizedCheck::KeyFact.check_type();
 pub const REALIZED_PROMISE_EVENT_CHECK: &str = RealizedCheck::PromiseEvent.check_type();
 /// Deterministic verify check: Character Effect rules.
 pub const CHARACTER_EFFECT_CHECK: &str = RealizedCheck::CharacterEffect.check_type();
+/// Deterministic verify check: the persisted critic verdict disagrees with the
+/// writer's realized report (independent judgement, ADR 0005).
+pub const CRITIC_REPORT_DISAGREEMENT_CHECK: &str =
+    RealizedCheck::CriticReportDisagreement.check_type();
 
 /// One realized Value Turn on one planned Value Axis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -561,6 +578,7 @@ mod tests {
             REALIZED_KEY_FACT_CHECK,
             REALIZED_PROMISE_EVENT_CHECK,
             CHARACTER_EFFECT_CHECK,
+            CRITIC_REPORT_DISAGREEMENT_CHECK,
         ];
         for (check, expected) in RealizedCheck::ALL.iter().zip(consts) {
             assert_eq!(check.check_type(), expected);

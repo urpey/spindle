@@ -5752,10 +5752,11 @@ impl ConsistencyScopeInput {
 /// The trailing four names are Phase-4 validator **request** names (identical to
 /// their finding `check_type` strings): they trigger the deterministic
 /// `run_phase_four_validator_checks_for_scenes` fan-out under the non-deep path.
-/// The four `realized_*` / `character_effect` names are the deterministic McKee
-/// realized-report checks (`spindle_core::realized`); they read the Scene's
-/// persisted realized report and the planned Scene, issue no model calls, and
-/// run only for a McKee-structured project.
+/// The four `realized_*` / `character_effect` / `critic_report_disagreement`
+/// names are the deterministic McKee realized-report and independent-critic
+/// checks (`spindle_core::realized`, `spindle_core::drafting::critic`); they read
+/// the Scene's persisted realized report and review round plus the planned
+/// Scene, issue no model calls, and run only for a McKee-structured project.
 pub const SCENE_VERIFY_CHECKS: &[&str] = &[
     // ── Deterministic, scene-attributed continuity checks ──
     "retcon_reachability",  // shared as-of character-state / retcon scanner
@@ -5776,6 +5777,7 @@ pub const SCENE_VERIFY_CHECKS: &[&str] = &[
     "realized_key_fact",      // a planned Key Fact the report does not list
     "realized_promise_event", // a planned promise event the report does not list
     "character_effect",       // `change` only at a planned change milestone
+    "critic_report_disagreement", // persisted critic verdict vs the writer's report
     // ── Phase-4 validator request names (deterministic, prose-drift) ──
     "canonical_fact_prose_drift", // prose contradicts a registered canonical fact
     "world_rule_semantic_drift",  // prose trips a world-rule scan pattern
@@ -6210,6 +6212,18 @@ pub struct RunDualPersonaReviewInput {
     pub branch_id: Option<String>,
     pub scene_id: String,
     pub rounds: Option<usize>,
+    /// Optional host-submitted critic output used instead of dispatching the
+    /// literary-critic model call for this review.
+    ///
+    /// This is the fixed-critic-output seam: the same parser, validation and
+    /// persistence path a live critic goes through, with the text supplied by
+    /// the caller (fixtures and offline hosts). It is never the writer's
+    /// realized report — the critic contract judges the prose against the plan,
+    /// and the verdict is parsed and validated exactly as a model reply is.
+    /// Additive and skipped when unset, so existing callers serialize
+    /// byte-identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critic_output: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -6234,6 +6248,17 @@ pub struct DualPersonaReviewRound {
     pub genre_reader: PersonaReviewNotes,
     #[serde(default)]
     pub priority_actions: Vec<String>,
+    /// The scene-critic rubric this round answered under. `None` on every
+    /// non-McKee project (and on every round persisted before the field
+    /// existed), so those rows serialize byte-identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critic_rubric_version: Option<String>,
+    /// The McKee critic's independent structured verdict on the realized Value
+    /// Turn and promise events. `None` on non-McKee projects, and also when the
+    /// critic produced no usable verdict — a missing verdict is an unavailable
+    /// pass, never a disagreement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critic_verdict: Option<crate::drafting::critic::McKeeCriticVerdict>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -8540,6 +8565,14 @@ pub struct AuthoringStatusOutput {
     pub total_chapter_count: usize,
     pub chapters: Vec<AuthoringStatusChapter>,
     pub checkpoint_reports: Vec<AuthoringStatusCheckpoint>,
+    /// Scenes currently parked for checkpoint review, as `chapter.scene` refs.
+    ///
+    /// A McKee Scene whose verify never became clean after its revise budget is
+    /// spent parks instead of committing; the run surfaces the ids so the parked
+    /// state is visible and honest. Empty (and skipped) for every other run, so
+    /// non-McKee status output is byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parked_scene_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -8763,6 +8796,23 @@ pub struct AuthoringReviewCheckpointInput {
     pub end_chapter: i32,
     /// Editorial directives recorded from this checkpoint review.
     pub directives: Vec<String>,
+    /// Scenes this review resets to pending so the run re-drafts them.
+    ///
+    /// A McKee Scene parked for checkpoint review is cleared here: the scene
+    /// returns to `Pending`, its saved draft no longer counts, and the next
+    /// execute drafts it again. Additive and empty by default, so existing
+    /// checkpoint reviews behave exactly as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redraft_scenes: Vec<AuthoringSceneTarget>,
+}
+
+/// One Scene addressed by a checkpoint review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AuthoringSceneTarget {
+    /// Chapter number (1-based).
+    pub chapter_number: i32,
+    /// Scene order within the chapter (1-based).
+    pub scene_order: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -10561,5 +10611,52 @@ mod tests {
             err.to_string()
                 .contains("unsupported prepare_scene intent 'unknown'")
         );
+    }
+
+    #[test]
+    fn the_issue_33_review_and_checkpoint_fields_are_additive() {
+        // A caller written before #33 (no `critic_output` / `redraft_scenes`)
+        // deserializes, and its re-serialization omits the new fields exactly.
+        let review: RunDualPersonaReviewInput = serde_json::from_value(serde_json::json!({
+            "project_id": "project:x",
+            "branch_id": null,
+            "scene_id": "scene:x",
+            "rounds": 1
+        }))
+        .expect("legacy review input must deserialize");
+        assert!(review.critic_output.is_none());
+        let json = serde_json::to_value(&review).unwrap();
+        assert!(json.get("critic_output").is_none(), "{json}");
+
+        let checkpoint: AuthoringReviewCheckpointInput =
+            serde_json::from_value(serde_json::json!({
+                "project_id": "project:x",
+                "start_chapter": 1,
+                "end_chapter": 2,
+                "directives": ["hold continuity"]
+            }))
+            .expect("legacy checkpoint review input must deserialize");
+        assert!(checkpoint.redraft_scenes.is_empty());
+        let json = serde_json::to_value(&checkpoint).unwrap();
+        assert!(json.get("redraft_scenes").is_none(), "{json}");
+
+        // The parked-scene surface is additive on the status output too.
+        let status = AuthoringStatusOutput {
+            run_id: "run:x".into(),
+            project_id: "project:x".into(),
+            status: "blocked".into(),
+            next_action: "run checkpoint for chapters 1-1".into(),
+            blocked_reason: None,
+            checkpoint_state: None,
+            start_chapter: 1,
+            end_chapter: 1,
+            completed_chapter_count: 0,
+            total_chapter_count: 1,
+            chapters: Vec::new(),
+            checkpoint_reports: Vec::new(),
+            parked_scene_refs: Vec::new(),
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        assert!(json.get("parked_scene_refs").is_none(), "{json}");
     }
 }

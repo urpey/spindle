@@ -24,21 +24,23 @@
 use super::*;
 use crate::sqlite::json_records::StoredPlannedScene;
 use crate::sqlite::records::{CanonicalFact, CharacterArc, NarrativePromise, Scene};
+use spindle_core::drafting::critic::{MCKEE_SCENE_CRITIC_RUBRIC_VERSION, McKeeCriticVerdict};
 use spindle_core::models::{ArcMilestoneKind, ConsistencyIssue};
 use spindle_core::realized::{
     CharacterEffect, RealizedCheck, RealizedPromiseEventKind, RealizedReport, format_value_turn,
 };
 use std::collections::BTreeMap;
 
-/// Which of the four deterministic McKee realized-report checks a caller asked
-/// for. `check_consistency` resolves this from its requested `checks` list, so a
-/// caller that asks for one rule never receives another rule's findings.
+/// Which deterministic McKee checks a caller asked for. `check_consistency`
+/// resolves this from its requested `checks` list, so a caller that asks for one
+/// rule never receives another rule's findings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct RealizedChecks {
     pub value_turn: bool,
     pub key_fact: bool,
     pub promise_event: bool,
     pub character_effect: bool,
+    pub critic_disagreement: bool,
 }
 
 impl RealizedChecks {
@@ -52,11 +54,19 @@ impl RealizedChecks {
                 requested,
                 RealizedCheck::CharacterEffect.check_type(),
             ),
+            critic_disagreement: should_run_check(
+                requested,
+                RealizedCheck::CriticReportDisagreement.check_type(),
+            ),
         }
     }
 
     pub(super) fn any(self) -> bool {
-        self.value_turn || self.key_fact || self.promise_event || self.character_effect
+        self.value_turn
+            || self.key_fact
+            || self.promise_event
+            || self.character_effect
+            || self.critic_disagreement
     }
 }
 
@@ -159,6 +169,9 @@ pub(super) struct RealizedFindingsInputs<'a> {
     pub arcs: &'a [CharacterArc],
     pub character_names: &'a BTreeMap<String, String>,
     pub chapter_scenes: &'a [Scene],
+    /// The critic's persisted independent verdict for THIS prose version, when
+    /// one exists. `None` is an unavailable pass, never a mismatch.
+    pub critic_verdict: Option<&'a McKeeCriticVerdict>,
 }
 
 /// Every deterministic McKee realized-report finding for one written Scene.
@@ -199,7 +212,191 @@ pub(super) fn realized_findings_for_scene(
             &scene_ref,
         );
     }
+    if inputs.checks.critic_disagreement {
+        critic_report_disagreement_findings(
+            &mut issues,
+            scene,
+            inputs.planned_scene,
+            report,
+            inputs.promises,
+            inputs.critic_verdict,
+            &scene_ref,
+        );
+    }
     issues
+}
+
+/// Every promise event a Scene is planned to deliver, as
+/// `(event, description)`.
+///
+/// Shared by the deterministic promise-event rule and the critic-disagreement
+/// rule so the two cannot disagree about what "planned" means.
+fn planned_promise_events<'a>(
+    scene: &Scene,
+    promises: &'a [NarrativePromise],
+) -> Vec<(RealizedPromiseEventKind, &'a NarrativePromise)> {
+    let mut expected = Vec::new();
+    for promise in promises
+        .iter()
+        .filter(|promise| promise.archived_at.is_none())
+    {
+        if placement_names_scene(
+            &promise.planted_at,
+            scene.book_number,
+            scene.chapter_number,
+            scene.scene_order,
+        ) {
+            expected.push((RealizedPromiseEventKind::Setup, promise));
+        }
+        if promise.planned_payoff.as_ref().is_some_and(|payoff| {
+            placement_names_scene(
+                payoff,
+                scene.book_number,
+                scene.chapter_number,
+                scene.scene_order,
+            )
+        }) {
+            expected.push((RealizedPromiseEventKind::Payoff, promise));
+        }
+    }
+    expected
+}
+
+/// The independent-judgement rule (ADR 0005): compare the critic's persisted
+/// verdict with the writer's realized report.
+///
+/// A finding fires only when both sides make a definite claim and those claims
+/// disagree. A missing verdict, a stale/foreign rubric, a report that is absent
+/// or that does not report a planned axis, and a Scene with nothing planned are
+/// all **unavailable passes** — no finding is invented.
+fn critic_report_disagreement_findings(
+    issues: &mut Vec<ConsistencyIssue>,
+    scene: &Scene,
+    planned_scene: Option<&StoredPlannedScene>,
+    report: Option<&RealizedReport>,
+    promises: &[NarrativePromise],
+    verdict: Option<&McKeeCriticVerdict>,
+    scene_ref: &str,
+) {
+    let Some(verdict) = verdict else {
+        return;
+    };
+    // The verdict must be the McKee rubric and must satisfy its own closed
+    // contract; anything else is unavailable, not a disagreement.
+    if verdict.rubric_version != MCKEE_SCENE_CRITIC_RUBRIC_VERSION || verdict.validate().is_err() {
+        return;
+    }
+    let Some(report) = report else {
+        return;
+    };
+    let note_suffix = |notes: Option<&str>| {
+        notes
+            .map(str::trim)
+            .filter(|notes| !notes.is_empty())
+            .map(|notes| format!("; critic notes: '{}'", preview_text(notes)))
+            .unwrap_or_default()
+    };
+
+    let planned_axes = planned_scene
+        .map(|planned| {
+            planned
+                .primary_value_axis
+                .iter()
+                .chain(planned.secondary_value_axes.iter())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !planned_axes.is_empty() {
+        let mut complete = true;
+        let mut writer_matches = true;
+        for axis in &planned_axes {
+            match report.value_turn(axis.axis.trim()) {
+                Some(realized) => {
+                    if realized.opening != axis.opening || realized.closing != axis.closing {
+                        writer_matches = false;
+                    }
+                }
+                None => complete = false,
+            }
+        }
+        // Only compare when the report makes a definite claim on every planned
+        // axis; a missing axis is the `realized_value_turn` rule's finding.
+        if complete && writer_matches != verdict.value_turn.is_agreement() {
+            let planned = planned_axes
+                .iter()
+                .map(|axis| {
+                    format!(
+                        "'{}' {}",
+                        axis.axis.trim(),
+                        format_value_turn(axis.opening, axis.closing)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let message = if writer_matches {
+                format!(
+                    "{scene_ref}: the critic judged that the prose does not realize the planned \
+                     Value Turn ({planned}) but the writer's realized report matches the plan. \
+                     The critic judges independently of the writer's report (ADR 0005); revise \
+                     the scene so the prose turns the planned value, or re-plan it{}",
+                    note_suffix(verdict.value_turn.notes.as_deref())
+                )
+            } else {
+                format!(
+                    "{scene_ref}: the critic judged that the prose realizes the planned Value \
+                     Turn ({planned}) but the writer's realized report records a different turn. \
+                     The critic judges independently of the writer's report (ADR 0005); revise \
+                     the scene or re-plan it{}",
+                    note_suffix(verdict.value_turn.notes.as_deref())
+                )
+            };
+            issues.push(realized_issue(
+                RealizedCheck::CriticReportDisagreement,
+                &scene.id,
+                message,
+                Vec::new(),
+            ));
+        }
+    }
+
+    let expected = planned_promise_events(scene, promises);
+    if !expected.is_empty() {
+        let writer_reports_all = expected
+            .iter()
+            .all(|(kind, promise)| report.reports_promise_event(&promise.id, *kind));
+        if writer_reports_all != verdict.promise_events.is_agreement() {
+            let planned = expected
+                .iter()
+                .map(|(kind, promise)| {
+                    format!("'{kind}' on '{}'", preview_text(&promise.description))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let message = if writer_reports_all {
+                format!(
+                    "{scene_ref}: the critic judged that the prose does not deliver the planned \
+                     Narrative Promise event(s) ({planned}) but the writer's realized report \
+                     lists every one of them. The critic judges independently of the writer's \
+                     report (ADR 0005); revise the scene or re-plan the promise placement{}",
+                    note_suffix(verdict.promise_events.notes.as_deref())
+                )
+            } else {
+                format!(
+                    "{scene_ref}: the critic judged that the prose delivers the planned Narrative \
+                     Promise event(s) ({planned}) but the writer's realized report does not list \
+                     every one of them. The critic judges independently of the writer's report \
+                     (ADR 0005); revise the scene or re-plan the promise placement{}",
+                    note_suffix(verdict.promise_events.notes.as_deref())
+                )
+            };
+            issues.push(realized_issue(
+                RealizedCheck::CriticReportDisagreement,
+                &scene.id,
+                message,
+                Vec::new(),
+            ));
+        }
+    }
 }
 
 fn realized_value_turn_findings(
@@ -349,44 +546,24 @@ fn realized_promise_event_findings(
     promises: &[NarrativePromise],
     scene_ref: &str,
 ) {
-    for promise in promises
-        .iter()
-        .filter(|promise| promise.archived_at.is_none())
-    {
-        let mut expected: Vec<(RealizedPromiseEventKind, &str)> = Vec::new();
-        if placement_names_scene(
-            &promise.planted_at,
-            scene.book_number,
-            scene.chapter_number,
-            scene.scene_order,
-        ) {
-            expected.push((RealizedPromiseEventKind::Setup, "plant"));
+    for (kind, promise) in planned_promise_events(scene, promises) {
+        let verb = match kind {
+            RealizedPromiseEventKind::Setup => "plant",
+            _ => "pay off",
+        };
+        if report.is_some_and(|report| report.reports_promise_event(&promise.id, kind)) {
+            continue;
         }
-        if promise.planned_payoff.as_ref().is_some_and(|payoff| {
-            placement_names_scene(
-                payoff,
-                scene.book_number,
-                scene.chapter_number,
-                scene.scene_order,
-            )
-        }) {
-            expected.push((RealizedPromiseEventKind::Payoff, "pay off"));
-        }
-        for (kind, verb) in expected {
-            if report.is_some_and(|report| report.reports_promise_event(&promise.id, kind)) {
-                continue;
-            }
-            issues.push(realized_issue(
-                RealizedCheck::PromiseEvent,
-                &scene.id,
-                format!(
-                    "{scene_ref} is planned to {verb} the narrative promise '{}' but the realized \
-                     report does not report a '{kind}' event for it",
-                    preview_text(&promise.description)
-                ),
-                vec![promise.id.clone()],
-            ));
-        }
+        issues.push(realized_issue(
+            RealizedCheck::PromiseEvent,
+            &scene.id,
+            format!(
+                "{scene_ref} is planned to {verb} the narrative promise '{}' but the realized \
+                 report does not report a '{kind}' event for it",
+                preview_text(&promise.description)
+            ),
+            vec![promise.id.clone()],
+        ));
     }
 }
 

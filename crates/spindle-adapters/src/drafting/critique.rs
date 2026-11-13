@@ -8,7 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
 
-pub const CRITIC_RUBRIC_VERSION: &str = "scene-critic-v1";
+/// Scene-critic rubric version, shared with the core critic contract so the
+/// CritiqueV1 path and the McKee rubric cannot drift apart (issue #33).
+pub const CRITIC_RUBRIC_VERSION: &str = spindle_core::drafting::critic::SCENE_CRITIC_RUBRIC_VERSION;
 
 /// Empirical scene-critic rubric calibrated against the 90-pair live G baseline
 /// (`action = 0.3611` and `reveal = 0.4167` weakest; `chapter-closer = 0.5556` strongest).
