@@ -405,6 +405,24 @@ revert). A per-decision outcome (`applied` | `rejected` | `failed` |
 `not_reached`) is returned; a real write failure mid-batch stops honestly (earlier
 applies stay applied, the failing row stays staged).
 
+On a McKee project an applied amendment can also leave **later planned, undrafted
+Scenes** inconsistent: a changed closing Charge on a Value Axis, a changed
+Key-Fact planned-Scene binding, or a changed Narrative Promise payoff binding
+triggers the amendment cascade (issue #34). Detected from the amendment's
+`prior_state` against the plan the apply wrote, it re-runs the same value-chain
+and promise/Key-Fact rules as planning over every later planned, undrafted Scene
+and returns a `cascade` report on the decision (`triggers`, `marked_stale`,
+`cleared_stale`, `reconciliation_amendment_ids`); a cascade failure is reported
+as `cascade_error` and never disguises the apply as failed. Failing Scenes are
+marked stale (visible in `list_plan_amendments`'s additive `stale_scenes`) and,
+when a mechanical repair exists, a `scene_replace` reconciliation proposal is
+staged in the same ratification queue for the operator to apply or reject. A
+repeat cascade updates the one mark and supersedes/restages a proposal only when
+the required repair changed; a Scene with no expressible repair is marked stale
+without a proposal and needs a Chapter replan. Applying the reconciliation clears
+the mark and re-runs the cascade once. A no-op amendment stages and marks
+nothing, and a drafted Scene's prose and plan are never touched by any of this.
+
 ### Reader simulation
 
 Under an auto policy (only — v1 does not run reader-sim on the manual flow), the

@@ -545,7 +545,11 @@ share one lifecycle:
   **immutability guard** rejects any amendment whose target chapter already has a
   drafted scene at apply time (the outline chases the story, never the reverse),
   and applying snapshots the prior plan into `prior_state` and bumps
-  `chapter_plan.plan_revision` so the outline keeps recoverable history.
+  `chapter_plan.plan_revision` so the outline keeps recoverable history. On a
+  McKee project an accepted amendment that changes a downstream value-chain or
+  Key-Fact/promise binding also marks the later planned, undrafted Scenes stale
+  and stages `scene_replace` reconciliation proposals (issue #34; see the McKee
+  planning section).
 
 Both staging classes are strictly **propose-only** — nothing auto-applies.
 Authoring runs accept only `mining_policy = "stage_only" | "off"` (any
@@ -1329,8 +1333,40 @@ exactly as before; they cannot use Key Facts at all (the staging error above).
 On a McKee project a `scene_add` plan amendment is refused at pre-flight: the
 class cannot add Sequence membership or a value plan, so it must restage the
 Chapter planning artifact instead. `scene_replace` keeps the value-plan fields
-untouched, while `scene_drop`/`scene_reorder`/`synopsis_update` remain available
-and do not cascade into `schedule.sequences` (follow-up #34).
+untouched unless its payload carries `primary_value_axis`/`secondary_value_axes`
+(the issue #34 repair shape), while `scene_drop`/`scene_reorder`/`synopsis_update`
+remain available and do not cascade into `schedule.sequences`.
+
+**Amendment cascade (issue #34, McKee only).** Accepting a plan amendment that
+changes a planned Scene's closing Charge on a Value Axis, a Key Fact's
+planned-Scene binding, or a Narrative Promise payoff's planned-Scene/Turning-Beat
+binding triggers a downstream pass. The trigger is detected from the amendment's
+recorded `prior_state` against the plan the apply actually wrote, never from the
+amendment class. The pass re-runs the same pure value-chain and promise/Key-Fact
+rules the planning gate uses (`cascade_value_findings` /
+`cascade_promise_findings` call the shared rule functions, not copies) over the
+branch's accepted plans, and reports only later planned, undrafted Scenes. A
+drafted chapter — any persisted Scene row on the active branch — is never marked,
+rewritten or re-planned; its plan JSON and prose stay byte-identical. A no-op
+amendment stages nothing and marks nothing.
+
+A failing Scene is persisted in `scene_plan_stale` (V0062: one row per Scene, a
+repeat cascade updates it) with the finding codes, a reason and the triggering
+amendment id. When the failure is a broken value-chain link, one `scene_replace`
+reconciliation proposal is staged through the normal `plan_amendment` queue
+(ADR 0003, no parallel table) whose payload sets the Scene's opening Charge to
+the amended chain's required Charge; a changed repair supersedes the still-staged
+proposal instead of duplicating it. A failure with no expressible Charge repair
+is marked stale proposal-less. Applying a reconciliation clears the mark (the row
+is retained as `cleared`), supersedes a moot still-staged repair and re-runs the
+cascade once for that apply (reconciliations are staged, never auto-applied, so
+the re-run is bounded). `list_plan_amendments` and `decide_plan_amendments`
+expose the active marks additively (`stale_scenes`), and the staged reconciliation
+rows appear in the ordinary amendment list; a non-McKee project's outputs are
+unchanged. No amendment class can edit a Key Fact row or an existing Narrative
+Promise, so a direct change to either is not expressible — the detection hook
+exists and covers the plan-shape binding effect a class can produce, and says so
+rather than pretending coverage.
 
 ### McKee realized reports and deterministic scene verify
 

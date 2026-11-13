@@ -832,13 +832,63 @@ Plan amendments do not carry Sequence membership. On a McKee project a
 `scene_add` amendment is refused at pre-flight with an error that names the
 missing value plan and Sequence membership and directs the author to restage the
 Chapter planning artifact; otherwise the amendment would write a value-less
-Scene that planning acceptance can never re-accept. `scene_replace` edits only
-prose, purpose, cast, location and rating, so the Scene's value plan is carried
-through untouched. `scene_drop`, `scene_reorder` and `synopsis_update` remain
-available: they do not invent value fields, but a drop can leave a Sequence
-member dangling and a reorder can break the axis chain. This pass does not
-cascade into `schedule.sequences` (follow-up #34); the result is reported again
-the next time a Chapter artifact is staged.
+Scene that planning acceptance can never re-accept. `scene_replace` edits prose,
+purpose, cast, location and rating, and (issue #34) may optionally carry
+`primary_value_axis` / `secondary_value_axes` to repair a planned Scene's value
+plan; when those keys are absent the stored value plan is carried through
+untouched, so the pre-#34 payload contract is unchanged. `scene_drop`,
+`scene_reorder` and `synopsis_update` remain available: they do not invent value
+fields, but a drop can leave a Sequence member dangling. This pass does not
+cascade into `schedule.sequences`; a dangling member is reported again the next
+time a Chapter artifact is staged.
+
+**Amendment cascade (issue #34, McKee only).** Accepting a plan amendment runs a
+downstream pass when the applied effect — compared against the amendment's
+recorded `prior_state`, never inferred from the amendment class — changed any of:
+
+- a planned Scene's **closing Charge** on any Value Axis (including a changed
+  scene-count/order that changes the chapter's closing-Charge vector);
+- a **Key Fact**'s planned-Scene binding (the fact row itself is never edited by
+  an amendment class, so this is the plan-shape effect a drop/replace/reorder can
+  produce: the placement now resolves to a different or missing planned Scene);
+- a **Narrative Promise payoff**'s planned-Scene/Turning-Beat binding (same
+  limitation: no class edits a promise row).
+
+The pass re-runs the SAME pure rules as the planning gate (#26 value shapes,
+non-events and the value-chain walk; #28 information-dependent Turning Beat and
+secret-reveal Key Fact rules) over the branch's accepted plans and reports only
+**later planned, undrafted Scenes**: chapters after the amended one, plus later
+Scenes in the amended chapter, plus the just-repaired Scene when the applied
+amendment is itself a reconciliation. A chapter with any persisted Scene row on
+the active branch is drafted and never marked, re-planned or rewritten; its plan
+JSON and prose stay byte-identical. A no-op amendment stages nothing and marks
+nothing.
+
+A failing Scene is marked stale in `scene_plan_stale` (V0062) with the failing
+finding codes, the reason and the triggering amendment id, and — when the failure
+is a broken value-chain link — one `scene_replace` reconciliation proposal is
+staged through the normal ADR 0003 queue with a `primary_value_axis` whose
+opening Charge follows the amended previous closing Charge, `staged` status and
+ids/summaries-only rationale. A repeat cascade updates the one mark and reuses a
+still-staged proposal only while its payload still repairs what the chain
+requires; a changed repair supersedes the old proposal and stages the corrected
+one, so a Scene never accumulates duplicate stale proposals. A failure with no
+machine-expressible Charge repair (for example the required opening Charge would
+equal the closing Charge, a non-event) is marked stale with no proposal and needs
+a manual Chapter replan. Applying a reconciliation re-validates the repaired
+Scene, clears its mark (the row stays as `cleared` history), supersedes any
+still-staged moot repair and re-runs the cascade if the repair itself changed a
+closing Charge; the re-run is bounded to the one applied amendment because
+reconciliations are only ever staged, never auto-applied.
+
+Precisely which payloads can express each trigger: `scene_replace` can express a
+closing-Charge change directly (through its optional value-plan keys) and a
+Key-Fact/payoff binding change indirectly (by replacing the Scene at a placement);
+`scene_drop`/`scene_reorder`/`scene_add` can express binding changes and
+closing-vector changes indirectly. No current class can edit a Key Fact (kind,
+value, placement) or an existing Narrative Promise (payoff placement, Turning
+Beat, target Act), so a direct change to either is not expressible and the
+detection hook reports nothing for it rather than pretending coverage.
 
 Each variant wraps the existing core input shape with typed proposal references
 in ID slots. The dispatcher is a closed allowlist, not an arbitrary tool name
