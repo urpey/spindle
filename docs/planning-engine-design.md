@@ -872,20 +872,25 @@ continuity package, `authoring_save_scene_draft`'s structured field, and the raw
 the Scene row (V0061) and reads back through `get_entity(table="scene")` and the
 earlier-Scene results a writer sees.
 
-Four deterministic checks join the scene-verify subset: `realized_value_turn`
+Four deterministic checks join the scene-verify subset — `realized_value_turn`
 (planned versus realized Charge, Gap presence and Turning Beat position, plus a
 missing report or an unplanned axis), `realized_key_fact` (a planned Key Fact due
 in the Scene that the report does not list), `realized_promise_event` (a planned
 plant or payoff the report does not report) and `character_effect` (`change`
-only at a planned change milestone; a planned change never downgraded). A planned
+only at a planned change milestone; a planned change never downgraded) — plus the
+independent-critic check `critic_report_disagreement` (the persisted
+`scene-critic-mckee-v1` verdict against a definite writer claim). A planned
 milestone may be pinned to one Scene or placed chapter-wide
 (`scene_order: null`): a chapter-level milestone is satisfied by `change` in any
 Scene of the chapter, and only a Scene claiming `reveal` while no Scene in the
 chapter reports `change` is a finding. They are `error`-severity findings in the
 existing consistency shape, attributed to the Scene, and never run for a non-McKee
 project. They run when `check_consistency` is asked for the scene-verify set (the
-run's verify step), not inside a bare save, so parked-findings commit handling
-remains ticket #33. A confirmed realized promise event advances that promise's
+run's verify step), not inside a bare save. A McKee Scene whose verify ends
+`parked_findings` moves to `parked_for_checkpoint` and the run schedules a
+checkpoint for its chapter instead of committing; checkpoint review clears the
+park only by re-drafting the Scene (a plan amendment accepted first is honoured
+by that redraft). A confirmed realized promise event advances that promise's
 status through the existing status-history mechanism with the Scene recorded as
 the source scene, in the Scene's own transaction; the agent does not call
 `update_promise_status` by hand on a McKee project (that call is rejected), and a

@@ -289,8 +289,9 @@ call per step. The full spine is **draft → verify → revise → commit → mi
 annotate beats → chapter summary → replan → checkpoint**. The state machine
 lives in `spindle-harness/src/plan.rs` (`NextAction` / `determine_next_action`);
 it only grows — existing phase semantics
-(`pending → draft_saved → changes_committed → beats_annotated`) are unchanged and
-pre-upgrade runs resume unaffected. The current run flow, tool-by-tool, is
+(`pending → draft_saved → changes_committed → beats_annotated`) are unchanged,
+plus one McKee-only terminal-for-this-pass phase
+(`parked_for_checkpoint`), and pre-upgrade runs resume unaffected. The current run flow, tool-by-tool, is
 documented in `docs/authoring-supervisor.md`; this section states the shipped
 shape.
 
@@ -316,11 +317,12 @@ Verify is deterministic: it runs the scene-scoped subset
 `spindle_core::models::SCENE_VERIFY_CHECKS` (knowledge_timing, chronology,
 temporal_coherence Tier 1, quantity/currency/affordability, tone,
 content-boundary, secret_leak, canonical-fact consistency, the four McKee
-realized-report checks below, and the prose-drift / world-rule / voice / style
-Phase-4 validators — no model calls; deep/model tiers stay checkpoint-scoped for
-cost). The loop converges or stops: the same finding
-set is never revised twice (an unchanged re-verify parks the scene), and parked
-findings inherit to the checkpoint. Every pass records an **honest** per-scene /
+realized-report checks plus the independent-critic disagreement check below, and
+the prose-drift / world-rule / voice / style Phase-4 validators — no model calls;
+deep/model tiers stay checkpoint-scoped for cost). The loop converges or stops:
+the same finding set is never revised twice (an unchanged re-verify parks the
+scene), and on a McKee run parked findings park the Scene for checkpoint review
+and never commit. Every pass records an **honest** per-scene /
 per-chapter outcome in `authoring_status` (`mine_status`, `verify_status`,
 `replan_status`, `auto_outcome`, …): a skip or error never reads as a clean pass,
 and mining/verify/replan never block the run.
@@ -1358,14 +1360,14 @@ so a Scene saved without a report, and every non-McKee project, serialize
 byte-identically. A save replaces the stored report (the report describes the
 text just saved); omitting it leaves the Scene with none.
 
-Four deterministic checks join the fast scene-verify subset
+Five deterministic checks join the fast scene-verify subset
 (`SCENE_VERIFY_CHECKS`, no model calls) and run only for a McKee project when a
 caller asks for them in `check_consistency` (the run's verify step does). They do
 not run inside a bare `commit_scene`/`save_scene_draft` outside a run, so the
-"mismatch cannot commit" guarantee is the run's bounded revise loop; parked
-findings at commit are #33. All
-four findings are `error`, use the existing consistency-finding shape and are
-attributed to the Scene (`entity_ids` starts with the Scene id):
+"mismatch cannot commit" guarantee is the run's bounded revise loop plus the
+park-for-checkpoint rule. All five findings are `error`, use the existing
+consistency-finding shape and are attributed to the Scene (`entity_ids` starts
+with the Scene id):
 
 | `check_type` | Rule |
 | --- | --- |
@@ -1373,6 +1375,29 @@ attributed to the Scene (`entity_ids` starts with the Scene id):
 | `realized_key_fact` | A planned Key Fact due in this Scene (the same due rule the drafting packet uses) that the report does not list in `key_fact_ids`. |
 | `realized_promise_event` | A promise planned to be planted or paid off in this Scene (an exact Scene placement, not a chapter-wide one) that the report does not report as the matching event. |
 | `character_effect` | `change` reported where no planned arc milestone of kind `change` is placed (a milestone pinned to the Scene, or placed chapter-wide in that chapter), or a planned Scene-level change milestone reported as anything other than `change` (including `reveal`, and including no effect at all). A chapter-level milestone is satisfied by `change` in any Scene of the chapter; the reportable mismatch is a Scene claiming only `reveal` while no Scene in the chapter reports `change`. |
+| `critic_report_disagreement` | The persisted independent critic verdict disagrees with the writer's report: the report matches the plan while the critic says the prose does not realize the planned Value Turn (or does not deliver a planned promise event), or the report differs from the plan while the critic says the prose realizes it. Only compared when the report makes a definite claim on every planned axis/event; a missing, stale or malformed verdict is an **unavailable pass**, never a finding. |
+
+**The critic judges independently.** On a McKee project the critic rubric is
+`scene-critic-mckee-v1` (`spindle_core::drafting::critic`), which adds four
+craft dimensions to the base rubric: Value Turn realized, Gap lands, exposition
+used as ammunition rather than explanation, and over-obvious foreshadowing. The
+dual-persona review round persists the critic's structured verdict on the
+realized **Value Turn** and the realized **promise events**; the critic prompt
+carries the plan, never the writer's realized report (ADR 0005). A disagreement
+is the `critic_report_disagreement` finding above.
+
+**A McKee mismatch parks; it never commits.** When a Scene's verify ends
+`parked_findings` (a deterministic mismatch, a critic disagreement, or any
+actionable finding after the revise budget), the harness moves the Scene to
+`parked_for_checkpoint` and `determine_next_action` returns a checkpoint action
+for its chapter — never `commit scene changes`. Checkpoint review clears the
+park only by re-drafting the Scene (`authoring_review_checkpoint`'s
+`redraft_scenes`, the same reset as `authoring_resolve_block`
+`target_phase="redraft"`); a review that would leave the Scene parked is
+refused, including an auto-checkpoint approval. A plan amendment accepted first
+takes effect on the next draft; automatic amendment detection is not wired into
+the harness, so the redraft is still the explicit clearance step. Non-McKee runs
+keep the existing commit-on-parked behaviour.
 
 Comparison tolerances are deliberate and documented on
 `spindle_core::realized`: Charge comparison is exact (a closed typed pair);

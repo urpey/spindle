@@ -130,10 +130,11 @@ realized promise status) — is persisted on the Scene (V0061), reads back throu
 `get_entity(table: "scene")`, and travels with earlier Scenes' results in the
 briefing and scene context. Four deterministic checks hold it to the plan (exact
 Charge comparison, Gap by presence, Turning Beat by 1-based position; a planned
-change milestone may be chapter-wide). They run when `check_consistency` is asked
-for the scene-verify set (the run's verify step), not inside a bare save, so a
-mismatch goes through the bounded revise loop in a run; parked-findings commit
-handling is #33. A confirmed promise event has its status written by the system
+change milestone may be chapter-wide), and `critic_report_disagreement` holds the
+writer's report to the independent critic verdict. They run when
+`check_consistency` is asked for the scene-verify set (the run's verify step), not
+inside a bare save, so a mismatch goes through the bounded revise loop; when the
+budget is spent the McKee Scene parks for checkpoint review and never commits. A confirmed promise event has its status written by the system
 with the Scene recorded as the source scene. A save replaces the stored
 report; a Scene saved without one — and every non-McKee project — keeps its
 previous payload exactly.
@@ -725,6 +726,52 @@ the empirical failure modes measured in the 90-pair live **G** experiment:
   while targeting `tension_turn`, `voice` (`-0.1500` in G), and `freshness`
   (`-0.1445` in G) with span-anchored directives rather than generic rewrite
   advice.
+
+### McKee critic rubric and independent verdicts (`scene-critic-mckee-v1`)
+
+McKee projects select a bumped critic rubric, `scene-critic-mckee-v1`
+(`spindle_core::drafting::critic`), for the authoring run's dual-persona review.
+It keeps the base `scene-critic-v1` rubric and adds four McKee dimensions:
+**Value Turn realized**, **Gap lands**, **exposition as ammunition** (used in
+conflict rather than explained to the reader) and **over-obvious
+foreshadowing**. The prompt carries the plan — the planned axes and their
+opening/closing Charge, the planned Gap, the Turning Beat and the planned
+promise events — and the prose, but **not** the writer's realized report: under
+ADR 0005 the critic's verdict must be independent of the writer's claim.
+
+The review round persists `critic_rubric_version` and a structured
+`McKeeCriticVerdict`:
+
+```text
+McKeeCriticVerdict {
+  rubric_version: "scene-critic-mckee-v1",
+  value_turn: { verdict: agree | mismatch, notes? },
+  promise_events: { verdict: agree | mismatch, notes? },
+  dimensions: [{ dimension: value_turn_realized | gap_lands |
+                 exposition_as_ammunition | over_obvious_foreshadowing,
+                 score_1_to_5, rationale }],
+}
+```
+
+The critic emits it after its strengths/concerns sections as one
+`CRITIC VERDICT:` line; `parse_mckee_critic_verdict` salvages the trailing JSON
+object, then validates the rubric, all four dimensions, scores `1..=5` and
+non-empty rationales. Malformed output yields no verdict, which is an
+**unavailable pass**, never a disagreement. A caller can supply fixed critic
+output through `run_dual_persona_review`'s additive `critic_output` field; it
+goes through the same parse/validate/persist path and skips only the literary
+critic model call, so tests and offline hosts drive the real contract without a
+model.
+
+The deterministic `critic_report_disagreement` scene-verify check compares that
+persisted verdict with the writer's realized report, only when the report makes a
+definite claim on every planned axis (and on every planned promise event) and
+only for the prose version the review's fingerprint names. The check is part of
+`SCENE_VERIFY_CHECKS`, is gated on `project.mckee_structured`, and emits an
+`error` finding attributed to the Scene. On a McKee run those findings — and any
+other actionable finding after the revise budget — park the Scene for checkpoint
+review instead of committing it. Non-McKee projects keep the current
+`scene-critic-v1` rubric and see none of this.
 
 ### `CritiqueV1` DTO, anchor validation, and feedback ingestion
 
