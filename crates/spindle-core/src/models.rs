@@ -9528,12 +9528,87 @@ pub struct ListPlanAmendmentsInput {
     pub source_chapter: Option<i32>,
 }
 
+/// A planned Scene that no longer passes the McKee value-chain or
+/// promise/Key-Fact checks after a plan amendment was accepted (issue #34).
+///
+/// A mark is persisted per Scene and updated in place by a repeat cascade, so a
+/// Scene never accumulates duplicate marks. `status` is `stale` while the Scene
+/// needs replanning and `cleared` once a reconciliation repaired it (the row is
+/// retained as history). Only McKee projects ever produce a mark; a non-McKee
+/// project's plan-amendment reads are byte-identical to before.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ScenePlanStale {
+    /// Stale-mark record id (`scene_plan_stale:` prefix).
+    pub id: String,
+    /// Project the marked Scene belongs to.
+    pub project_id: String,
+    /// Branch the marked Scene was planned on.
+    pub branch_id: String,
+    /// 1-based book number of the marked Scene.
+    pub book_number: i32,
+    /// 1-based chapter number of the marked Scene.
+    pub chapter_number: i32,
+    /// 1-based story order of the marked Scene inside its chapter.
+    pub scene_order: i32,
+    /// `stale` while the Scene needs replanning; `cleared` once repaired.
+    pub status: String,
+    /// Why the Scene no longer passes (ids/summaries only, never prose).
+    pub reason: String,
+    /// The blocking planning-finding codes that failed for this Scene.
+    #[serde(default)]
+    pub finding_codes: Vec<String>,
+    /// The accepted amendment whose apply triggered this mark.
+    pub triggering_amendment_id: String,
+    /// The staged reconciliation proposal for this Scene, when a mechanical
+    /// repair is expressible. `None` means the Scene needs a manual replan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconciliation_amendment_id: Option<String>,
+    /// When the mark was first created (ISO-8601).
+    pub created_at: String,
+    /// When the mark was last updated (ISO-8601).
+    pub updated_at: String,
+    /// When the mark was cleared (ISO-8601), when it has been.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleared_at: Option<String>,
+}
+
+/// What accepting one plan amendment did to the downstream plan (issue #34).
+///
+/// `triggers` names the detected trigger kinds: `closing_charge` (a planned
+/// Scene's closing Charge on a Value Axis changed), `key_fact` (a Key Fact's
+/// planned-Scene binding changed), `promise_payoff` (a Narrative Promise payoff
+/// placement changed), or `reconciliation_repair` (the applied amendment is
+/// itself a cascade reconciliation, so its own Scene is re-validated even
+/// without a further trigger). `reconciliation_amendment_ids` are the staged
+/// `scene_replace` proposals this decision staged (a repeat cascade reuses a
+/// still-staged proposal instead of staging a duplicate).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PlanAmendmentCascadeOutcome {
+    /// Detected trigger kinds: `closing_charge`, `key_fact`, `promise_payoff`
+    /// or `reconciliation_repair`.
+    #[serde(default)]
+    pub triggers: Vec<String>,
+    /// How many downstream Scenes were marked stale by this apply.
+    pub marked_stale: usize,
+    /// How many previously stale Scenes now pass and had their mark cleared.
+    pub cleared_stale: usize,
+    /// The `scene_replace` reconciliation proposals staged by this apply.
+    #[serde(default)]
+    pub reconciliation_amendment_ids: Vec<String>,
+}
+
 /// Output of `list_plan_amendments`: the matching amendments in the repository's
-/// deterministic `(created_at, id)` order.
+/// deterministic `(created_at, id)` order, plus the active downstream stale
+/// marks (McKee only).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ListPlanAmendmentsOutput {
     #[serde(default)]
     pub amendments: Vec<PlanAmendment>,
+    /// Planned Scenes currently marked stale on the active branch. Additive and
+    /// skipped when empty, so a project with no cascade (including every
+    /// non-McKee project) serializes exactly as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stale_scenes: Vec<ScenePlanStale>,
 }
 
 // One operator ratification decision on a staged plan amendment (ADR 0003 D5).
@@ -9607,6 +9682,15 @@ pub struct PlanAmendmentDecisionResult {
     /// no note column, so this is the only place it survives).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Present on an `applied` decision that ran the McKee amendment cascade
+    /// (issue #34): what changed downstream and what was staged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cascade: Option<PlanAmendmentCascadeOutcome>,
+    /// Present when the cascade itself failed after a real apply: the outline
+    /// change stands (it was already written) but the downstream stale marks and
+    /// reconciliation proposals could not be produced. Never silently swallowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cascade_error: Option<String>,
 }
 
 /// Output of `decide_plan_amendments`: one result per decision in input order,
@@ -9618,6 +9702,14 @@ pub struct DecidePlanAmendmentsOutput {
     pub applied_count: usize,
     pub rejected_count: usize,
     pub failed_count: usize,
+    /// Active downstream stale marks after this batch (McKee only). Additive and
+    /// skipped when empty, so a non-McKee decision output is unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stale_scenes: Vec<ScenePlanStale>,
+    /// The `scene_replace` reconciliation proposals this batch staged, in staging
+    /// order. Additive and skipped when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub staged_reconciliation_ids: Vec<String>,
 }
 
 // A single reader-simulation concern (evolution §3.6 cumulative reader-sim).

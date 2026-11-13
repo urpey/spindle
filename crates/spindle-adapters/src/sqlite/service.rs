@@ -2989,6 +2989,29 @@ fn plan_amendment_payload_is_valid(class: &str, payload: &serde_json::Value) -> 
                     .get("character_ids")
                     .map(|c| c.is_array())
                     .unwrap_or(false)
+                // Optional value-plan repair (issue #34): the payload may carry
+                // a complete primary axis and/or the secondary axes. Absent
+                // means "carry the stored value plan through untouched", which
+                // is the pre-#34 contract. The McKee apply path only uses these
+                // on a McKee project.
+                && payload
+                    .get("primary_value_axis")
+                    .is_none_or(|value| {
+                        value.is_null()
+                            || serde_json::from_value::<
+                                spindle_core::scene_value::SceneValueAxis,
+                            >(value.clone())
+                            .is_ok()
+                    })
+                && payload
+                    .get("secondary_value_axes")
+                    .is_none_or(|value| {
+                        value.is_null()
+                            || serde_json::from_value::<
+                                Vec<spindle_core::scene_value::SceneValueAxis>,
+                            >(value.clone())
+                            .is_ok()
+                    })
         }
         "scene_reorder" => payload
             .get("new_order")

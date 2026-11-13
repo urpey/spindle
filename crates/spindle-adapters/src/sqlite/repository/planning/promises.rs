@@ -47,14 +47,30 @@ struct PromiseGate {
 
 impl PromiseGate {
     fn planted_before(&self, scene: &PlanningStoryPlacement) -> bool {
-        self.planted_at
-            .as_ref()
-            .is_some_and(|planted| planted.cmp_story_order(scene) == std::cmp::Ordering::Less)
+        promise_planted_before(self.planted_at.as_ref(), scene)
     }
 
     fn pays_off_at(&self, scene: &PlanningStoryPlacement) -> bool {
-        self.payoffs.iter().any(|payoff| same_scene(payoff, scene))
+        promise_pays_off_at(&self.payoffs, scene)
     }
+}
+
+/// The one "planted strictly before this Scene" rule. Shared by the planning
+/// gate and the McKee amendment cascade so the two can never disagree.
+pub(crate) fn promise_planted_before(
+    planted_at: Option<&PlanningStoryPlacement>,
+    scene: &PlanningStoryPlacement,
+) -> bool {
+    planted_at.is_some_and(|planted| planted.cmp_story_order(scene) == std::cmp::Ordering::Less)
+}
+
+/// The one "pays off exactly at this Scene" rule. Shared by the planning gate
+/// and the McKee amendment cascade.
+pub(crate) fn promise_pays_off_at(
+    payoffs: &[PlanningStoryPlacement],
+    scene: &PlanningStoryPlacement,
+) -> bool {
+    payoffs.iter().any(|payoff| same_scene(payoff, scene))
 }
 
 fn same_scene(left: &PlanningStoryPlacement, right: &PlanningStoryPlacement) -> bool {
@@ -625,4 +641,170 @@ fn chapter_plan_shape_in_conn(
         chapter_number,
         scenes.into_iter().map(|scene| scene.scene_order).collect(),
     )))
+}
+
+// ---------------------------------------------------------------------------
+// Amendment cascade (issue #34)
+// ---------------------------------------------------------------------------
+
+/// Re-run the #28 promise/Key-Fact rules over the accepted plans and rows.
+///
+/// The cascade has no planning artifact to read: Key Facts are accepted
+/// `canonical_fact` rows in the reserved Key Fact namespace and promises are
+/// accepted `narrative_promise` rows, so this maps those rows onto the same
+/// [`PromiseGate`] the planning gate builds and calls the same
+/// [`promise_planted_before`] / [`promise_pays_off_at`] predicates. Finding codes
+/// match the planning gate exactly.
+pub(crate) fn cascade_promise_findings(
+    scenes: &[(i32, i32, PlannedScene)],
+    promises: &[crate::sqlite::records::NarrativePromise],
+    key_facts: &[crate::sqlite::records::CanonicalFact],
+) -> Vec<super::values::CascadeSceneFinding> {
+    let mut gates: BTreeMap<String, PromiseGate> = BTreeMap::new();
+    for promise in promises {
+        if promise.archived_at.is_some() {
+            continue;
+        }
+        let planted_at = Some(PlanningStoryPlacement {
+            book_number: promise.planted_at.book_number,
+            chapter_number: promise.planted_at.chapter_number,
+            scene_order: promise.planted_at.scene_order,
+            note: promise.planted_at.note.clone(),
+        });
+        let payoffs = promise
+            .planned_payoff
+            .as_ref()
+            .map(|payoff| PlanningStoryPlacement {
+                book_number: payoff.book_number,
+                chapter_number: payoff.chapter_number,
+                scene_order: payoff.scene_order,
+                note: payoff.note.clone(),
+            })
+            .into_iter()
+            .collect();
+        gates.insert(
+            promise.id.clone(),
+            PromiseGate {
+                planted_at,
+                payoffs,
+            },
+        );
+    }
+
+    let mut findings = Vec::new();
+    for (book_number, chapter_number, scene) in scenes {
+        let placement = PlanningStoryPlacement {
+            book_number: *book_number,
+            chapter_number: *chapter_number,
+            scene_order: Some(scene.scene_order),
+            note: None,
+        };
+        if let Some(beat) = scene
+            .turning_beat
+            .and_then(|position| scene.beats.get(position.saturating_sub(1) as usize))
+            && beat.information_dependent
+        {
+            let code = match beat.promise_id.as_ref() {
+                None => Some("turning_beat_information_dependent_without_promise"),
+                Some(promise_id) => match gates.get(promise_id) {
+                    None => Some("turning_beat_promise_unknown"),
+                    Some(gate) if !gate.planted_before(&placement) => {
+                        Some("turning_beat_promise_not_planted_earlier")
+                    }
+                    Some(_) => None,
+                },
+            };
+            if let Some(code) = code {
+                findings.push(super::values::CascadeSceneFinding {
+                    book_number: *book_number,
+                    chapter_number: *chapter_number,
+                    scene_order: scene.scene_order,
+                    code: code.to_string(),
+                    message: format!(
+                        "book {book_number} chapter {chapter_number} scene {}: the Turning Beat \
+                         depends on information without an earlier-planted promise ({code})",
+                        scene.scene_order
+                    ),
+                    axis: None,
+                    expected_opening: None,
+                });
+            }
+        }
+    }
+
+    for fact in key_facts {
+        let Some(kind) = spindle_core::key_fact::key_fact_kind_from_predicate(&fact.predicate)
+        else {
+            continue;
+        };
+        if !kind.is_secret_reveal() || fact.superseded_by.is_some() {
+            continue;
+        }
+        if crate::format::is_planning_only_secret_fact(fact) {
+            continue;
+        }
+        let Some(from) = fact.valid_from.as_ref() else {
+            continue;
+        };
+        if from.scene_order.is_none() {
+            continue;
+        }
+        let Some(scene) = scenes.iter().find(|(book, chapter, scene)| {
+            *book == from.book_number
+                && *chapter == from.chapter_number
+                && scene.scene_order == from.scene_order.unwrap_or_default()
+        }) else {
+            continue;
+        };
+        let placement = PlanningStoryPlacement {
+            book_number: from.book_number,
+            chapter_number: from.chapter_number,
+            scene_order: from.scene_order,
+            note: None,
+        };
+        if fact.valid_until.as_ref().is_some_and(|until| {
+            crate::format::story_index_from_placement(until)
+                < crate::format::story_index(
+                    placement.book_number,
+                    placement.chapter_number,
+                    placement.scene_order.unwrap_or_default(),
+                )
+        }) {
+            continue;
+        }
+        let codes: Vec<&str> = if fact.subject_table != "character"
+            || fact
+                .subject_id
+                .as_deref()
+                .is_none_or(|id| !id.starts_with("character:"))
+        {
+            vec!["key_fact_secret_reveal_requires_character_subject"]
+        } else if !gates
+            .values()
+            .any(|gate| gate.planted_before(&placement) && gate.pays_off_at(&placement))
+        {
+            vec!["key_fact_secret_reveal_without_promise"]
+        } else {
+            Vec::new()
+        };
+        for code in codes {
+            findings.push(super::values::CascadeSceneFinding {
+                book_number: scene.0,
+                chapter_number: scene.1,
+                scene_order: scene.2.scene_order,
+                code: code.to_string(),
+                message: format!(
+                    "book {} chapter {} scene {}: Key Fact '{}' is not backed by an \
+                     earlier-planted promise whose payoff lands here ({code})",
+                    scene.0,
+                    scene.1,
+                    scene.2.scene_order,
+                    spindle_core::key_fact::key_fact_display_predicate(&fact.predicate)
+                ),
+                axis: None,
+                expected_opening: None,
+            });
+        }
+    }
+    findings
 }

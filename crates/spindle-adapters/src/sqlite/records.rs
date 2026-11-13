@@ -3634,6 +3634,76 @@ pub const PLAN_AMENDMENT_COLUMNS: &str = "id, project_id, branch_id, source_chap
      authoring_run_id, amendment_class, target_chapter, payload, rationale, confidence, \
      status, decided_at, decided_by, prior_state, created_at, updated_at";
 
+pub const SCENE_PLAN_STALE_COLUMNS: &str = "id, project_id, branch_id, book_number, chapter_number, \
+     scene_order, status, reason, finding_codes, triggering_amendment_id, \
+     reconciliation_amendment_id, created_at, updated_at, cleared_at";
+
+/// A persisted stale mark on a planned Scene (issue #34, migration V0062).
+/// Stored microsecond timestamps map to ISO-8601 strings in the spindle-core
+/// [`spindle_core::models::ScenePlanStale`] read model.
+#[derive(Debug, Clone)]
+pub struct StoredScenePlanStale {
+    pub id: String,
+    pub project_id: String,
+    pub branch_id: String,
+    pub book_number: i32,
+    pub chapter_number: i32,
+    pub scene_order: i32,
+    pub status: String,
+    pub reason: String,
+    pub finding_codes: Vec<String>,
+    pub triggering_amendment_id: String,
+    pub reconciliation_amendment_id: Option<String>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+    pub cleared_at: Option<Timestamp>,
+}
+
+impl<'a> TryFrom<&Row<'a>> for StoredScenePlanStale {
+    type Error = rusqlite::Error;
+    fn try_from(r: &Row<'a>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row::text(r, 0)?,
+            project_id: row::text(r, 1)?,
+            branch_id: row::text(r, 2)?,
+            book_number: row::int(r, 3)? as i32,
+            chapter_number: row::int(r, 4)? as i32,
+            scene_order: row::int(r, 5)? as i32,
+            status: row::text(r, 6)?,
+            reason: row::text(r, 7)?,
+            finding_codes: row::json(r, 8)?,
+            triggering_amendment_id: row::text(r, 9)?,
+            reconciliation_amendment_id: row::opt_text(r, 10)?,
+            created_at: row::time(r, 11)?,
+            updated_at: row::time(r, 12)?,
+            cleared_at: row::opt_time(r, 13)?,
+        })
+    }
+}
+
+impl StoredScenePlanStale {
+    /// Map to the spindle-core read model, rendering microsecond timestamps as
+    /// ISO-8601 strings (mirrors [`StoredPlanAmendment::into_core`]).
+    pub fn into_core(self) -> spindle_core::models::ScenePlanStale {
+        spindle_core::models::ScenePlanStale {
+            id: self.id,
+            project_id: self.project_id,
+            branch_id: self.branch_id,
+            book_number: self.book_number,
+            chapter_number: self.chapter_number,
+            scene_order: self.scene_order,
+            status: self.status,
+            reason: self.reason,
+            finding_codes: self.finding_codes,
+            triggering_amendment_id: self.triggering_amendment_id,
+            reconciliation_amendment_id: self.reconciliation_amendment_id,
+            created_at: self.created_at.to_rfc3339(),
+            updated_at: self.updated_at.to_rfc3339(),
+            cleared_at: self.cleared_at.map(|t| t.to_rfc3339()),
+        }
+    }
+}
+
 /// A staged/decided plan amendment (ADR 0003, migration V0029). Timestamps are
 /// the stored microsecond [`Timestamp`]; the adapter maps them to ISO-8601
 /// strings when producing the spindle-core

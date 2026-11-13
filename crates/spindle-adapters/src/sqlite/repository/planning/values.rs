@@ -946,9 +946,24 @@ fn validate_non_events(scenes: &[SceneValueEntry], findings: &mut Vec<PlanningFi
     }
 }
 
-fn validate_value_chain(scenes: &[SceneValueEntry], findings: &mut Vec<PlanningFinding>) {
+/// One broken value-chain link: the Scene whose opening Charge no longer
+/// continues the axis from the preceding Scene's closing Charge.
+struct ValueChainBreak {
+    scene_index: usize,
+    previous_index: usize,
+    axis: String,
+    expected: spindle_core::charge::Charge,
+    actual: spindle_core::charge::Charge,
+    path: String,
+}
+
+/// The pure broken-chain walk. It is shared by the planning gate (mapped into
+/// stage-recordable findings) and the McKee amendment cascade (mapped into
+/// actionable repairs), so the two can never disagree about the chain rule.
+fn value_chain_breaks(scenes: &[SceneValueEntry]) -> Vec<ValueChainBreak> {
     // axis name -> (closing Charge left by the preceding occurrence, scene index)
     let mut last_closing: BTreeMap<String, (spindle_core::charge::Charge, usize)> = BTreeMap::new();
+    let mut breaks = Vec::new();
     for (index, scene) in scenes.iter().enumerate() {
         for (suffix, axis) in scene_axes(scene) {
             let name = axis.axis.trim().to_string();
@@ -958,34 +973,147 @@ fn validate_value_chain(scenes: &[SceneValueEntry], findings: &mut Vec<PlanningF
             if let Some((expected, previous_index)) = last_closing.get(&name)
                 && *expected != axis.opening
             {
-                let previous = &scenes[*previous_index];
-                findings.push(planning_finding(
-                    "value_chain_broken",
-                    PlanningFindingSeverity::Blocking,
-                    format!("{}/{suffix}/opening", scene.path),
-                    Vec::new(),
-                    format!(
-                        "opening Charge {} / {} — the closing Charge left on axis '{name}' by book {} chapter {} scene {}",
-                        expected.sign(),
-                        expected.depth(),
-                        previous.book_number,
-                        previous.chapter_number,
-                        previous.scene_order
-                    ),
-                    format!(
-                        "opening Charge {} / {}",
-                        axis.opening.sign(),
-                        axis.opening.depth()
-                    ),
-                    format!(
-                        "{} Continue axis '{name}' from its last closing Charge, or change that earlier closing Charge first.",
-                        scene.repair_hint
-                    ),
-                ));
+                breaks.push(ValueChainBreak {
+                    scene_index: index,
+                    previous_index: *previous_index,
+                    axis: name.clone(),
+                    expected: *expected,
+                    actual: axis.opening,
+                    path: format!("{}/{suffix}/opening", scene.path),
+                });
             }
             last_closing.insert(name, (axis.closing, index));
         }
     }
+    breaks
+}
+
+fn validate_value_chain(scenes: &[SceneValueEntry], findings: &mut Vec<PlanningFinding>) {
+    for chain_break in value_chain_breaks(scenes) {
+        let scene = &scenes[chain_break.scene_index];
+        let previous = &scenes[chain_break.previous_index];
+        findings.push(planning_finding(
+            "value_chain_broken",
+            PlanningFindingSeverity::Blocking,
+            chain_break.path,
+            Vec::new(),
+            format!(
+                "opening Charge {} / {} — the closing Charge left on axis '{}' by book {} chapter {} scene {}",
+                chain_break.expected.sign(),
+                chain_break.expected.depth(),
+                chain_break.axis,
+                previous.book_number,
+                previous.chapter_number,
+                previous.scene_order
+            ),
+            format!(
+                "opening Charge {} / {}",
+                chain_break.actual.sign(),
+                chain_break.actual.depth()
+            ),
+            format!(
+                "{} Continue axis '{}' from its last closing Charge, or change that earlier closing Charge first.",
+                scene.repair_hint, chain_break.axis
+            ),
+        ));
+    }
+}
+
+/// One blocking finding the amendment cascade reports against one planned Scene
+/// (issue #34). `axis`/`expected_opening` are populated for a broken value-chain
+/// link so a `scene_replace` reconciliation can repair the opening Charge with
+/// the exact Charge the chain requires.
+#[derive(Debug, Clone)]
+pub(crate) struct CascadeSceneFinding {
+    pub book_number: i32,
+    pub chapter_number: i32,
+    pub scene_order: i32,
+    pub code: String,
+    pub message: String,
+    pub axis: Option<String>,
+    pub expected_opening: Option<spindle_core::charge::Charge>,
+}
+
+/// Re-run the SAME value-plan rules the planning gate uses (scene value shapes,
+/// non-events and the value chain) over the accepted plans of the whole branch,
+/// and return the blocking findings per Scene.
+///
+/// It is deliberately the shared rule functions, not a copy: a cascade can
+/// never accept something the planning gate would reject, or vice versa. The
+/// caller decides which Scenes are in scope (later planned, undrafted only).
+pub(crate) fn cascade_value_findings(
+    scenes: &[(i32, i32, spindle_core::models::PlannedScene)],
+) -> Vec<CascadeSceneFinding> {
+    let entries: Vec<SceneValueEntry> = scenes
+        .iter()
+        .map(|(book_number, chapter_number, scene)| {
+            SceneValueEntry::from_planned_scene(
+                *book_number,
+                *chapter_number,
+                scene,
+                format!(
+                    "/accepted_scenes/{book_number}/{chapter_number}/{}",
+                    scene.scene_order
+                ),
+                format!(
+                    "Stage a replacement Chapter or Scene plan for book {book_number} chapter \
+                     {chapter_number}."
+                ),
+            )
+        })
+        .collect();
+
+    // A finding's path starts with the owning Scene's base path; mapping through
+    // the base path keeps the rule output unchanged (the planning gate sees the
+    // exact same shape).
+    let mut bases: Vec<(String, usize)> = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (entry.path.clone(), index))
+        .collect();
+    // Longest first so a chapter/order prefix can never shadow a longer one.
+    bases.sort_by_key(|left| std::cmp::Reverse(left.0.len()));
+    let owner = |path: &str| {
+        bases.iter().find_map(|(base, index)| {
+            (path == base || path.starts_with(&format!("{base}/"))).then_some(*index)
+        })
+    };
+
+    let mut findings = Vec::new();
+    validate_scene_value_shapes(&entries, &mut findings);
+    validate_non_events(&entries, &mut findings);
+    let breaks = value_chain_breaks(&entries);
+    let mut break_details: BTreeMap<String, (String, spindle_core::charge::Charge)> = breaks
+        .into_iter()
+        .map(|chain_break| (chain_break.path, (chain_break.axis, chain_break.expected)))
+        .collect();
+    validate_value_chain(&entries, &mut findings);
+
+    findings
+        .into_iter()
+        .filter(|finding| finding.severity == PlanningFindingSeverity::Blocking)
+        .filter_map(|finding| {
+            let index = owner(&finding.path)?;
+            let entry = &entries[index];
+            let (axis, expected_opening) = match break_details.remove(&finding.path) {
+                Some((axis, expected)) => (Some(axis), Some(expected)),
+                None => (None, None),
+            };
+            let code = finding.code.clone();
+            Some(CascadeSceneFinding {
+                book_number: entry.book_number,
+                chapter_number: entry.chapter_number,
+                scene_order: entry.scene_order,
+                code: code.clone(),
+                message: format!(
+                    "{}: expected {}, got {} ({})",
+                    finding.path, finding.expected, finding.actual, code
+                ),
+                axis,
+                expected_opening,
+            })
+        })
+        .collect()
 }
 
 fn validate_sequence_membership(
