@@ -5285,6 +5285,123 @@ async fn checkpoint_review_approves_a_host_verdict_and_a_route_agreement() {
     verify_shutdown(fx).await;
 }
 
+// ── Checkpoint advisory answers (issue #35) ────────────────────────────────
+
+/// The checkpoint report carries the three advisory McKee answers, and a
+/// concerning answer never blocks an otherwise clean review.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_report_carries_the_three_advisory_answers_without_gating() {
+    use spindle_core::story_spine::{ControllingIdea, CreateStorySpineInput, StorySpineEnding};
+
+    let fx = mckee_agent_fixture().await;
+    // The spine is accepted through planning in a real flow; a direct write is
+    // enough here because this test is about the checkpoint report, not the
+    // planning gate (covered by the planning service tests).
+    fx.svc
+        .repository()
+        .create_story_spine(&CreateStorySpineInput {
+            project_id: fx.project_id.clone(),
+            series_spine_id: None,
+            book_number: None,
+            central_question: "Can Mara keep the vow without losing the harbor?".into(),
+            controlling_idea: ControllingIdea {
+                value: "Mara's vow".into(),
+                cause: "the witness returns".into(),
+            },
+            counter_idea: "a vow is only a cage".into(),
+            spine_axis: "Mara's vow".into(),
+            ending_type: StorySpineEnding::Idealist,
+            inciting_incident: None,
+            final_climax: None,
+            theme_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let report = mckee_pending_checkpoint_report(&fx).await;
+    let advisory = report
+        .get("mckee_advisory")
+        .expect("a McKee checkpoint report must carry the advisory answers");
+    assert_eq!(
+        advisory["central_question"]["question"].as_str(),
+        Some("Can Mara keep the vow without losing the harbor?"),
+        "{advisory:?}"
+    );
+    assert_eq!(
+        advisory["controlling_idea_debate"]["axis"].as_str(),
+        Some("Mara's vow"),
+        "{advisory:?}"
+    );
+    // The mock writer's realized turn closes negative (contrary), so the
+    // reader is currently on the Counter-Idea side. That is an unflattering
+    // answer on purpose: approval below proves it cannot gate.
+    assert_eq!(
+        advisory["controlling_idea_debate"]["reader_side"].as_str(),
+        Some("counter_idea"),
+        "{advisory:?}"
+    );
+    assert!(
+        advisory["controlling_idea_debate"]["basis"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("book 1 chapter 1"),
+        "{advisory:?}"
+    );
+    assert!(
+        advisory["dormant_subplots"].is_array(),
+        "the forgotten-Subplot answer is always a list: {advisory:?}"
+    );
+
+    // The same checkpoint still approves: the advisory is report-only.
+    record_checkpoint_deep_audit(&fx).await;
+    let sampled: Vec<String> = report["sampled_scene_ids"]
+        .as_array()
+        .expect("sampled scene ids")
+        .iter()
+        .map(|id| id.as_str().unwrap().to_string())
+        .collect();
+    review_checkpoint_scene(
+        &fx,
+        &sampled[0],
+        fixed_mckee_critic_output("agree", "agree"),
+        false,
+    )
+    .await;
+    let (refused, message) = review_checkpoint_tool(&fx, false).await;
+    assert!(
+        !refused,
+        "advisory answers must never block a clean checkpoint review: {message}"
+    );
+    assert_eq!(
+        verify_status(&fx).await["checkpoint_reports"][0]["status"].as_str(),
+        Some("reviewed")
+    );
+
+    verify_shutdown(fx).await;
+}
+
+/// A non-McKee report has no advisory field at all, so its bytes are unchanged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_mckee_checkpoint_report_has_no_mckee_advisory() {
+    let fx = verify_run_fixture(true, None).await;
+    let report = mckee_pending_checkpoint_report(&fx).await;
+    assert!(
+        report["sampled_scene_ids"].is_array(),
+        "expected a real checkpoint report: {report:?}"
+    );
+    assert!(
+        report.get("mckee_advisory").is_none(),
+        "a non-McKee report must not grow an advisory field: {report:?}"
+    );
+    let wire = serde_json::to_string(&report).unwrap();
+    assert!(
+        !wire.contains("mckee_advisory"),
+        "the advisory field is skipped while serializing a non-McKee report"
+    );
+
+    verify_shutdown(fx).await;
+}
+
 async fn branch_of(fx: &VerifyRunFixture) -> String {
     fx.svc
         .repository()

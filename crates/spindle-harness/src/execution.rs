@@ -1399,6 +1399,12 @@ async fn run_checkpoint(
             // automation adds it after the sampled reviews and before the
             // verdict. A manual-policy run never populates it.
             reader_sim: None,
+            // The three advisory McKee answers are computed from the Story
+            // Bible by the MCP checkpoint paths (creation on the host path,
+            // review, and the auto-checkpoint). The CLI harness only has MCP
+            // reads, so it writes no advisory; `authoring_review_checkpoint`
+            // fills it before the operator gate. Advisory only, never gating.
+            mckee_advisory: None,
         },
     )?;
 

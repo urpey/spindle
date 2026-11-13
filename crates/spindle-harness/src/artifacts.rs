@@ -335,6 +335,19 @@ pub struct CheckpointReportArtifact {
     /// never ran the pass (manual policy, or an older report).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_sim: Option<CheckpointReaderSimSection>,
+    /// The three advisory McKee checkpoint answers (issue #35): Central Question
+    /// progress, the Controlling Idea / Counter-Idea side the reader is on, and
+    /// the Subplots the reader has likely forgotten.
+    ///
+    /// Additive, serde-default and skipped when unset, so every non-McKee report
+    /// (and every report written before the advisory existed) keeps its exact
+    /// previous bytes. Populated only for a McKee-structured project by the
+    /// checkpoint creation path and refreshed by checkpoint review / the
+    /// auto-checkpoint before the verdict. **Advisory only**: nothing in the
+    /// approve/block gate reads this field, so no answer can approve or block a
+    /// checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mckee_advisory: Option<spindle_core::checkpoint_advisory::CheckpointAdvisory>,
 }
 
 /// The reader-simulation section of a checkpoint report (evolution §3.6). One

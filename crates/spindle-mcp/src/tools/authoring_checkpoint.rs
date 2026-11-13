@@ -488,6 +488,44 @@ pub(super) fn authoring_record_checkpoint_deep_audit(
     Ok(())
 }
 
+/// Record the three advisory McKee answers into the checkpoint report artifact.
+///
+/// Additive report enrichment only: the approve/block gate never reads the
+/// field, so a write failure here must be logged by the caller and must never
+/// block the checkpoint.
+pub(super) fn authoring_record_checkpoint_advisory(
+    harness_state: &spindle_harness::state::HarnessState,
+    state_path: &Path,
+    start_chapter: i32,
+    end_chapter: i32,
+    advisory: spindle_core::checkpoint_advisory::CheckpointAdvisory,
+) -> anyhow::Result<()> {
+    let report_path =
+        checkpoint_report_path(harness_state, state_path, start_chapter, end_chapter)?;
+    let raw_report = std::fs::read_to_string(&report_path).with_context(|| {
+        format!(
+            "failed to read checkpoint report artifact {}",
+            report_path.display()
+        )
+    })?;
+    let mut report: spindle_harness::artifacts::CheckpointReportArtifact =
+        serde_json::from_str(&raw_report).with_context(|| {
+            format!(
+                "failed to parse checkpoint report artifact {}",
+                report_path.display()
+            )
+        })?;
+    report.mckee_advisory = Some(advisory);
+    let report_json = serde_json::to_string_pretty(&report)?;
+    std::fs::write(&report_path, report_json).with_context(|| {
+        format!(
+            "failed to update checkpoint report artifact {}",
+            report_path.display()
+        )
+    })?;
+    Ok(())
+}
+
 pub(super) fn authoring_record_checkpoint_sampled_reviews(
     harness_state: &spindle_harness::state::HarnessState,
     state_path: &Path,
@@ -605,6 +643,41 @@ pub(super) fn checkpoint_report_path(
 }
 
 impl ToolRouter {
+    /// The three advisory McKee checkpoint answers for one range, or `None` when
+    /// the run's project is not McKee-structured.
+    ///
+    /// Advisory only. An error is logged and omitted: the answers enrich the
+    /// checkpoint report and can never approve, block or fail a checkpoint.
+    pub(super) async fn mckee_checkpoint_advisory(
+        &self,
+        state: &spindle_harness::state::HarnessState,
+        through_chapter: i32,
+    ) -> Option<spindle_core::checkpoint_advisory::CheckpointAdvisory> {
+        if !state.mckee_structured {
+            return None;
+        }
+        match self
+            .service
+            .checkpoint_advisory(spindle_core::checkpoint_advisory::CheckpointAdvisoryInput {
+                project_id: state.project_id.clone(),
+                book_number: state.book_number,
+                through_chapter,
+            })
+            .await
+        {
+            Ok(advisory) => advisory,
+            Err(error) => {
+                tracing::warn!(
+                    project_id = state.project_id,
+                    through_chapter,
+                    error = format!("{error:#}"),
+                    "McKee checkpoint advisory read failed; omitting the advisory (never a gate)"
+                );
+                None
+            }
+        }
+    }
+
     pub(super) async fn execute_authoring_run_checkpoint(
         &self,
         state_path: &Path,
@@ -699,6 +772,10 @@ impl ToolRouter {
             state.project_id, state.book_number, start_chapter, end_chapter
         );
 
+        // The three advisory McKee answers (issue #35). Report enrichment only:
+        // nothing below reads them, so they can never affect the verdict.
+        let mckee_advisory = self.mckee_checkpoint_advisory(&state, end_chapter).await;
+
         artifact_store.save_json(
             &report_path,
             &CheckpointReportArtifact {
@@ -721,6 +798,9 @@ impl ToolRouter {
                 // Reader-sim runs later, inside the auto-checkpoint automation
                 // (evolution §3.6); the report is created with no section.
                 reader_sim: None,
+                // Advisory only; `None` for a non-McKee project so its report
+                // bytes are unchanged.
+                mckee_advisory,
             },
         )?;
 
@@ -845,6 +925,24 @@ impl ToolRouter {
                     report_path.display()
                 )
             })?;
+
+        // Advisory-only McKee answers, refreshed before the gate and persisted
+        // immediately so the operator can read them even when the review below
+        // is refused. The gate never reads `mckee_advisory`: it cannot approve
+        // or block anything.
+        if let Some(advisory) = self
+            .mckee_checkpoint_advisory(&harness_state, input.end_chapter)
+            .await
+        {
+            report.mckee_advisory = Some(advisory);
+            let report_json = serde_json::to_string_pretty(&report)?;
+            std::fs::write(&report_path, report_json).with_context(|| {
+                format!(
+                    "failed to update checkpoint report artifact {}",
+                    report_path.display()
+                )
+            })?;
+        }
 
         if report.deep_consistency_status == "pending_deep_consistency"
             || report.deep_consistency_status == "pending"
@@ -1287,6 +1385,32 @@ impl ToolRouter {
                 step = "reader_sim",
                 error = format!("{error:#}"),
                 "auto-checkpoint reader-sim pass failed to record; continuing (enrichment, not a gate)"
+            );
+        }
+
+        // ── Step 2.6: advisory McKee answers (issue #35) ──
+        // Report enrichment only: Central Question progress, the debate side the
+        // reader is on, and likely-forgotten Subplots. The answers are written
+        // into the report but never read by the verdict below, so a concerning
+        // answer cannot block an otherwise clean checkpoint and a clean answer
+        // cannot rescue a blocked one. A read/write failure is logged and the
+        // checkpoint proceeds exactly as before (I8).
+        if let Some(advisory) = self
+            .mckee_checkpoint_advisory(harness_state, end_chapter)
+            .await
+            && let Err(error) = authoring_record_checkpoint_advisory(
+                harness_state,
+                &state_path,
+                start_chapter,
+                end_chapter,
+                advisory,
+            )
+        {
+            tracing::warn!(
+                run_id,
+                step = "checkpoint_advisory",
+                error = format!("{error:#}"),
+                "auto-checkpoint could not record the advisory answers; continuing (advisory, never a gate)"
             );
         }
 
