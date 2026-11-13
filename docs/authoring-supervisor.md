@@ -477,31 +477,48 @@ triage, not an automatic block.
 On a McKee-structured project the checkpoint report additionally carries
 `mckee_advisory`, the three questions an author asks at the gate:
 
-1. **Central Question progress** — the accepted Act list ordered by `order`;
-   an Act counts as reached when its reserved climax is at or before the
-   checkpoint range's last Chapter. The answer carries the question, the Act
-   totals, the reached and remaining `central_question_part`s, whether the
-   spine's final climax is inside the read range, and which Act answers the
-   whole question.
+1. **Central Question progress** — the accepted Act list ordered by `order`.
+   **Answered means written**: an Act counts only when its reserved climax Scene
+   has actually been persisted at or before the checkpoint range's last Chapter
+   in story order. A planned climax the reader has not reached is never reported
+   as answered; `acts_planned_reached` keeps that planning-only position signal
+   under its own label. The answer carries the question, the Act totals, the
+   answered and remaining `central_question_part`s, whether the spine's final
+   climax Scene is written inside the range, and the **lowest** `order` among
+   the Acts flagged as answering the whole question (never repository row
+   order).
 2. **Controlling Idea / Counter-Idea side** — the side the last **written**
-   Scene's realized turn on the Spine Axis proves (a positive closing proves the
-   Controlling Idea, a negative one proves the Counter-Idea, and no realized
-   turn is `undecided`). The answer carries both ideas, the axis and a
-   deterministic basis naming the book/chapter/scene it used.
+   Scene's realized turn on the Spine Axis proves, read **across the series at or
+   before the checkpoint** (story order, book-agnostic). A book-2 checkpoint
+   therefore still sees book 1's turn. A positive closing proves the Controlling
+   Idea, a negative one proves the Counter-Idea, and no realized turn is
+   `undecided`. The answer carries both ideas, the axis and a deterministic basis
+   naming the book/chapter/scene it used.
 3. **Likely-forgotten Subplots** — every non-Main-Plot plot line with a Value
-   Axis whose turns have not appeared in the last three read Chapters, with the
-   last turning Chapter (or none) and the count of Chapters since. The window is
-   the planning validator's `DORMANT_CHAPTER_RUN`.
+   Axis whose written Scenes have not turned it for `DORMANT_CHAPTER_RUN` (3)
+   **read Chapters**, with the last turn's book/chapter (or none) and the count
+   of read Chapters since. The count is series-scoped and walks the chapters the
+   reader has actually read, in story order; it does **not** require the
+   chapters to be consecutive. That differs from the planning validator's
+   `subplot_axis_dormant` advisory, which scans *planned* chapters and resets on
+   a chapter gap or a book change; both reuse the same threshold but answer
+   different questions (what the reader has read vs. what the plan intends).
 
 All three are computed deterministically from the accepted Story Spine, the
 accepted Acts, the plot lines and the written Scenes' realized reports — no model
 call — and written at checkpoint creation on the host path, by the
 auto-checkpoint before its verdict, and again by `authoring_review_checkpoint`
-(so a CLI-harness-created report carries them by review time). They are
+(so a CLI-harness-created report carries them by review time, and an I/O failure
+while persisting them is logged but never blocks the review). They are
 **advisory only**: the approve/block gate never reads `mckee_advisory`, so a
 `counter_idea` side or three forgotten Subplots can never block an otherwise
 clean checkpoint, and a flattering answer can never rescue a blocked one.
 Non-McKee reports omit the field entirely.
+
+The service read returns no advisory at all in three cases, and callers must not
+collapse them into "not McKee-structured": the project has no McKee marker, the
+project has no active branch, or the requested placement is invalid
+(`book_number <= 0` or `through_chapter <= 0`).
 
 ## Interactive Drafting Workflow
 

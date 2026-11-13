@@ -27,7 +27,7 @@
     ]
   },
   {
-    "description": "Host-neutral new-book entry from premise through human-approved planning gates to draft readiness.",
+    "description": "Host-neutral new-book entry from premise through human-approved planning gates to draft readiness, with every story-structure reference its steps name.",
     "name": "new-book",
     "tools": [
       "authoring_prepare_run",
@@ -47,11 +47,17 @@
     ],
     "units": [
       "new-book",
-      "spindle"
+      "spindle",
+      "story-structure/character-design",
+      "story-structure/dialogue-line",
+      "story-structure/dialogue-tactics",
+      "story-structure/scene-design",
+      "story-structure/story-spine",
+      "story-structure/value-turns"
     ]
   },
   {
-    "description": "Plot architecture and declared planning tools.",
+    "description": "Plot architecture and declared planning tools, with the Spine and Value Turn references.",
     "name": "planning",
     "tools": [
       "annotate_scene_beats",
@@ -95,7 +101,11 @@
     ],
     "units": [
       "plot-architect",
-      "spindle"
+      "spindle",
+      "story-structure/dialogue-tactics",
+      "story-structure/scene-design",
+      "story-structure/story-spine",
+      "story-structure/value-turns"
     ]
   },
   {
@@ -314,7 +324,7 @@
     ]
   },
   {
-    "description": "Scene writing plus run and checkpoint orchestration.",
+    "description": "Scene writing plus run and checkpoint orchestration, plus the story-structure references the scene-writer core names.",
     "name": "workflow-authoring",
     "tools": [
       "annotate_scene_beats",
@@ -401,7 +411,11 @@
       "scene-writer/offloaded-generation",
       "scene-writer/research-and-sources",
       "spindle",
-      "spindle/setup"
+      "spindle/setup",
+      "story-structure/dialogue-line",
+      "story-structure/dialogue-tactics",
+      "story-structure/scene-design",
+      "story-structure/value-turns"
     ]
   },
   {
@@ -435,7 +449,7 @@
     ]
   },
   {
-    "description": "Complete current scene-writing workflow, with new-book setup.",
+    "description": "Complete current scene-writing workflow, with new-book setup, plus the story-structure references the scene-writer core names.",
     "name": "workflow-write",
     "tools": [
       "annotate_scene_beats",
@@ -489,11 +503,15 @@
       "scene-writer/drafting-packets",
       "scene-writer/research-and-sources",
       "spindle",
-      "spindle/setup"
+      "spindle/setup",
+      "story-structure/dialogue-line",
+      "story-structure/dialogue-tactics",
+      "story-structure/scene-design",
+      "story-structure/value-turns"
     ]
   },
   {
-    "description": "World and character creation and continuity setup.",
+    "description": "World and character creation and continuity setup, with the Character Design reference.",
     "name": "worldbuilding",
     "tools": [
       "batch_create_motifs",
@@ -550,6 +568,7 @@
     "units": [
       "character-creator",
       "spindle",
+      "story-structure/character-design",
       "worldbuilder"
     ]
   }

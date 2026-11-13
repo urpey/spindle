@@ -14,6 +14,7 @@ Render the planned Beats in the order the plan gives them. Scene/sequel names ma
 - **Rendered aftermath**: a planned `reaction` Beat can hold feeling, a costly choice between options, and the commitment that carries into the next Beat. This is where a `reaction` Beat earns its space.
 - **End on the planned turn**: close the sequence on the turn the plan places at `turning_beat`. Do not add a second disaster so the prose feels busier; if the plan's turn is weak, that is a planning repair, not a prose invention.
 - **Pacing proportion**: compress aftermath to speed pacing and extend it to deepen a turn's cost. The book's genre and reader contract decide which; a thriller compresses, a quiet chapter may dwell.
+- **Beat labels when annotating a realized Scene**: `annotate_scene_beats` takes one label per realized Beat — `goal`, `conflict`, `disaster`, `reaction`, `dilemma`, `decision`, `revelation`, `reversal`, `escalation`, `calm`, `transition`. They describe what the prose did; they add no planning units and never change the plan's structured `kind` (`action` / `reaction` / `turn`).
 
 ## 2. Causality, Voice, and POV Discipline
 
@@ -33,10 +34,37 @@ Render the planned Beats in the order the plan gives them. Scene/sequel names ma
 - **Homogeneous Voices**: Interchangeable dialogue across cast members. *Fix*: Re-read each character's voice profile and prior lines; strip dialogue tags to test whether each speaker remains identifiable.
 - **Stakes Deflation**: Stated threats fail to bite. *Fix*: Enforce `world_rules` and deliver real costs when a plan goes wrong.
 
+## 4. Targeted Repair Tools After the Receipt
+
+Repair is separate from the drafting loop; use the narrowest tool and never reopen the plan to hide a prose problem:
+
+- **Clock and state**: `set_scene_clock`, `commit_character_state`, `update_relationship`.
+- **Knowledge**: `record_knowledge` (an on-page reveal also sets `secret_of_fact_id`), or `create_future_knowledge` when the knowledge belongs to a later placement.
+- **Canon and promises**: `update_entity`, `update_world_rule`, `update_promise_status`.
+- **Beats, summary and cursor**: `annotate_scene_beats`, `commit_scene_changes`, `save_summary`, `update_writer_position`.
+
+These stay available outside the ordinary loop; a mined canon proposal still needs the ratification workflow in `scene-writer/authoring-runs`.
+
+## 5. Anti-Slop Self-Review
+
+- **Hard shelves**: `contrast_not_x_but_y` (<=1/chapter), `emotion_cocktail` (0), `fishing_ending` (0).
+- **Soft shelves**: advisory against `compact_shelf_digest`; the full 12-shelf catalog and per-shelf limits are at `bible://references/anti-slop`.
+- When a shelf hits, rewrite from the scene's planned Beat in 1–2 passes, never synonym-swap a flagged line.
+
 <!-- tool: annotate_scene_beats -->
 <!-- tool: check_consistency -->
+<!-- tool: commit_character_state -->
+<!-- tool: commit_scene_changes -->
+<!-- tool: create_future_knowledge -->
 <!-- tool: get_character_snapshot -->
 <!-- tool: get_entity -->
 <!-- tool: list_chapter_scenes -->
 <!-- tool: plan_chapter -->
+<!-- tool: record_knowledge -->
+<!-- tool: save_summary -->
 <!-- tool: set_scene_clock -->
+<!-- tool: update_entity -->
+<!-- tool: update_promise_status -->
+<!-- tool: update_relationship -->
+<!-- tool: update_world_rule -->
+<!-- tool: update_writer_position -->

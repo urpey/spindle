@@ -4671,11 +4671,23 @@ async fn verify_shutdown(fx: VerifyRunFixture) {
 /// charges match the mock report exactly, so a clean verify proves the
 /// agent-mode package carries the report instead of parking on "no report".
 async fn mckee_agent_fixture() -> VerifyRunFixture {
-    mckee_agent_fixture_with_policy(None).await
+    mckee_agent_fixture_inner(None, false).await
 }
 
 /// Same fixture, optionally started under an auto-checkpoint policy.
 async fn mckee_agent_fixture_with_policy(policy: Option<&str>) -> VerifyRunFixture {
+    mckee_agent_fixture_inner(policy, false).await
+}
+
+/// Same fixture with its Story Spine accepted through the **planning apply
+/// path** before the authoring run starts (initial planning roots are frozen
+/// while a run is active). The advisory tests need a real planning seam, not a
+/// direct row write.
+async fn mckee_agent_fixture_with_planned_spine() -> VerifyRunFixture {
+    mckee_agent_fixture_inner(None, true).await
+}
+
+async fn mckee_agent_fixture_inner(policy: Option<&str>, planned_spine: bool) -> VerifyRunFixture {
     use crate::tools::{ToolRouter, ToolSerializationState};
     use spindle_core::charge::{Charge, ChargeDepth, ChargeSign};
     use spindle_core::models::ConfigureAgentsInput;
@@ -4788,6 +4800,12 @@ agent = "cli-agent-draft"
     })
     .await
     .unwrap();
+
+    // Initial planning roots are frozen while a run is active, so the planned
+    // spine must be accepted before the run starts.
+    if planned_spine {
+        seed_spine_through_planning(&svc, &project.id).await;
+    }
 
     let router = ToolRouter::with_tool_profile_and_serialization(
         svc.clone(),
@@ -5287,36 +5305,76 @@ async fn checkpoint_review_approves_a_host_verdict_and_a_route_agreement() {
 
 // ── Checkpoint advisory answers (issue #35) ────────────────────────────────
 
+/// Seed the series Story Spine through the real planning seam: stage it at the
+/// attached Contract level and have a human accept it. This exercises the same
+/// apply path the shipped `new-book` flow uses instead of writing the row
+/// directly.
+async fn seed_spine_through_planning(svc: &SqliteSpindleService, project_id: &str) {
+    use spindle_core::planning::{
+        BeginPlanningInput, DecidePlanningInput, PlanningDecision, PlanningLevel,
+        PlanningOperationItem, PlanningSchedule, PlanningScope, StagePlanningInput,
+    };
+
+    let branch = svc
+        .repository()
+        .get_active_branch(project_id)
+        .await
+        .expect("active branch");
+    let session = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "A warden keeps a vow the harbor needs broken.".into(),
+            scope: Some(PlanningScope {
+                project_id: project_id.to_string(),
+                branch_id: branch.id,
+            }),
+        })
+        .await
+        .expect("planning session");
+    let operation: PlanningOperationItem = serde_json::from_value(serde_json::json!({
+        "output_ref": "spine:series",
+        "operation": {"operation": "create_story_spine", "input": {
+            "central_question": "Can Mara keep the vow without losing the harbor?",
+            "controlling_idea": {"value": "Mara's vow", "cause": "the witness returns"},
+            "counter_idea": "a vow is only a cage",
+            "spine_axis": "Mara's vow",
+            "ending_type": "idealist"
+        }}
+    }))
+    .expect("spine operation");
+    let proposal = svc
+        .stage_planning(StagePlanningInput {
+            session_id: session.id.clone(),
+            scope: session.scope.clone(),
+            intent_hash: session.intent_hash.clone(),
+            schema_version: 1,
+            level: PlanningLevel::Contract,
+            parents: BTreeMap::new(),
+            operations: vec![operation],
+            rationale: "The fixture accepts the series spine at the contract level.".into(),
+            target_range: None,
+            schedule: PlanningSchedule::default(),
+            assumptions: Vec::new(),
+            author_questions: Vec::new(),
+        })
+        .await
+        .expect("stage the series spine");
+    svc.decide_planning(DecidePlanningInput {
+        session_id: session.id,
+        scope: session.scope,
+        decision: PlanningDecision::Accept,
+        expected_hashes: BTreeMap::from([(proposal.id, proposal.payload_hash)]),
+        actor: "author:test".into(),
+        note: "The author accepts the series spine.".into(),
+    })
+    .await
+    .expect("accept the series spine");
+}
+
 /// The checkpoint report carries the three advisory McKee answers, and a
 /// concerning answer never blocks an otherwise clean review.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn checkpoint_report_carries_the_three_advisory_answers_without_gating() {
-    use spindle_core::story_spine::{ControllingIdea, CreateStorySpineInput, StorySpineEnding};
-
-    let fx = mckee_agent_fixture().await;
-    // The spine is accepted through planning in a real flow; a direct write is
-    // enough here because this test is about the checkpoint report, not the
-    // planning gate (covered by the planning service tests).
-    fx.svc
-        .repository()
-        .create_story_spine(&CreateStorySpineInput {
-            project_id: fx.project_id.clone(),
-            series_spine_id: None,
-            book_number: None,
-            central_question: "Can Mara keep the vow without losing the harbor?".into(),
-            controlling_idea: ControllingIdea {
-                value: "Mara's vow".into(),
-                cause: "the witness returns".into(),
-            },
-            counter_idea: "a vow is only a cage".into(),
-            spine_axis: "Mara's vow".into(),
-            ending_type: StorySpineEnding::Idealist,
-            inciting_incident: None,
-            final_climax: None,
-            theme_ids: Vec::new(),
-        })
-        .await
-        .unwrap();
+    let fx = mckee_agent_fixture_with_planned_spine().await;
 
     let report = mckee_pending_checkpoint_report(&fx).await;
     let advisory = report
@@ -5397,6 +5455,65 @@ async fn non_mckee_checkpoint_report_has_no_mckee_advisory() {
     assert!(
         !wire.contains("mckee_advisory"),
         "the advisory field is skipped while serializing a non-McKee report"
+    );
+
+    verify_shutdown(fx).await;
+}
+
+/// Clears the injected advisory-write failure even when the test panics.
+struct AdvisoryWriteFailureGuard;
+
+impl AdvisoryWriteFailureGuard {
+    fn arm(project_id: &str) -> Self {
+        crate::tools::fail_checkpoint_advisory_write_for(Some(project_id));
+        Self
+    }
+}
+
+impl Drop for AdvisoryWriteFailureGuard {
+    fn drop(&mut self) {
+        crate::tools::fail_checkpoint_advisory_write_for(None);
+    }
+}
+
+/// An advisory write failure never blocks the checkpoint gate.
+///
+/// The review refreshes and persists the three advisory answers before the
+/// gate; the answers are enrichment, so an I/O failure there must be logged and
+/// the review must still approve a clean checkpoint exactly as if the advisory
+/// had been written.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_review_survives_an_advisory_write_failure() {
+    let fx = mckee_agent_fixture_with_planned_spine().await;
+    let report = mckee_pending_checkpoint_report(&fx).await;
+    let sampled: Vec<String> = report["sampled_scene_ids"]
+        .as_array()
+        .expect("sampled scene ids")
+        .iter()
+        .map(|id| id.as_str().unwrap().to_string())
+        .collect();
+    record_checkpoint_deep_audit(&fx).await;
+    review_checkpoint_scene(
+        &fx,
+        &sampled[0],
+        fixed_mckee_critic_output("agree", "agree"),
+        false,
+    )
+    .await;
+
+    let _guard = AdvisoryWriteFailureGuard::arm(&fx.project_id);
+    let (refused, message) = review_checkpoint_tool(&fx, false).await;
+    assert!(
+        !refused,
+        "an advisory write failure must never block a clean checkpoint review: {message}"
+    );
+    assert!(
+        crate::tools::checkpoint_advisory_write_injection_was_hit(),
+        "the advisory write failure must actually fire, or this test proves nothing"
+    );
+    assert_eq!(
+        verify_status(&fx).await["checkpoint_reports"][0]["status"].as_str(),
+        Some("reviewed")
     );
 
     verify_shutdown(fx).await;

@@ -66,7 +66,7 @@ Preflight with `commit_scene` (`dry_run: true`) using the payload you intend to 
 Call `commit_scene` once with `full_text`, `summary`, `content_rating`, `authorship`, the preparation token and `expected_scene_version`, the typed `continuity` package, `beat_annotations`, an optional chapter-final `chapter_summary`, and a client `idempotency_key`; it applies prose, approved continuity, beats, summary and cursor atomically. On a McKee project include `realized_report` (value turns, character effects, promise events, reported Key Facts); scene verify adds the four deterministic `realized_value_turn`, `realized_key_fact`, `realized_promise_event` and `character_effect` checks.
 
 1. **Inspect the receipt**: `issues`, `warnings`, `blocking_count`, `coverage`, `applied`, `beat_count`, `chapter_summary_saved`, `writer_cursor`, `follow_ups`, `undo_support`. Retry only with the same key and payload.
-2. **Targeted repair**: Outside the loop, the manifest's repair tools remain available (clock, state, relationship, knowledge, promise, entity, world rule, beats, summary, cursor).
+2. **Targeted repair**: Outside the loop, the named repair tools in `scene-writer/craft-and-voice` remain available (clock, state, relationship, knowledge, promise, entity, world rule, beats, summary, cursor).
 3. **Author decisions only**: Mined canon proposals never auto-ratify; use the ratification workflow in `scene-writer/authoring-runs`. After a timeout or reconnect, inspect `get_writer_state` before retrying.
 
 ## On-Demand References (Load Only When Triggered)

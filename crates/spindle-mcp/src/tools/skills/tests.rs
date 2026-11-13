@@ -269,54 +269,141 @@ async fn get_skill_and_get_reference_enforce_profile_coverage_without_mutating_p
     assert!(!router.has_tool("create_book"));
 }
 
-/// Issue #35: every entry skill names the `story-structure` reference for its
-/// step, and that reference is loadable through the same tool/resource surface.
+/// Issue #35: every entry skill names the `story-structure` references for its
+/// steps, and **each reference loads in the profile that skill actually runs
+/// under** — not only in the unset (full-catalog) profile. This is the
+/// regression the first wiring missed: a reference-only profile unit must not
+/// inherit the owning core's planning/get_entity tools.
 #[tokio::test(flavor = "current_thread")]
-async fn entry_skills_wire_the_story_structure_reference_for_their_step() {
-    let (router, _tmp_guard) = router().await;
-    let resources = crate::resources::ResourceRouter::new(router.service().clone());
+async fn entry_skills_load_their_references_in_their_own_profiles() {
+    let (mut router, _tmp_guard) = router().await;
+    let pointer = regex::Regex::new(r#"get_reference\(name="(story-structure/[a-z-]+)"\)"#)
+        .expect("reference pointer regex");
 
-    for (skill_name, reference) in [
-        ("new-book", "story-structure/story-spine"),
-        ("plot-architect", "story-structure/value-turns"),
-        ("character-creator", "story-structure/character-design"),
-        ("scene-writer", "story-structure/scene-design"),
+    for (skill_name, profiles) in [
+        ("new-book", vec!["new-book"]),
+        ("plot-architect", vec!["planning"]),
+        ("character-creator", vec!["worldbuilding"]),
+        ("scene-writer", vec!["workflow-write", "workflow-authoring"]),
     ] {
         let skill = spindle_adapters::get_skill(skill_name).expect("entry skill");
-        let pointer = format!("get_reference(name=\"{reference}\")");
+        let references: Vec<String> = pointer
+            .captures_iter(&skill.markdown)
+            .map(|capture| capture[1].to_string())
+            .collect();
         assert!(
-            skill.markdown.contains(&pointer),
-            "{skill_name} must point at {reference} with {pointer}"
+            !references.is_empty(),
+            "{skill_name} must name at least one story-structure reference"
         );
 
-        // The pointer resolves: the reference loads through the tool and as a
-        // resource. Loading only grants guidance, never new capabilities.
-        let result = structured_json(
-            router
-                .call_tool(
-                    "get_reference",
-                    serde_json::json!({ "name": reference }).as_object(),
-                )
-                .await
-                .unwrap(),
-        );
-        assert_eq!(result["name"], reference);
-        assert!(
-            result["markdown"]
-                .as_str()
-                .is_some_and(|text| text.len() > 500)
-        );
+        for profile in profiles {
+            router.tool_profile = Some(profile.to_string());
 
-        let resource = resources
-            .read_resource(&format!("bible://references/{reference}"))
-            .await
-            .unwrap();
-        let rmcp::model::ResourceContents::TextResourceContents { text, .. } =
-            &resource.contents[0]
-        else {
-            panic!("expected Markdown text");
-        };
-        assert_eq!(text, result["markdown"].as_str().unwrap());
+            // The skill itself is covered by the profile it runs under.
+            let skill_result = structured_json(
+                router
+                    .call_tool(
+                        "get_skill",
+                        serde_json::json!({ "name": skill_name }).as_object(),
+                    )
+                    .await
+                    .unwrap(),
+            );
+            assert_eq!(
+                skill_result["covered"], true,
+                "{skill_name} must be loadable under {profile}: {skill_result:?}"
+            );
+            assert_eq!(skill_result["markdown"], skill.markdown);
+
+            for reference in &references {
+                let result = structured_json(
+                    router
+                        .call_tool(
+                            "get_reference",
+                            serde_json::json!({ "name": reference }).as_object(),
+                        )
+                        .await
+                        .unwrap(),
+                );
+                assert_eq!(
+                    result["covered"], true,
+                    "{skill_name} runs under {profile}, so {reference} must load there: {result:?}"
+                );
+                assert!(
+                    result["markdown"]
+                        .as_str()
+                        .is_some_and(|text| text.len() > 500),
+                    "{reference} must return its full guidance"
+                );
+                assert_eq!(
+                    result["markdown"],
+                    spindle_adapters::get_reference(reference).unwrap().markdown
+                );
+            }
+
+            // Reading the owning core is still refused: composing a reference
+            // never grants the core skill or its capabilities.
+            let core = structured_json(
+                router
+                    .call_tool(
+                        "get_skill",
+                        serde_json::json!({ "name": "story-structure" }).as_object(),
+                    )
+                    .await
+                    .unwrap(),
+            );
+            assert_eq!(
+                core["covered"], false,
+                "{profile} must not gain the story-structure core: {core:?}"
+            );
+        }
+    }
+}
+
+/// The reference-only composition must not leak the owning core's tools into
+/// writer or worldbuilding profiles (issue #35 review).
+#[test]
+fn story_structure_reference_units_do_not_grant_core_tools() {
+    use spindle_adapters::guidance::list_profiles;
+    let profile = |name: &str| {
+        list_profiles()
+            .iter()
+            .find(|profile| profile.name == name)
+            .unwrap_or_else(|| panic!("missing generated profile {name}"))
+    };
+
+    for name in ["new-book", "planning"] {
+        let tools = profile(name).tools;
+        assert!(
+            !tools.contains(&"get_entity"),
+            "{name} must not gain get_entity from a story-structure reference: {tools:?}"
+        );
+    }
+    for name in ["worldbuilding", "workflow-write", "workflow-authoring"] {
+        let tools = profile(name).tools;
+        for forbidden in [
+            "planning_begin",
+            "planning_advance",
+            "planning_decide",
+            "planning_status",
+        ] {
+            assert!(
+                !tools.contains(&forbidden),
+                "{name} must not gain {forbidden} from a story-structure reference: {tools:?}"
+            );
+        }
+    }
+    for name in [
+        "new-book",
+        "planning",
+        "worldbuilding",
+        "workflow-write",
+        "workflow-authoring",
+    ] {
+        assert!(
+            !profile(name).units.contains(&"story-structure"),
+            "{name} must compose references only, never the story-structure core"
+        );
     }
 }
 

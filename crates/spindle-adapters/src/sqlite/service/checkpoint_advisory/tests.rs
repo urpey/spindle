@@ -90,9 +90,18 @@ async fn series_spine(svc: &SqliteSpindleService, project_id: &str) {
 }
 
 async fn chapter(svc: &SqliteSpindleService, project_id: &str, number: i32) {
+    chapter_in_book(svc, project_id, 1, number).await;
+}
+
+async fn chapter_in_book(
+    svc: &SqliteSpindleService,
+    project_id: &str,
+    book_number: i32,
+    number: i32,
+) {
     svc.create_chapter(CreateChapterInput {
         project_id: project_id.to_string(),
-        book_number: Some(1),
+        book_number: Some(book_number),
         book_id: None,
         chapter_number: Some(number),
         title: None,
@@ -105,6 +114,30 @@ async fn chapter(svc: &SqliteSpindleService, project_id: &str, number: i32) {
 async fn save_scene(
     svc: &SqliteSpindleService,
     project_id: &str,
+    chapter_number: i32,
+    scene_order: i32,
+    axis: Option<&str>,
+    opening: Charge,
+    closing: Charge,
+) {
+    save_scene_in_book(
+        svc,
+        project_id,
+        1,
+        chapter_number,
+        scene_order,
+        axis,
+        opening,
+        closing,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn save_scene_in_book(
+    svc: &SqliteSpindleService,
+    project_id: &str,
+    book_number: i32,
     chapter_number: i32,
     scene_order: i32,
     axis: Option<&str>,
@@ -124,12 +157,14 @@ async fn save_scene(
     });
     svc.save_scene_draft(SaveSceneDraftInput {
         project_id: project_id.to_string(),
-        book_number: 1,
+        book_number,
         chapter_number,
         chapter_id: None,
         scene_order,
-        full_text: format!("Scene {chapter_number}.{scene_order} prose about the vow."),
-        summary: format!("Scene {chapter_number}.{scene_order}"),
+        full_text: format!(
+            "Scene {book_number}.{chapter_number}.{scene_order} prose about the vow."
+        ),
+        summary: format!("Scene {book_number}.{chapter_number}.{scene_order}"),
         content_rating: ContentRating::General,
         realized_report,
         ..Default::default()
@@ -143,9 +178,18 @@ async fn advisory(
     project_id: &str,
     through_chapter: i32,
 ) -> Option<spindle_core::checkpoint_advisory::CheckpointAdvisory> {
+    advisory_in_book(svc, project_id, 1, through_chapter).await
+}
+
+async fn advisory_in_book(
+    svc: &SqliteSpindleService,
+    project_id: &str,
+    book_number: i32,
+    through_chapter: i32,
+) -> Option<spindle_core::checkpoint_advisory::CheckpointAdvisory> {
     svc.checkpoint_advisory(CheckpointAdvisoryInput {
         project_id: project_id.to_string(),
-        book_number: 1,
+        book_number,
         through_chapter,
     })
     .await
@@ -249,6 +293,60 @@ async fn the_debate_side_follows_the_last_written_spine_axis_turn() {
     assert_eq!(
         earlier.controlling_idea_debate.reader_side,
         ControllingIdeaDebateSide::CounterIdea
+    );
+}
+
+#[tokio::test]
+async fn the_debate_side_is_series_scoped_across_a_book_checkpoint() {
+    let (_tmp, svc) = fresh_service().await;
+    let project_id = create_project(&svc, true).await;
+    series_spine(&svc, &project_id).await;
+    chapter_in_book(&svc, &project_id, 1, 1).await;
+    // Book 1 turns the Spine Axis toward the Counter-Idea.
+    save_scene_in_book(
+        &svc,
+        &project_id,
+        1,
+        1,
+        1,
+        Some("trust"),
+        positive(),
+        contrary(),
+    )
+    .await;
+
+    // Book 2 has read prose of its own but no Spine Axis turn yet.
+    for number in 1..=3 {
+        chapter_in_book(&svc, &project_id, 2, number).await;
+        save_scene_in_book(
+            &svc,
+            &project_id,
+            2,
+            number,
+            1,
+            Some("loyalty"),
+            positive(),
+            positive(),
+        )
+        .await;
+    }
+
+    let answers = advisory_in_book(&svc, &project_id, 2, 3)
+        .await
+        .expect("a McKee project always answers the checkpoint questions");
+    assert_eq!(
+        answers.controlling_idea_debate.reader_side,
+        ControllingIdeaDebateSide::CounterIdea,
+        "book 1's turn must still decide the side at a book-2 checkpoint: {:?}",
+        answers.controlling_idea_debate
+    );
+    assert!(
+        answers
+            .controlling_idea_debate
+            .basis
+            .contains("book 1 chapter 1"),
+        "the basis must name the book-1 turn: {:?}",
+        answers.controlling_idea_debate
     );
 }
 
@@ -368,6 +466,7 @@ async fn a_subplot_that_stops_turning_is_listed_as_likely_forgotten() {
     assert_eq!(dormant[0].plot_line_id, loyalty.plot_line_id);
     assert_eq!(dormant[0].name, "The brother's loyalty");
     assert_eq!(dormant[0].value_axis, "loyalty");
+    assert_eq!(dormant[0].last_turn_book, Some(1));
     assert_eq!(dormant[0].last_turn_chapter, Some(1));
     assert_eq!(
         dormant[0].chapters_without_turn, 3,

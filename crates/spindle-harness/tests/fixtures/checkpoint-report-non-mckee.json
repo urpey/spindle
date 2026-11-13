@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "start_chapter": 1,
+  "end_chapter": 2,
+  "save_point": {
+    "save_point_id": "save_point:test",
+    "branch_id": "branch:test"
+  },
+  "consistency": {
+    "issues": []
+  },
+  "deep_consistency": null,
+  "deep_consistency_status": "complete",
+  "deep_consistency_instruction": "Recorded.",
+  "sampled_reviews": [],
+  "sampled_review_status": "complete",
+  "sampled_review_instruction": "Reviewed.",
+  "pacing_overview": {},
+  "chapter_summaries": [],
+  "narrative_promises": [],
+  "sampled_scene_ids": [
+    "scene:test"
+  ]
+}

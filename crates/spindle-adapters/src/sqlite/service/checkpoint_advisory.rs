@@ -10,14 +10,20 @@
 //! they are computed from data already in the Story Bible:
 //!
 //! * **Central Question progress** reads the accepted Act list (planning
-//!   intent) and the accepted series/book Story Spine.
+//!   intent), the accepted series/book Story Spine, and the **written** Scenes:
+//!   an Act is answered only when its reserved climax Scene has actually been
+//!   written inside the checkpoint range.
 //! * **The debate side** reads the last written Scene whose realized report
-//!   turns the Spine Axis. Planning intent cannot answer it: only prose the
-//!   reader has actually read can.
+//!   turns the Spine Axis **across the series at or before the checkpoint**
+//!   (story order, book-agnostic). Planning intent cannot answer it: only prose
+//!   the reader has actually read can.
 //! * **Dormant Subplots** counts the read Chapters since each Subplot's Value
-//!   Axis last turned in a written Scene, using the same
-//!   [`DORMANT_CHAPTER_RUN`](spindle_core::subplot::DORMANT_CHAPTER_RUN) window
-//!   the planning validator uses.
+//!   Axis last turned in a written Scene, reusing the
+//!   [`DORMANT_CHAPTER_RUN`](spindle_core::subplot::DORMANT_CHAPTER_RUN)
+//!   threshold. Unlike the planning validator, which counts *planned
+//!   consecutive* Chapters (a chapter gap resets the run), this counts the
+//!   series' actually read Chapters in story order without requiring
+//!   adjacency.
 //!
 //! No model call is made, so fixed fixtures drive the tests. A non-McKee project
 //! returns `None`; its report bytes stay unchanged.
@@ -29,18 +35,27 @@ use spindle_core::checkpoint_advisory::{
     CheckpointAdvisory, CheckpointAdvisoryInput, ControllingIdeaDebate, ControllingIdeaDebateSide,
     DormantSubplot,
 };
+use spindle_core::models::StoryPlacement;
 use spindle_core::story_spine::StorySpine;
 use spindle_core::subplot::DORMANT_CHAPTER_RUN;
 use std::collections::BTreeSet;
 
 impl SqliteSpindleService {
-    /// The three advisory answers for a checkpoint range, or `None` when the
-    /// project is not McKee-structured.
+    /// The three advisory answers for a checkpoint range, or `None` when they
+    /// cannot be computed.
+    ///
+    /// `None` has three distinct meanings and none of them is "the project is
+    /// not McKee-structured" alone:
+    ///
+    /// 1. the project has no McKee marker (a non-McKee project);
+    /// 2. the project has no active branch;
+    /// 3. the requested placement is invalid (`book_number <= 0` or
+    ///    `through_chapter <= 0`).
     ///
     /// `through_chapter` is the checkpoint range's last Chapter: the reader is
-    /// assumed to have read every written Scene in the book up to it. Callers
-    /// treat the result as report enrichment; an error here must never block a
-    /// checkpoint, so the tool layer logs and omits it.
+    /// assumed to have read every written Scene at or before it across the
+    /// series. Callers treat the result as report enrichment; an error here must
+    /// never block a checkpoint, so the tool layer logs and omits it.
     pub async fn checkpoint_advisory(
         &self,
         input: CheckpointAdvisoryInput,
@@ -62,12 +77,6 @@ impl SqliteSpindleService {
             .repository
             .accepted_planning_acts(&input.project_id, &branch_id)
             .await?;
-        let central_question = spindle_core::checkpoint_advisory::central_question_progress(
-            &acts,
-            spine,
-            input.book_number,
-            input.through_chapter,
-        );
 
         let scenes = self
             .repository
@@ -78,19 +87,27 @@ impl SqliteSpindleService {
             .list_plot_lines_by_project_and_branch(&input.project_id, &branch_id)
             .await?;
 
-        let controlling_idea_debate = debate_answer(
+        // One read of the series' written prose for all three questions.
+        let read = read_scenes(&scenes, input.book_number, input.through_chapter);
+        let written: Vec<StoryPlacement> = read
+            .iter()
+            .map(|scene| StoryPlacement {
+                book_number: scene.book_number,
+                chapter_number: scene.chapter_number,
+                scene_order: Some(scene.scene_order),
+                note: None,
+            })
+            .collect();
+
+        let central_question = spindle_core::checkpoint_advisory::central_question_progress(
+            &acts,
             spine,
-            &plot_lines,
-            &scenes,
+            &written,
             input.book_number,
             input.through_chapter,
         );
-        let dormant_subplots = dormant_subplot_answers(
-            &plot_lines,
-            &scenes,
-            input.book_number,
-            input.through_chapter,
-        );
+        let controlling_idea_debate = debate_answer(spine, &plot_lines, &read);
+        let dormant_subplots = dormant_subplot_answers(&plot_lines, &read);
 
         Ok(Some(CheckpointAdvisory {
             project_id: input.project_id,
@@ -111,24 +128,34 @@ fn book_spine(spines: &[StorySpine], book_number: i32) -> Option<&StorySpine> {
         .or_else(|| spines.iter().find(|spine| spine.is_series_spine()))
 }
 
-/// The written Scenes in one book at or before `through_chapter`, in story order.
+/// The written Scenes the reader has reached, series-scoped and in story order.
+///
+/// Book-agnostic by design: at a book-2 checkpoint the reader has also read
+/// every written Scene of book 1, so a turn there still decides the debate side
+/// and resets a Subplot's dormancy. A Scene counts as read only when it carries
+/// prose and its placement is at or before `(book_number, through_chapter)`.
 fn read_scenes(scenes: &[Scene], book_number: i32, through_chapter: i32) -> Vec<&Scene> {
-    scenes
+    let mut read: Vec<&Scene> = scenes
         .iter()
         .filter(|scene| {
-            scene.book_number == book_number
-                && scene.chapter_number <= through_chapter
-                && !scene.full_text.trim().is_empty()
+            !scene.full_text.trim().is_empty()
+                && spindle_core::checkpoint_advisory::placement_reached(
+                    scene.book_number,
+                    scene.chapter_number,
+                    book_number,
+                    through_chapter,
+                )
         })
-        .collect()
+        .collect();
+    read.sort_by_key(|scene| (scene.book_number, scene.chapter_number, scene.scene_order));
+    read
 }
 
-/// Every read Chapter of the book, in order.
-fn read_chapters(scenes: &[&Scene], book_number: i32) -> BTreeSet<i32> {
+/// Every read Chapter as `(book_number, chapter_number)`, in story order.
+fn read_chapters(scenes: &[&Scene]) -> BTreeSet<(i32, i32)> {
     scenes
         .iter()
-        .filter(|scene| scene.book_number == book_number)
-        .map(|scene| scene.chapter_number)
+        .map(|scene| (scene.book_number, scene.chapter_number))
         .collect()
 }
 
@@ -153,12 +180,13 @@ fn last_realized_turn<'a>(scenes: &'a [&'a Scene], axis: &str) -> Option<(&'a Sc
 }
 
 /// Question 2: the side the last realized Spine Axis turn proves.
+///
+/// Series-scoped: the last written turn at or before the checkpoint decides,
+/// even when it happened in an earlier book. Planning intent cannot answer it.
 fn debate_answer(
     spine: Option<&StorySpine>,
     plot_lines: &[PlotLine],
-    scenes: &[Scene],
-    book_number: i32,
-    through_chapter: i32,
+    read: &[&Scene],
 ) -> ControllingIdeaDebate {
     let controlling_idea = spine.map(format_controlling_idea).unwrap_or_default();
     let counter_idea = spine
@@ -181,8 +209,7 @@ fn debate_answer(
         })
         .unwrap_or_default();
 
-    let read = read_scenes(scenes, book_number, through_chapter);
-    let Some((scene, closing)) = last_realized_turn(&read, &axis) else {
+    let Some((scene, closing)) = last_realized_turn(read, &axis) else {
         return ControllingIdeaDebate {
             controlling_idea,
             counter_idea,
@@ -201,7 +228,7 @@ fn debate_answer(
         ChargeSign::Negative => ControllingIdeaDebateSide::CounterIdea,
     };
     let basis = format!(
-        "the last realized turn on '{axis}' closes {} in book {} chapter {} (scene {})",
+        "the last written turn on '{axis}' at or before the checkpoint closes {} in book {} chapter {} (scene {})",
         spindle_core::realized::charge_label(closing),
         scene.book_number,
         scene.chapter_number,
@@ -230,19 +257,13 @@ fn format_controlling_idea(spine: &StorySpine) -> String {
 
 /// Question 3: Subplots whose Value Axis has not turned in the last
 /// [`DORMANT_CHAPTER_RUN`] read Chapters.
-fn dormant_subplot_answers(
-    plot_lines: &[PlotLine],
-    scenes: &[Scene],
-    book_number: i32,
-    through_chapter: i32,
-) -> Vec<DormantSubplot> {
-    let read = read_scenes(scenes, book_number, through_chapter);
-    let chapters = read_chapters(&read, book_number);
-    if chapters.len() < DORMANT_CHAPTER_RUN {
-        // Fewer read Chapters than the dormancy window: nothing can have gone
-        // dormant yet, and naming a Subplot would be premature.
-        return Vec::new();
-    }
+///
+/// The count is series-scoped (a turn in an earlier book resets it) and counts
+/// every read Chapter after the last turn, not only consecutive planned
+/// Chapters. The threshold itself is the planning validator's
+/// [`DORMANT_CHAPTER_RUN`].
+fn dormant_subplot_answers(plot_lines: &[PlotLine], read: &[&Scene]) -> Vec<DormantSubplot> {
+    let chapters = read_chapters(read);
 
     let mut answers = Vec::new();
     for line in plot_lines {
@@ -257,10 +278,11 @@ fn dormant_subplot_answers(
         else {
             continue;
         };
-        let last_turn = last_realized_turn(&read, axis);
-        let last_turn_chapter = last_turn.map(|(scene, _)| scene.chapter_number);
-        let chapters_without_turn = match last_turn_chapter {
-            Some(chapter) => chapters.iter().filter(|read| **read > chapter).count(),
+        let last_turn = last_realized_turn(read, axis);
+        let last_turn_placement =
+            last_turn.map(|(scene, _)| (scene.book_number, scene.chapter_number));
+        let chapters_without_turn = match last_turn_placement {
+            Some(placement) => chapters.iter().filter(|read| **read > placement).count(),
             None => chapters.len(),
         };
         if chapters_without_turn < DORMANT_CHAPTER_RUN {
@@ -270,7 +292,8 @@ fn dormant_subplot_answers(
             plot_line_id: line.id.clone(),
             name: line.name.clone(),
             value_axis: axis.to_string(),
-            last_turn_chapter,
+            last_turn_book: last_turn_placement.map(|(book, _)| book),
+            last_turn_chapter: last_turn_placement.map(|(_, chapter)| chapter),
             chapters_without_turn,
         });
     }

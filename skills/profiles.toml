@@ -2,13 +2,13 @@ version = 1
 
 [[profiles]]
 name = "workflow-write"
-description = "Complete current scene-writing workflow, with new-book setup."
-units = ["scene-writer", "scene-writer/craft-and-voice", "scene-writer/drafting-packets", "scene-writer/research-and-sources", "spindle/setup"]
+description = "Complete current scene-writing workflow, with new-book setup, plus the story-structure references the scene-writer core names."
+units = ["scene-writer", "scene-writer/craft-and-voice", "scene-writer/drafting-packets", "scene-writer/research-and-sources", "spindle/setup", "story-structure/scene-design", "story-structure/dialogue-tactics", "story-structure/dialogue-line", "story-structure/value-turns"]
 
 [[profiles]]
 name = "workflow-authoring"
-description = "Scene writing plus run and checkpoint orchestration."
-units = ["scene-writer", "scene-writer/authoring-runs", "scene-writer/craft-and-voice", "scene-writer/drafting-packets", "scene-writer/offloaded-generation", "scene-writer/research-and-sources", "authoring-supervisor", "spindle/setup"]
+description = "Scene writing plus run and checkpoint orchestration, plus the story-structure references the scene-writer core names."
+units = ["scene-writer", "scene-writer/authoring-runs", "scene-writer/craft-and-voice", "scene-writer/drafting-packets", "scene-writer/offloaded-generation", "scene-writer/research-and-sources", "authoring-supervisor", "spindle/setup", "story-structure/scene-design", "story-structure/dialogue-tactics", "story-structure/dialogue-line", "story-structure/value-turns"]
 
 [[profiles]]
 name = "workflow-import"
@@ -22,18 +22,18 @@ units = ["revision-manager"]
 
 [[profiles]]
 name = "worldbuilding"
-description = "World and character creation and continuity setup."
-units = ["worldbuilder", "character-creator"]
+description = "World and character creation and continuity setup, with the Character Design reference."
+units = ["worldbuilder", "character-creator", "story-structure/character-design"]
 
 [[profiles]]
 name = "planning"
-description = "Plot architecture and declared planning tools."
-units = ["plot-architect"]
+description = "Plot architecture and declared planning tools, with the Spine and Value Turn references."
+units = ["plot-architect", "story-structure/story-spine", "story-structure/value-turns", "story-structure/scene-design", "story-structure/dialogue-tactics"]
 
 [[profiles]]
 name = "new-book"
-description = "Host-neutral new-book entry from premise through human-approved planning gates to draft readiness."
-units = ["new-book"]
+description = "Host-neutral new-book entry from premise through human-approved planning gates to draft readiness, with every story-structure reference its steps name."
+units = ["new-book", "story-structure/story-spine", "story-structure/character-design", "story-structure/value-turns", "story-structure/scene-design", "story-structure/dialogue-tactics", "story-structure/dialogue-line"]
 
 [[profiles]]
 name = "mckee"
@@ -48,7 +48,7 @@ units = ["researcher"]
 [[profiles]]
 name = "style"
 description = "Editorial style-profile preview, apply, revision and recovery."
-units = ["editor/style"]
+units = ["editor", "editor/style"]
 
 [[profiles]]
 name = "release"

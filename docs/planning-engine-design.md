@@ -327,12 +327,15 @@ Spine references Themes by id and never replaces them. See
 
 The spine is not only a planning record: the checkpoint advisory
 (`mckee_advisory`, see the [authoring supervisor](authoring-supervisor.md)) reads
-it back together with the accepted Act list. Central Question progress counts the
-Acts whose reserved climax is at or before the checkpoint range's last Chapter
-and lists their `central_question_part`s; the debate answer names the Controlling
-Idea and Counter-Idea and the side the last **written** Spine Axis turn proves.
-Both are deterministic reads of accepted planning intent plus written prose —
-neither is a planning gate, and neither can approve or block a checkpoint.
+it back together with the accepted Act list. Central Question progress counts an
+Act only when the reserved climax **Scene is written** at or before the
+checkpoint range's last Chapter (planned-only position is reported separately as
+`acts_planned_reached`), and lists the answered `central_question_part`s; the
+debate answer names the Controlling Idea and Counter-Idea and the side the last
+**written** Spine Axis turn at or before the checkpoint proves, across the series
+in story order. Both are deterministic reads of accepted planning intent plus
+written prose — neither is a planning gate, and neither can approve or block a
+checkpoint.
 
 `CreatePlotLine` (Series-Arc level) carries the Main Plot / Subplot structure
 for McKee projects: an optional Value Axis (`value_axis`), a closed structural

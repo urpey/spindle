@@ -14,9 +14,9 @@ tools = ["authoring_execute_next", "authoring_save_scene_draft", "authoring_stat
 [[references]]
 name = "craft-and-voice"
 path = "references/craft-and-voice.md"
-trigger = "Load for paragraph-level rendering craft (MRU causality, scene/sequel rhythm as prose pacing, voice, POV, failure modes) while rendering an already-planned McKee Beat; structure stays in the story-structure references."
+trigger = "Load for paragraph-level rendering craft (MRU causality, scene/sequel rhythm as prose pacing, voice, POV, failure modes, the beat-label vocabulary, the named targeted-repair tools and the anti-slop self-review) while rendering an already-planned McKee Beat; structure stays in the story-structure references."
 profiles = ["default"]
-tools = ["annotate_scene_beats", "check_consistency", "get_character_snapshot", "get_entity", "list_chapter_scenes", "plan_chapter", "set_scene_clock"]
+tools = ["annotate_scene_beats", "check_consistency", "commit_character_state", "commit_scene_changes", "create_future_knowledge", "get_character_snapshot", "get_entity", "list_chapter_scenes", "plan_chapter", "record_knowledge", "save_summary", "set_scene_clock", "update_entity", "update_promise_status", "update_relationship", "update_world_rule", "update_writer_position"]
 
 [[references]]
 name = "drafting-packets"

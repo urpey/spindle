@@ -17,7 +17,9 @@
 //!    realized report, and `check_consistency`'s deterministic McKee verify
 //!    passes clean;
 //! 7. the checkpoint advisory reads the accepted Acts and the written prose
-//!    back: Central Question progress, the debate side and dormant Subplots.
+//!    back: Central Question progress (written-only, with the planned position
+//!    reported separately), the series-scoped debate side, and a Subplot that
+//!    stays dormant for three read Chapters.
 //!
 //! No route is configured (local-only model router), so a hidden model call
 //! would fail the test rather than pass silently.
@@ -28,7 +30,7 @@ use spindle_core::charge::{Charge, ChargeDepth, ChargeSign};
 use spindle_core::checkpoint_advisory::{CheckpointAdvisoryInput, ControllingIdeaDebateSide};
 use spindle_core::models::{
     CheckConsistencyInput, CommitSceneContinuityPackage, CommitSceneInput, ConsistencyScopeInput,
-    ContentRating, SceneAuthorship,
+    ContentRating, CreateChapterInput, SaveSceneDraftInput, SceneAuthorship,
 };
 use spindle_core::planning::{
     BeginPlanningInput, DecidePlanningInput, PlannedAct, PlannedPromiseAction, PlannedPromiseEvent,
@@ -328,6 +330,19 @@ async fn contract_to_committed_scene_with_a_realized_report_verifies_clean() {
                     "is_main_plot": true,
                     "connected_theme_ids": [reference("theme:truth")],
                     "connected_conflict_ids": [reference("conflict:harbor")]
+                }),
+            ),
+            planned(
+                "plot:brother",
+                "create_plot_line",
+                json!({
+                    "name": "The brother's silence",
+                    "plot_type": "parallel",
+                    "summary": "Her brother chooses the harbor over the truth",
+                    "value_axis": "loyalty",
+                    "subplot_job": "contradict",
+                    "is_main_plot": false,
+                    "connected_theme_ids": [reference("theme:truth")]
                 }),
             ),
             planned(
@@ -713,17 +728,26 @@ async fn contract_to_committed_scene_with_a_realized_report_verifies_clean() {
     );
     assert_eq!(advisory.central_question.acts_total, 2);
     assert_eq!(
-        advisory.central_question.acts_answered, 1,
-        "only Act 1's climax is inside the read range: {:?}",
+        advisory.central_question.acts_answered, 0,
+        "Act 1's climax Scene (1.2) is planned but unwritten, so nothing is answered yet: {:?}",
         advisory.central_question
     );
     assert_eq!(
-        advisory.central_question.answered_parts,
-        vec!["Mara learns the bell was rung deliberately"]
+        advisory.central_question.acts_planned_reached, 1,
+        "the planning-only position signal stays separate and labelled: {:?}",
+        advisory.central_question
+    );
+    assert!(
+        advisory.central_question.answered_parts.is_empty(),
+        "planned parts must never be reported as answered: {:?}",
+        advisory.central_question
     );
     assert_eq!(
         advisory.central_question.remaining_parts,
-        vec!["The signal is a confession"]
+        vec![
+            "Mara learns the bell was rung deliberately",
+            "The signal is a confession"
+        ]
     );
     assert_eq!(
         advisory.controlling_idea_debate.reader_side,
@@ -731,5 +755,85 @@ async fn contract_to_committed_scene_with_a_realized_report_verifies_clean() {
         "the written turn closes negative: {:?}",
         advisory.controlling_idea_debate
     );
-    assert!(advisory.dormant_subplots.is_empty());
+    assert!(
+        advisory.dormant_subplots.is_empty(),
+        "one read Chapter cannot fill the dormancy window yet: {:?}",
+        advisory.dormant_subplots
+    );
+
+    // ── Dormancy: three read Chapters without a Subplot turn ──
+    // Chapters 2 and 3 carry written prose but never turn the brother's
+    // "loyalty" axis, so the Subplot is listed at the chapter-3 checkpoint.
+    for number in 2..=3 {
+        svc.create_chapter(CreateChapterInput {
+            project_id: project_id.clone(),
+            book_number: Some(1),
+            book_id: None,
+            chapter_number: Some(number),
+            title: None,
+        })
+        .await
+        .unwrap();
+        svc.save_scene_draft(SaveSceneDraftInput {
+            project_id: project_id.clone(),
+            book_number: 1,
+            chapter_number: number,
+            chapter_id: None,
+            scene_order: 1,
+            full_text: format!(
+                "Chapter {number}: the harbor keeps its silence while Mara reads the tide tables."
+            ),
+            summary: format!("A read chapter {number} with no loyalty turn."),
+            content_rating: ContentRating::General,
+            realized_report: Some(RealizedReport {
+                value_turns: vec![RealizedValueTurn {
+                    axis: "truth".into(),
+                    opening: charge(ChargeSign::Positive, ChargeDepth::Positive),
+                    closing: charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                    gap: None,
+                    turning_beat: None,
+                    turning_beat_summary: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+
+    let at_three = svc
+        .checkpoint_advisory(CheckpointAdvisoryInput {
+            project_id: project_id.clone(),
+            book_number: 1,
+            through_chapter: 3,
+        })
+        .await
+        .unwrap()
+        .expect("a McKee project always answers the checkpoint questions");
+    assert_eq!(
+        at_three.central_question.acts_answered, 0,
+        "still no climax Scene is written: {:?}",
+        at_three.central_question
+    );
+    assert_eq!(
+        at_three.central_question.acts_planned_reached, 2,
+        "both planned climaxes are inside the chapter-3 range: {:?}",
+        at_three.central_question
+    );
+    assert_eq!(
+        at_three.dormant_subplots.len(),
+        1,
+        "the never-turning Subplot must be listed once three chapters are read: {:?}",
+        at_three.dormant_subplots
+    );
+    let dormant = &at_three.dormant_subplots[0];
+    assert_eq!(dormant.name, "The brother's silence");
+    assert_eq!(dormant.value_axis, "loyalty");
+    assert_eq!(dormant.last_turn_book, None);
+    assert_eq!(dormant.last_turn_chapter, None);
+    assert_eq!(
+        dormant.chapters_without_turn, 3,
+        "chapters 1-3 were read without a loyalty turn"
+    );
 }

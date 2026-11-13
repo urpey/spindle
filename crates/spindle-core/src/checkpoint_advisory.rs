@@ -4,10 +4,13 @@
 //! reader/dual-persona reviews. For a McKee-structured project it additionally
 //! answers three questions an author asks at the checkpoint gate:
 //!
-//! 1. how much of the **Central Question** has been answered so far (a
-//!    structured progress signal over the accepted Act list);
+//! 1. how much of the **Central Question** has been answered so far: an Act
+//!    counts only when its reserved climax **Scene has actually been written**
+//!    (a persisted Scene at that placement), never merely because planning
+//!    placed the climax inside the read range;
 //! 2. which side of the **Controlling Idea / Counter-Idea** debate the reader is
-//!    currently on (the side the last realized Spine Axis turn proves);
+//!    currently on (the side the last realized Spine Axis turn proves, across
+//!    the series in story order);
 //! 3. which **Subplots** the reader has likely forgotten (a Subplot whose Value
 //!    Axis has not turned in the last [`DORMANT_CHAPTER_RUN`] read Chapters).
 //!
@@ -23,6 +26,7 @@
 //!
 //! [`DORMANT_CHAPTER_RUN`]: crate::subplot::DORMANT_CHAPTER_RUN
 
+use crate::models::StoryPlacement;
 use crate::planning::PlannedAct;
 use crate::story_spine::StorySpine;
 use schemars::JsonSchema;
@@ -66,11 +70,14 @@ pub struct CheckpointAdvisory {
 
 /// Structured progress against the Story Spine's Central Question.
 ///
-/// "Answered" here means **reached**: an Act's reserved climax is at or before
-/// the checkpoint's last Chapter, so the reader has read the part of the
-/// question that Act turns. This is a position signal, not a claim that the
-/// prose actually delivered the turn (the realized Value Turns are the writer's
-/// report and are checked by scene verify instead).
+/// **Answered means written**, not planned: an Act counts only when its
+/// reserved climax Scene has actually been persisted inside the checkpoint
+/// range (its placement is at or before the checkpoint's last Chapter in story
+/// order). A planned climax the reader has not reached yet is never presented
+/// as answered; [`Self::acts_planned_reached`] keeps that planning-only position
+/// signal available under its own honest label. Being reached is still a
+/// position signal: the realized Value Turns are the writer's report and are
+/// checked by scene verify instead.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CentralQuestionProgress {
@@ -80,19 +87,25 @@ pub struct CentralQuestionProgress {
     /// Total number of accepted Acts, in order.
     #[serde(default)]
     pub acts_total: usize,
-    /// Acts whose reserved climax is at or before the checkpoint range's end.
+    /// Acts whose reserved climax Scene is written and inside the range.
     #[serde(default)]
     pub acts_answered: usize,
-    /// The `central_question_part` of each reached Act, in Act order.
+    /// The `central_question_part` of each answered Act, in Act order.
     #[serde(default)]
     pub answered_parts: Vec<String>,
-    /// The `central_question_part` of each Act still ahead of the reader.
+    /// The `central_question_part` of each Act without a written climax.
     #[serde(default)]
     pub remaining_parts: Vec<String>,
-    /// Whether the spine's final climax is at or before the range's end.
+    /// Whether the spine's final climax Scene is written and inside the range.
     #[serde(default)]
     pub final_climax_reached: bool,
-    /// `order` of the Act flagged as answering the whole Central Question.
+    /// Acts whose reserved climax is merely **planned** at or before the
+    /// range's end. Planning intent only: this is not proof the reader has
+    /// read the Scene, so it is never reported as answered.
+    #[serde(default)]
+    pub acts_planned_reached: usize,
+    /// Lowest `order` among the Acts flagged as answering the whole Central
+    /// Question, independent of repository row order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answering_act_order: Option<i32>,
 }
@@ -142,34 +155,48 @@ pub struct DormantSubplot {
     pub name: String,
     /// The Subplot's Value Axis; the axis its turns are counted on.
     pub value_axis: String,
-    /// Last Chapter whose written Scene turned this axis. Unknown when no
-    /// written Scene has turned it yet.
+    /// Book of the last written Scene whose realized report turned this axis.
+    /// Unknown when no written Scene has turned it yet. Series-scoped: the last
+    /// turn may be in an earlier book than the checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_turn_book: Option<i32>,
+    /// Chapter (in [`Self::last_turn_book`]) of that last turn; unknown when no
+    /// written Scene has turned the axis yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_turn_chapter: Option<i32>,
     /// Number of read Chapters after the last turn (all read Chapters when the
-    /// axis never turned).
+    /// axis never turned). Read Chapters are series-scoped and in story order.
     pub chapters_without_turn: usize,
 }
 
-/// Compute question 1 from the accepted Act list and the book/series spine.
+/// Compute question 1 from the accepted Act list, the book/series spine and
+/// the Scenes the reader has actually reached.
 ///
 /// A book sub-spine wins over the series spine; with neither accepted the
 /// question is empty and the progress still reports the Act count. An Act counts
-/// as answered when its reserved climax is at or before `(book_number,
-/// through_chapter)` in story order; an Act with no climax is never counted.
+/// as answered only when its reserved climax Scene is present in
+/// `written_scenes` (a persisted Scene at that placement, book/chapter exact and
+/// `scene_order` exact when the plan names one). `written_scenes` must already
+/// be limited to the checkpoint range, i.e. at or before `(book_number,
+/// through_chapter)` in story order; the planned-position count still applies
+/// [`placement_reached`] itself. An Act with no climax is never counted.
 pub fn central_question_progress(
     acts: &[PlannedAct],
     spine: Option<&StorySpine>,
+    written_scenes: &[StoryPlacement],
     book_number: i32,
     through_chapter: i32,
 ) -> CentralQuestionProgress {
     let question = spine
         .map(|spine| spine.central_question.trim().to_string())
         .unwrap_or_default();
+    // Lowest order wins: repository row order must never decide which Act is
+    // reported as the one that answers the whole question.
     let answering_act_order = acts
         .iter()
-        .find(|act| act.answers_central_question)
-        .map(|act| act.order);
+        .filter(|act| act.answers_central_question)
+        .map(|act| act.order)
+        .min();
 
     let mut ordered: Vec<&PlannedAct> = acts.iter().collect();
     ordered.sort_by_key(|act| act.order);
@@ -177,8 +204,9 @@ pub fn central_question_progress(
     let mut answered_parts = Vec::new();
     let mut remaining_parts = Vec::new();
     let mut acts_answered = 0usize;
+    let mut acts_planned_reached = 0usize;
     for act in ordered {
-        let reached = act.climax.as_ref().is_some_and(|climax| {
+        let planned_reached = act.climax.as_ref().is_some_and(|climax| {
             placement_reached(
                 climax.book_number,
                 climax.chapter_number,
@@ -186,8 +214,19 @@ pub fn central_question_progress(
                 through_chapter,
             )
         });
+        if planned_reached {
+            acts_planned_reached += 1;
+        }
+        let written = act.climax.as_ref().is_some_and(|climax| {
+            placement_is_written(
+                climax.book_number,
+                climax.chapter_number,
+                climax.scene_order,
+                written_scenes,
+            )
+        });
         let part = act.central_question_part.trim();
-        if reached {
+        if written {
             acts_answered += 1;
             if !part.is_empty() {
                 answered_parts.push(part.to_string());
@@ -206,15 +245,34 @@ pub fn central_question_progress(
         final_climax_reached: spine
             .and_then(|spine| spine.final_climax.as_ref())
             .is_some_and(|climax| {
-                placement_reached(
+                placement_is_written(
                     climax.book_number,
                     climax.chapter_number,
-                    book_number,
-                    through_chapter,
+                    climax.scene_order,
+                    written_scenes,
                 )
             }),
+        acts_planned_reached,
         answering_act_order,
     }
+}
+
+/// Whether a placement has a persisted written Scene.
+///
+/// The comparison is exact on book and chapter; a `Some(scene_order)` must match
+/// the written Scene's order, while a chapter-wide placement (`None`) accepts
+/// any written Scene in that chapter.
+fn placement_is_written(
+    book_number: i32,
+    chapter_number: i32,
+    scene_order: Option<i32>,
+    written_scenes: &[StoryPlacement],
+) -> bool {
+    written_scenes.iter().any(|scene| {
+        scene.book_number == book_number
+            && scene.chapter_number == chapter_number
+            && scene_order.is_none_or(|order| scene.scene_order == Some(order))
+    })
 }
 
 /// Whether a story placement is at or before `(book_number, through_chapter)`.
@@ -231,7 +289,6 @@ pub fn placement_reached(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::StoryPlacement;
     use crate::planning::PlanningStoryPlacement;
     use crate::story_spine::StorySpineEnding;
 
@@ -275,39 +332,103 @@ mod tests {
         }
     }
 
+    fn written(book_number: i32, chapter_number: i32, scene_order: i32) -> StoryPlacement {
+        StoryPlacement {
+            book_number,
+            chapter_number,
+            scene_order: Some(scene_order),
+            note: None,
+        }
+    }
+
     #[test]
-    fn progress_counts_the_acts_the_reader_has_reached() {
+    fn progress_counts_only_acts_whose_climax_scene_is_written() {
         let acts = vec![
             act(1, 2, "the bell", false),
             act(2, 4, "the ledger", false),
             act(3, 9, "the confession", true),
         ];
-        let progress = central_question_progress(&acts, Some(&spine("Who rang it?")), 1, 4);
+        let read = [written(1, 2, 1), written(1, 4, 1)];
+        let progress = central_question_progress(&acts, Some(&spine("Who rang it?")), &read, 1, 4);
         assert_eq!(progress.question, "Who rang it?");
         assert_eq!(progress.acts_total, 3);
         assert_eq!(progress.acts_answered, 2);
+        assert_eq!(progress.acts_planned_reached, 2);
         assert_eq!(progress.answered_parts, vec!["the bell", "the ledger"]);
         assert_eq!(progress.remaining_parts, vec!["the confession"]);
         assert_eq!(progress.answering_act_order, Some(3));
         assert!(!progress.final_climax_reached);
 
-        let complete = central_question_progress(&acts, Some(&spine("Who rang it?")), 1, 9);
+        let complete = central_question_progress(
+            &acts,
+            Some(&spine("Who rang it?")),
+            &[written(1, 2, 1), written(1, 4, 1), written(1, 9, 1)],
+            1,
+            9,
+        );
         assert_eq!(complete.acts_answered, 3);
+        assert_eq!(complete.acts_planned_reached, 3);
         assert_eq!(complete.question, "Who rang it?");
         assert!(complete.final_climax_reached);
         assert!(complete.remaining_parts.is_empty());
 
         // Without an accepted spine the Act progress is still reported.
-        let no_spine = central_question_progress(&acts, None, 1, 4);
+        let no_spine = central_question_progress(&acts, None, &read, 1, 4);
         assert_eq!(no_spine.question, "");
         assert_eq!(no_spine.acts_answered, 2);
+    }
+
+    #[test]
+    fn a_planned_but_unwritten_climax_is_never_reported_as_answered() {
+        let acts = vec![act(1, 2, "the bell", true)];
+        // The planned climax is inside the read range, but no prose exists at
+        // that placement yet: planning position is reported separately.
+        let progress = central_question_progress(&acts, Some(&spine("Who rang it?")), &[], 1, 9);
+        assert_eq!(progress.acts_answered, 0);
+        assert_eq!(progress.acts_planned_reached, 1);
+        assert!(progress.answered_parts.is_empty());
+        assert_eq!(progress.remaining_parts, vec!["the bell"]);
+        assert!(!progress.final_climax_reached);
+
+        // A written Scene in the same chapter but a different scene slot does
+        // not satisfy an exact climax placement.
+        let wrong_scene = central_question_progress(
+            &acts,
+            Some(&spine("Who rang it?")),
+            &[written(1, 2, 2)],
+            1,
+            9,
+        );
+        assert_eq!(wrong_scene.acts_answered, 0);
+    }
+
+    #[test]
+    fn the_lowest_ordered_answering_act_wins_regardless_of_row_order() {
+        // Reverse insertion order: repository row order must not decide.
+        let acts = vec![
+            act(3, 9, "third", true),
+            act(1, 2, "first", true),
+            act(2, 4, "second", false),
+        ];
+        let progress = central_question_progress(&acts, None, &[], 1, 9);
+        assert_eq!(
+            progress.answering_act_order,
+            Some(1),
+            "the answer must use the lowest flagged `order`, not the first row"
+        );
     }
 
     #[test]
     fn acts_without_a_climax_are_never_counted_as_answered() {
         let mut dangling = act(2, 3, "ahead", false);
         dangling.climax = None;
-        let progress = central_question_progress(&[act(1, 1, "seen", true), dangling], None, 1, 9);
+        let progress = central_question_progress(
+            &[act(1, 1, "seen", true), dangling],
+            None,
+            &[written(1, 1, 1)],
+            1,
+            9,
+        );
         assert_eq!(progress.acts_total, 2);
         assert_eq!(progress.acts_answered, 1);
         assert_eq!(progress.answered_parts, vec!["seen"]);

@@ -57,14 +57,22 @@ authoring harness reaches `test_agent` only through a server-issued internal
 token; an external caller cannot. This is discovery/invocation filtering, not
 operator authentication.
 
-`skills/profiles.toml` composes skill and named-reference units. The build resolves
-transitive skill dependencies, includes each reference's owning core, rejects
+`skills/profiles.toml` composes skill and named-reference units. A **reference
+unit may be composed on its own**: the build adds the reference's own tools and
+the owning core's `requires_skills` closure, but not the owning core's unit or
+tools. Adding the owning core itself still adds its tools. That is why the
+`new-book`, `planning`, `worldbuilding`, `workflow-write` and `workflow-authoring`
+profiles can load the `story-structure/*` references their entry skills name
+without gaining `planning_*` or `get_entity` capabilities. A profile that needs
+the owning core's tools must list the core unit explicitly (the `style` profile
+lists `editor`). The build rejects
 unknown units, duplicate definitions/units, cycles and reserved profile names,
 and emits sorted/deduplicated static allowlists. Registry/operator checks remain
 in MCP alignment tests, preserving the packaging crate's boundaries. Generated
 skill/reference metadata reports enabled profile membership. Reading a skill
-never adds tools to a profile; only the enabled units listed by the catalog are
-supported workflows until loader coverage messages ship.
+never adds tools to a profile; a generated profile covers exactly the units its
+catalog lists, and compatibility profiles keep tool-availability coverage.
+Coverage messages are reported with that metadata.
 
 `tools/generated-profiles.json` is a checked compiler-output snapshot, not a
 second editable composition file. Regenerate it and embedded skill metadata with
