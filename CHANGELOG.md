@@ -2,6 +2,80 @@
 
 ## Unreleased
 
+- Add the **three advisory McKee checkpoint answers** (issue #35). On a
+  McKee-structured project the checkpoint report now carries an additive
+  `mckee_advisory` section computed deterministically (no model call) from the
+  accepted Story Spine, the accepted Act list, the plot lines and the written
+  Scenes' realized reports: (1) **Central Question progress** — which Acts'
+  `central_question_part`s the reader has actually reached because the reserved
+  climax **Scene is written** at or before the range (planned-only position is
+  reported separately as `acts_planned_reached`, never as answered), the Act
+  totals, whether the spine's final climax Scene is written inside the range, and
+  the lowest `order` among the Acts answering the whole question; (2) the
+  **Controlling Idea / Counter-Idea side** the last written Scene's realized
+  Spine Axis turn at or before the checkpoint proves, **across the series in
+  story order** (positive = Controlling Idea, negative = Counter-Idea, no
+  realized turn = `undecided`), with the axis and a book/chapter/scene basis;
+  (3) likely-forgotten **Subplots** — every non-Main-Plot plot line whose Value
+  Axis has not turned for `DORMANT_CHAPTER_RUN` (3) **read Chapters** since its
+  last written turn (series-scoped, no adjacency requirement — this is not the
+  planning validator's planned-consecutive-Chapter rule). The host checkpoint
+  path writes the section at creation, the auto-checkpoint writes it before its
+  verdict, and `authoring_review_checkpoint` refreshes it (so a CLI-harness
+  report carries it by review time) and persists it even when the review is
+  refused, so the operator can read the answers while acting on the block; an
+  I/O failure on that advisory write is logged and never blocks the gate. The
+  answers are **advisory only**: the approve/block gate never reads
+  `mckee_advisory`, so a `counter_idea` side or three forgotten Subplots can
+  never block an otherwise clean checkpoint and a flattering answer can never
+  rescue a blocked one. The field is `Option` + `skip_serializing_if`, so a
+  non-McKee checkpoint report keeps its exact previous bytes (golden serialized
+  report test). The service returns no advisory for a non-McKee project, a
+  project with no active branch, or an invalid placement (`book_number <= 0` /
+  `through_chapter <= 0`); those three meanings are documented and are not a
+  single "not McKee" signal. No new tool, table or migration.
+- **Skill wiring for the McKee structure references** (issue #35). `new-book`,
+  `plot-architect`, `character-creator` and `scene-writer` now point at the
+  correct `story-structure` reference at the correct step (story-spine at the
+  contract/spine gate, character-design at cast & world, value-turns at the
+  series-arc/book Act and value-chain work, scene-design + dialogue-tactics for
+  scene/beat planning, dialogue-line for line work) and the `new-book` skill
+  states plainly that every project it creates is McKee-structured while only
+  the gate delegation is opt-in. **A reference unit can now be composed without
+  its owning core**: the build adds the reference's own tools and the core's
+  `requires_skills` closure but not the core's unit or tools, so the
+  `new-book`, `planning`, `worldbuilding`, `workflow-write` and
+  `workflow-authoring` profiles load every reference their entry skills name
+  without gaining `planning_*`/`get_entity` capabilities (a test loads each
+  pointer under the profile the skill actually runs under). The pointers resolve
+  through `get_reference(name="story-structure/…")` and the
+  `bible://references/…` resource. `scene-writer/references/craft-and-voice.md`
+  is reframed per ADR 0007 as **paragraph-level rendering craft for an
+  already-planned McKee Beat** (MRU causality, scene/sequel rhythm as prose
+  pacing, voice and failure modes), with no scene/sequel or MRU planning units;
+  Swain categories survive only as an optional `swain_label` on a structured
+  Beat. The beat-label vocabulary, the named targeted-repair tools and the
+  anti-slop catalog/rewrite guidance that the core rewrite had dropped now live
+  in that reference, so `scene-writer` stays under its 10,000-byte cap without a
+  usability regression. Every unit stays inside its token budget.
+- **Docs pass for the shipped McKee behaviour** (issue #35). The architecture,
+  planning-engine and authoring-supervisor docs now describe the delivered
+  planning levels/gates, writer visibility, realized reports and deterministic
+  verify, independent critic and park-for-checkpoint, amendment cascade, skills
+  and the checkpoint advisory end to end, and the stale "authoring runs do not
+  read or enforce it yet" / "new-book planning entry tools are not shipped yet"
+  claims are gone. The honest limitations stay documented: supervisor-side
+  value-chain enforcement is not implemented, automatic amendment→resume
+  detection for a parked Scene remains future work, and no amendment class can
+  directly edit a Key Fact row, an existing promise or a planned Beat's promise
+  reference.
+- Add a **service-layer end-to-end McKee fixture** (issue #35):
+  contract → Story Spine → cast & world → series arc (Acts, Sequences, Main
+  Plot) → book → chapter → scene manifests, each accepted by an explicit human
+  decision, then a Scene committed through `commit_scene` with a typed realized
+  report and a clean deterministic McKee verify, followed by the checkpoint
+  advisory read-back. The local-only model router makes any hidden model call
+  fail the test.
 - Add the **McKee amendment cascade over unwritten Scenes** (issue #34). On a
   McKee project, accepting a plan amendment re-validates the later planned,
   undrafted Scenes when the applied effect changed (a) a planned Scene's

@@ -8,7 +8,14 @@ not automatically enable that specialist or union its tools into the entry skill
 
 `[[references]]` declares an independently loadable unit with a name, Markdown
 path under `references/`, trigger, direct tools, and supported profiles. Loading a
-reference requires both its tools and its owning core's dependency closure.
+reference requires its **own** tools plus its owning core's `requires_skills`
+dependency closure — never the owning core's own tools. That is what lets a
+generated profile compose a reference without inheriting the core: a writer or
+worldbuilding profile can name `story-structure/story-spine` and load it without
+gaining the `story-structure` core's `planning_*` or `get_entity` tools. Adding the
+owning core itself still adds the core's tools and unit. A reference's prose may
+name tools inherited from its owning core for inventory purposes (markers and
+declarations), but those inherited tools are not load requirements.
 The nested units are `spindle/setup`, `editor/style`,
 `story-structure/story-spine`, `story-structure/character-design`,
 `story-structure/value-turns`, `story-structure/scene-design`,
@@ -21,6 +28,8 @@ The nested units are `spindle/setup`, `editor/style`,
 `bible://references/spindle/setup` URI. Existing craft names and skill names remain
 valid. Lookups match exact compiled names; the text behind a name is read at
 runtime when a content directory is configured (see **Runtime markdown** below).
+See [profile selection and measurements](tool-profiles.md) for the generated
+profiles that compose each `story-structure` reference.
 
 The build checks TOML shape/version, names, duplicates, dependency cycles and
 reference confinement (including canonicalized paths). The skills crate retains
@@ -33,12 +42,15 @@ annotations, never alternate callable names. This deliberately conservative
 scanner covers prose, code spans, and fenced examples; remove obsolete tool
 mentions instead of concealing them behind negative examples.
 
-`skills/profiles.toml` now composes generated workflow profiles from core and
-reference units. The build includes transitive skill dependencies and appends
-generated profile membership to embedded manifests. Authored `profiles` arrays
-remain coverage assertions for compatibility profiles. The unset `default` label
-means no startup setting. See [profile selection and measurements](tool-profiles.md)
-for new names, enabled units, static compiler snapshots and transitional limits.
+`skills/profiles.toml` composes generated workflow profiles from core and
+reference units. A reference may be composed on its own (reference-only): the
+build adds the reference's own tools and the owning core's `requires_skills`
+closure, but not the core unit or the core's tools. Authored `profiles` arrays
+remain coverage assertions for compatibility profiles. The build includes
+transitive skill dependencies and appends generated profile membership to
+embedded manifests. The unset `default` label means no startup setting. See
+[profile selection and measurements](tool-profiles.md) for new names, enabled
+units, static compiler snapshots and transitional limits.
 The `spindle` entry core is host-neutral (`<= 1,000` estimated tokens), `scene-writer`
 core is split into core (`<= 2,500` estimated tokens) plus five on-demand references,
 and every other skill core and reference is capped at `<= 3,000` estimated tokens
@@ -47,6 +59,18 @@ coverage metadata (`covered`, `required_profile`, `available_units`,
 `missing_capabilities`) and return a profile-selection message when the active
 session profile does not cover the requested unit. Reading a skill never grants
 new capabilities or mutates the active profile.
+
+## Development-language convention
+
+The McKee `story-structure` reference series is written in Traditional Chinese
+during development; it is the working language the maintainer reviews in, and
+English translation stays a release-time task. Entry skills keep the language
+they already use (`new-book` and `plot-architect` are Traditional Chinese,
+`character-creator` and `scene-writer` are English), and a block inside an entry
+skill stays in that unit's language. New detailed guidance may be bilingual where
+the English half is the release-facing text; do not mix languages inside one
+sentence, and never machine-translate an existing block just to make a file look
+uniform.
 
 `tools/tool-dispositions.toml` freezes every currently shipped registry name.
 Retained entries need a skill/reference owner; compatibility entries have an

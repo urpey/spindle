@@ -24,18 +24,24 @@ The tables defined in migration `V0007__authoring_runs.sql` are:
 ### McKee-structured projects
 
 Projects created through the `new-book` planning flow are marked
-McKee-structured and may carry an accepted Story Spine (see
-[planning engine](planning-engine-design.md)). The Story Spine is planning
-intent: authoring runs do not read or enforce it yet, and runs on unmarked
-projects behave exactly as before. `planning_status` lists accepted spines, and
+McKee-structured and carry the accepted Story Spine (see
+[planning engine](planning-engine-design.md)). The spine and the plan are
+planning intent, but the authoring run **is** held to them: the writer receives
+the current Scene's planned value turn, the earlier Scenes' realized results and
+the Character Design slice; a committed Scene must carry a realized report that
+verifies against the plan; and a mismatch that outlives the revise budget parks
+the Scene for checkpoint review instead of committing. A run on an unmarked
+project behaves exactly as before. `planning_status` lists accepted spines and
 `get_entity(table: "story_spine")` reads one wherever the profile exposes
-`get_entity`; the plan is read-only and no writing path depends on it.
+`get_entity`.
 
 Plot lines carry the matching Main Plot / Subplot structure (Value Axis, closed
-Subplot job, Main Plot flag) decided during Series-Arc planning. `get_entity(
-table: "plot_line")` reads those fields back, but drafting does not yet enforce
-them: the supervisor consumes chapter plans and continuity records exactly as
-before, and a run on an unmarked project never sees the new fields.
+Subplot job, Main Plot flag) decided during Series-Arc planning.
+`get_entity(table: "plot_line")` reads those fields back. Drafting does not
+re-check the Subplot convergence rules — those are planning gates — but the
+checkpoint advisory (below) reports which Subplots have gone dormant in the
+prose the reader has actually seen. A run on an unmarked project never sees the
+new fields.
 
 Cast & World planning may also have produced a Character Design per character
 (see [planning engine](planning-engine-design.md)). Drafting reads only the
@@ -78,9 +84,10 @@ is not listed. The supervisor and `authoring_prepare_run` still do **not**
 re-check the value chain; the value-chain blocking and advisory findings exist
 only at planning stage/acceptance time, so drafting readiness does not re-check
 the chain, Sequence membership, Inaction Cost or climax dilemmas, and a run can
-start from a plan whose value chain is broken. Supervisor-side enforcement is
-follow-up work (#32). Sequences may cross chapters; the supervisor never turns
-them into timeline events or canonical facts.
+start from a plan whose value chain is broken. Supervisor-side value-chain
+enforcement is **not implemented**: those checks stay planning gates. Sequences
+may cross chapters; the supervisor never turns them into timeline events or
+canonical facts.
 
 Subplot structure is likewise a planning-level check. A Chapter/Scene artifact
 whose Sequence belongs to a Subplot must land that Sequence's climax at or before
@@ -464,6 +471,54 @@ the approve/block verdict (which is computed from the deep-consistency severity
 counts alone, exactly as the sampled-review outcomes are report-only). A dipping
 engagement or a warning concern is a craft signal for the supervisor to weigh at
 triage, not an automatic block.
+
+### Checkpoint advisory questions (McKee)
+
+On a McKee-structured project the checkpoint report additionally carries
+`mckee_advisory`, the three questions an author asks at the gate:
+
+1. **Central Question progress** — the accepted Act list ordered by `order`.
+   **Answered means written**: an Act counts only when its reserved climax Scene
+   has actually been persisted at or before the checkpoint range's last Chapter
+   in story order. A planned climax the reader has not reached is never reported
+   as answered; `acts_planned_reached` keeps that planning-only position signal
+   under its own label. The answer carries the question, the Act totals, the
+   answered and remaining `central_question_part`s, whether the spine's final
+   climax Scene is written inside the range, and the **lowest** `order` among
+   the Acts flagged as answering the whole question (never repository row
+   order).
+2. **Controlling Idea / Counter-Idea side** — the side the last **written**
+   Scene's realized turn on the Spine Axis proves, read **across the series at or
+   before the checkpoint** (story order, book-agnostic). A book-2 checkpoint
+   therefore still sees book 1's turn. A positive closing proves the Controlling
+   Idea, a negative one proves the Counter-Idea, and no realized turn is
+   `undecided`. The answer carries both ideas, the axis and a deterministic basis
+   naming the book/chapter/scene it used.
+3. **Likely-forgotten Subplots** — every non-Main-Plot plot line with a Value
+   Axis whose written Scenes have not turned it for `DORMANT_CHAPTER_RUN` (3)
+   **read Chapters**, with the last turn's book/chapter (or none) and the count
+   of read Chapters since. The count is series-scoped and walks the chapters the
+   reader has actually read, in story order; it does **not** require the
+   chapters to be consecutive. That differs from the planning validator's
+   `subplot_axis_dormant` advisory, which scans *planned* chapters and resets on
+   a chapter gap or a book change; both reuse the same threshold but answer
+   different questions (what the reader has read vs. what the plan intends).
+
+All three are computed deterministically from the accepted Story Spine, the
+accepted Acts, the plot lines and the written Scenes' realized reports — no model
+call — and written at checkpoint creation on the host path, by the
+auto-checkpoint before its verdict, and again by `authoring_review_checkpoint`
+(so a CLI-harness-created report carries them by review time, and an I/O failure
+while persisting them is logged but never blocks the review). They are
+**advisory only**: the approve/block gate never reads `mckee_advisory`, so a
+`counter_idea` side or three forgotten Subplots can never block an otherwise
+clean checkpoint, and a flattering answer can never rescue a blocked one.
+Non-McKee reports omit the field entirely.
+
+The service read returns no advisory at all in three cases, and callers must not
+collapse them into "not McKee-structured": the project has no McKee marker, the
+project has no active branch, or the requested placement is invalid
+(`book_number <= 0` or `through_chapter <= 0`).
 
 ## Interactive Drafting Workflow
 

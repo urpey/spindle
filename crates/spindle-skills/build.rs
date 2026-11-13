@@ -60,13 +60,14 @@ fn collect_unit(
     let skill = manifests
         .get(skill_name)
         .unwrap_or_else(|| panic!("unknown profile skill {skill_name}"));
-    if units.insert(skill_name.to_owned()) {
-        tools.extend(skill.tools.iter().cloned());
-        for dependency in &skill.requires_skills {
-            collect_unit(dependency, manifests, units, tools);
-        }
-    }
     if let Some(reference) = reference {
+        // A reference unit may be composed on its own: it grants the
+        // reference's own tools and still pulls in the owning core's
+        // `requires_skills` closure, but it never implies the owning core
+        // itself (and so never adds the core's tools or its unit). Adding the
+        // core separately still adds its tools. This is what lets a writer or
+        // worldbuilding profile load story-structure guidance without gaining
+        // planning/get_entity capabilities.
         let reference = skill
             .references
             .iter()
@@ -74,6 +75,16 @@ fn collect_unit(
             .unwrap_or_else(|| panic!("unknown profile reference {name}"));
         units.insert(name.to_owned());
         tools.extend(reference.tools.iter().cloned());
+        for dependency in &skill.requires_skills {
+            collect_unit(dependency, manifests, units, tools);
+        }
+        return;
+    }
+    if units.insert(skill_name.to_owned()) {
+        tools.extend(skill.tools.iter().cloned());
+        for dependency in &skill.requires_skills {
+            collect_unit(dependency, manifests, units, tools);
+        }
     }
 }
 
@@ -343,6 +354,77 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn a_reference_unit_does_not_inherit_the_owning_core_tools() {
+        let mut spindle = manifest("");
+        spindle.name = "spindle".into();
+        spindle.requires_skills.clear();
+        spindle.tools = vec!["spindle_tool".into()];
+
+        let mut dependency = manifest("");
+        dependency.name = "core-dep".into();
+        dependency.requires_skills.clear();
+        dependency.tools = vec!["dep_tool".into()];
+
+        let mut owner = manifest("core-dep");
+        owner.name = "owner".into();
+        owner.tools = vec!["owner_tool".into()];
+        owner.references = vec![Reference {
+            name: "ref".into(),
+            path: "references/ref.md".into(),
+            tools: vec!["ref_tool".into()],
+            profiles: vec!["default".into()],
+            trigger: "trigger".into(),
+        }];
+        let manifests = BTreeMap::from([
+            ("spindle".into(), spindle),
+            ("core-dep".into(), dependency),
+            ("owner".into(), owner),
+        ]);
+        let profile = |units: &[&str]| ProfileSpec {
+            name: "custom".into(),
+            description: "A workflow.".into(),
+            units: units.iter().map(|unit| (*unit).to_owned()).collect(),
+        };
+
+        // Reference-only: the reference's own tools and the owning core's
+        // dependency closure apply, but never the core's own tools.
+        let reference_only = compile_profiles(
+            Composition {
+                version: 1,
+                profiles: vec![profile(&["owner/ref"])],
+            },
+            &manifests,
+        );
+        assert!(
+            reference_only[0].units.contains("owner/ref"),
+            "the reference unit must be composed"
+        );
+        assert!(
+            !reference_only[0].units.contains("owner"),
+            "a reference unit must not compose the owning core itself"
+        );
+        assert!(reference_only[0].tools.contains("ref_tool"));
+        assert!(reference_only[0].tools.contains("dep_tool"));
+        assert!(reference_only[0].tools.contains("spindle_tool"));
+        assert!(
+            !reference_only[0].tools.contains("owner_tool"),
+            "reference-only composition must not grant the owning core's tools"
+        );
+
+        // Adding the core itself still adds its tools.
+        let with_core = compile_profiles(
+            Composition {
+                version: 1,
+                profiles: vec![profile(&["owner", "owner/ref"])],
+            },
+            &manifests,
+        );
+        assert!(with_core[0].units.contains("owner"));
+        assert!(with_core[0].tools.contains("owner_tool"));
+        assert!(with_core[0].tools.contains("ref_tool"));
     }
 
     #[test]

@@ -42,7 +42,20 @@ The next action in the result names the safe next step. Follow it.
 
 Never treat model output, passing checks, or silence as approval.
 
-## Step 4: Arc and Book Gate, then the Optional McKee Profile
+## 每個步驟要載入的結構參考
+
+`new-book` 建立的專案一律是 McKee 結構；只有 Chapter／Scene 的 gate 委派是 opt-in。每到一個關卡，先載入對應的 `story-structure` 參考再審查提案，不要憑記憶補結構：
+
+- Contract 層（Central Question、Controlling Idea、Counter-Idea、Spine Axis、ending type）：`get_reference(name="story-structure/story-spine")`。
+- CastWorld 層（每個主要角色的 Character Design、矛盾、四層自我、對主角的壓力）：`get_reference(name="story-structure/character-design")`。
+- SeriesArc／Book 層（Act list、Sequences、plot lines、value chain、Convergence Points）：`get_reference(name="story-structure/value-turns")`。
+- Chapter／Scene 層（場景壓力、opposition、Gap、Turning Beat）：`get_reference(name="story-structure/scene-design")`；對白戰術用 `story-structure/dialogue-tactics`，台詞本身用 `story-structure/dialogue-line`。
+
+若載入回報 uncovered，依 `required_profile` 重新連線，或改讀 `bible://references/...` 資源；不要用非結構化的方式代替。
+
+## Step 4: Arc and Book Gate, then the Optional Gate Profile
+
+Every project created through this flow is McKee-structured; the **gate delegation** below is the only opt-in part.
 
 Continue the same staged, review, decide loop for SeriesArc and Book. Both are root levels and always need an explicit author decision:
 
@@ -55,7 +68,7 @@ If a level returns a host generation request instead of a proposal, generate the
 
 ### The McKee gate profile is opt-in
 
-After every root level (Contract, CastWorld, SeriesArc, Book) is accepted and before you stage the Chapter batch, ask the author whether to activate the McKee gate profile. Explain the trade-off in plain terms:
+After every root level (Contract, CastWorld, SeriesArc, Book) is accepted and before you stage the Chapter batch, ask the author whether to delegate Chapter and Scene acceptance through the McKee gate profile. Explain the trade-off in plain terms:
 
 - Roots stay human: Contract, CastWorld, SeriesArc and Book always need an author decision.
 - Chapter and Scene batches are then accepted automatically by the audited policy actor `policy:mckee-default:1`, but only when the bundle is clean: no blocking finding and no unresolved author question. A flagged batch still comes back to the author with the reason.
@@ -94,9 +107,9 @@ Never activate it silently or from a vague answer, and never claim that every le
 ## Step 6: Scene Packets and Handoff
 
 1. Call `planning_status` and read the real readiness report. It distinguishes planner checks from the authoring prepare result.
-3. Call `planning_decide` with the prepare action to get the real prepare report for the exact range. Do not claim readiness from planner checks alone.
-4. When readiness passes, summarize accepted IDs, the chapter and scene packets, and any advisory warnings. Then load the drafting workflow: `scene-writer` for one scene, or `authoring-supervisor` for a supervised multi-chapter run. Starting prose remains a separate author instruction.
-5. If readiness fails, show the missing requirements and advance or repair the relevant level. `authoring_prepare_run` remains available for an independent low-level recheck.
+2. Call `planning_decide` with the prepare action to get the real prepare report for the exact range. Do not claim readiness from planner checks alone.
+3. When readiness passes, summarize accepted IDs, the chapter and scene packets, and any advisory warnings. Then load the drafting workflow: `scene-writer` for one scene, or `authoring-supervisor` for a supervised multi-chapter run. Starting prose remains a separate author instruction.
+4. If readiness fails, show the missing requirements and advance or repair the relevant level. `authoring_prepare_run` remains available for an independent low-level recheck.
 
 ## Reconnect
 
@@ -106,6 +119,7 @@ Planning is durable. If a session is interrupted, call `planning_status` without
 <!-- tool: create_book -->
 <!-- tool: create_chapter -->
 <!-- tool: create_project -->
+<!-- tool: get_reference -->
 <!-- tool: get_writer_state -->
 <!-- tool: list_projects -->
 <!-- tool: planning_advance -->

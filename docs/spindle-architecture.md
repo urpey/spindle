@@ -215,7 +215,7 @@ is omitted the briefing resolves the writer cursor's next Scene in that chapter,
 so a later-Scene briefing does not silently fall back to Scene 1.
 `get_scene_context` and the briefing's bundled scene context expose
 `novel.planned_scene` (the current plan), `novel.realized_scenes` (earlier
-written Scenes of the chapter, as summaries for now) and
+written Scenes of the chapter, as summaries plus their realized reports) and
 `novel.character_design_slice` (the tested contradiction, conscious desire and
 planner-written behaviour cues). The slice type cannot represent the Character
 Design hidden layer, the unconscious desire, their secret fact ids or
@@ -717,6 +717,21 @@ pattern as `promise_payoff_detection`:
   engagement. It is **enrichment, not a gate** — concerns never fold into the
   approve/block verdict — and is fully rating-gated via the `reader_sim` route
   (falling back to `review`) with honest-skip.
+- **Checkpoint advisory questions (McKee, issue #35).** A McKee project's
+  checkpoint report additionally carries `mckee_advisory` with three
+  deterministic answers: Central Question progress over the accepted Act list
+  (an Act counts only when its reserved climax Scene is **written** at or before
+  the checkpoint; planned-only position is a separate `acts_planned_reached`
+  signal), the Controlling Idea / Counter-Idea side the last written Spine Axis
+  turn at or before the checkpoint proves across the series, and the Subplots
+  whose Value Axis has not turned in three series-scoped read Chapters. The
+  service computes them from the Story Spine, the accepted Acts, the plot lines
+  and the written Scenes' realized reports — no model call — and the host
+  checkpoint path, the auto-checkpoint (before its verdict) and
+  `authoring_review_checkpoint` all write them; an I/O failure while persisting
+  them is logged and never blocks the review. **Advisory only**: the
+  approve/block gate never reads the field. A non-McKee report omits it and stays
+  byte-identical.
 
 **Style learning from operator edits** (migration V0031, opt-in per project via
 `project.style_learning`) captures the before/after pair when an operator re-saves

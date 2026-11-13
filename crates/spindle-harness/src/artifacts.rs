@@ -335,6 +335,19 @@ pub struct CheckpointReportArtifact {
     /// never ran the pass (manual policy, or an older report).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_sim: Option<CheckpointReaderSimSection>,
+    /// The three advisory McKee checkpoint answers (issue #35): Central Question
+    /// progress, the Controlling Idea / Counter-Idea side the reader is on, and
+    /// the Subplots the reader has likely forgotten.
+    ///
+    /// Additive, serde-default and skipped when unset, so every non-McKee report
+    /// (and every report written before the advisory existed) keeps its exact
+    /// previous bytes. Populated only for a McKee-structured project by the
+    /// checkpoint creation path and refreshed by checkpoint review / the
+    /// auto-checkpoint before the verdict. **Advisory only**: nothing in the
+    /// approve/block gate reads this field, so no answer can approve or block a
+    /// checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mckee_advisory: Option<spindle_core::checkpoint_advisory::CheckpointAdvisory>,
 }
 
 /// The reader-simulation section of a checkpoint report (evolution §3.6). One
@@ -687,5 +700,67 @@ mod packet_package_tests {
         artifact.truncated = false;
         artifact.text = "Edited after acceptance.".into();
         assert!(GeneratedScenePackage::from_accepted_packet(&artifact).is_err());
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_report_bytes_tests {
+    use super::*;
+    use spindle_core::models::CreateSavePointOutput;
+
+    fn non_mckee_report() -> CheckpointReportArtifact {
+        CheckpointReportArtifact {
+            version: 1,
+            start_chapter: 1,
+            end_chapter: 2,
+            save_point: CreateSavePointOutput {
+                save_point_id: "save_point:test".into(),
+                branch_id: "branch:test".into(),
+            },
+            consistency: serde_json::json!({"issues": []}),
+            deep_consistency: None,
+            deep_consistency_status: "complete".into(),
+            deep_consistency_instruction: "Recorded.".into(),
+            sampled_reviews: Vec::new(),
+            sampled_review_status: "complete".into(),
+            sampled_review_instruction: "Reviewed.".into(),
+            pacing_overview: serde_json::json!({}),
+            chapter_summaries: serde_json::json!([]),
+            narrative_promises: serde_json::json!([]),
+            sampled_scene_ids: vec!["scene:test".into()],
+            critic_disagreement_scene_ids: Vec::new(),
+            reader_sim: None,
+            mckee_advisory: None,
+        }
+    }
+
+    /// A non-McKee checkpoint report keeps its **exact previous bytes**.
+    ///
+    /// This is a golden serialized report (not just an absence check): the
+    /// additive `mckee_advisory` field must be skipped when `None`, and a report
+    /// written before the field existed must round-trip byte-identically.
+    #[test]
+    fn non_mckee_checkpoint_report_bytes_are_unchanged() {
+        let golden = include_str!("../tests/fixtures/checkpoint-report-non-mckee.json");
+        let serialized = serde_json::to_string_pretty(&non_mckee_report()).unwrap();
+        assert_eq!(
+            serialized, golden,
+            "the non-McKee checkpoint report serialization drifted; regenerate the golden \
+             only for an intentional format change"
+        );
+        assert!(
+            !serialized.contains("mckee_advisory"),
+            "a non-McKee report must not grow an advisory key"
+        );
+
+        // An older report (no `mckee_advisory` key at all) still round-trips
+        // byte-identically, so the field was added compatibly.
+        let round_trip: CheckpointReportArtifact = serde_json::from_str(golden).unwrap();
+        assert!(round_trip.mckee_advisory.is_none());
+        assert_eq!(
+            serde_json::to_string_pretty(&round_trip).unwrap(),
+            golden,
+            "deserializing a pre-advisory report must not add the field"
+        );
     }
 }

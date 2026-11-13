@@ -180,6 +180,54 @@ mod journal;
 use journal::*;
 mod authoring_checkpoint;
 use authoring_checkpoint::*;
+
+/// Test-only failure injection for the advisory write path (issue #35 review).
+///
+/// The advisory answers are report enrichment: a write failure must be logged
+/// and must never block a checkpoint. Making a real report unwritable would
+/// also fail the other report writes the review performs, so the seam is keyed
+/// by project id and affects only the advisory helper for the test that injects
+/// it. No other test (or production build) can trip it.
+#[cfg(test)]
+static ADVISORY_WRITE_FAILURE_PROJECT: std::sync::Mutex<Option<String>> =
+    std::sync::Mutex::new(None);
+
+/// Set once the injected failure actually fires, so a test can prove the
+/// advisory write path was reached instead of silently skipping it.
+#[cfg(test)]
+static ADVISORY_WRITE_FAILURE_HIT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Inject (or clear, with `None`) an advisory-write failure for `project_id`.
+#[cfg(test)]
+pub(crate) fn fail_checkpoint_advisory_write_for(project_id: Option<&str>) {
+    let mut injected = ADVISORY_WRITE_FAILURE_PROJECT
+        .lock()
+        .expect("advisory failure injection");
+    *injected = project_id.map(str::to_owned);
+    ADVISORY_WRITE_FAILURE_HIT.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Whether the advisory write should fail for this project (test only).
+#[cfg(test)]
+pub(super) fn checkpoint_advisory_write_is_injected(project_id: &str) -> bool {
+    let injected = ADVISORY_WRITE_FAILURE_PROJECT
+        .lock()
+        .expect("advisory failure injection")
+        .as_deref()
+        == Some(project_id);
+    if injected {
+        ADVISORY_WRITE_FAILURE_HIT.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    injected
+}
+
+/// Whether the injected advisory-write failure fired (test only).
+#[cfg(test)]
+pub(crate) fn checkpoint_advisory_write_injection_was_hit() -> bool {
+    ADVISORY_WRITE_FAILURE_HIT.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 mod discovery;
 use discovery::*;
 pub(crate) use discovery::{project_tool_discovery, response_contract, response_contract_index};

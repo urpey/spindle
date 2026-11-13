@@ -37,8 +37,15 @@ fn closure<'a>(
     tools
 }
 
+/// Validate one unit's tool inventory against a profile.
+///
+/// `required` are the tools the unit needs **to load** in the checked profile
+/// and must all be available there. `declared` is the wider inventory its prose
+/// may name and mark (a reference inherits its owning core's declarations, so it
+/// can describe the core's tools without the profile granting them).
 fn check_unit(
     markdown: &str,
+    required: &BTreeSet<&str>,
     declared: &BTreeSet<&str>,
     registry: &BTreeSet<&str>,
     operators: &BTreeSet<&str>,
@@ -51,6 +58,8 @@ fn check_unit(
         if operators.contains(name) {
             return Err(format!("operator dependency: {name}"));
         }
+    }
+    for name in required {
         if !available.contains(name) {
             return Err(format!("unavailable tool: {name}"));
         }
@@ -82,6 +91,21 @@ fn check_unit(
         }
     }
     Ok(())
+}
+
+/// Tools contributed by a skill's `requires_skills` closure only.
+fn dependency_tools<'a>(
+    skill: &'a EmbeddedSkill,
+    skills: &'a [EmbeddedSkill],
+) -> BTreeSet<&'a str> {
+    let mut seen = BTreeSet::new();
+    let mut tools = BTreeSet::new();
+    for dependency in skill.manifest.requires_skills {
+        if let Some(parent) = skills.iter().find(|s| s.name == *dependency) {
+            tools.extend(closure(parent, skills, &mut seen));
+        }
+    }
+    tools
 }
 
 fn check_owned(
@@ -134,6 +158,7 @@ async fn skill_profile_alignment() {
         check_unit(
             reference.markdown,
             &BTreeSet::new(),
+            &BTreeSet::new(),
             &registry,
             &operators,
             &registry,
@@ -149,19 +174,47 @@ async fn skill_profile_alignment() {
     let (mut router, _tmp_guard) = router().await;
     for skill in skills {
         let tools = closure(skill, skills, &mut BTreeSet::new());
-        for (name, markdown, required, profiles) in std::iter::once((
-            skill.name,
-            skill.markdown,
-            tools.clone(),
-            skill.manifest.profiles,
-        ))
-        .chain(skill.manifest.references.iter().map(|r| {
-            let mut required = tools.clone();
-            required.extend(r.tools.iter().copied());
-            (r.name, r.markdown, required, r.profiles)
-        })) {
-            owned.extend(required.iter().copied());
-            for profile in profiles {
+        // The skill core itself: everything it needs must be available in every
+        // profile that declares it.
+        owned.extend(tools.iter().copied());
+        for profile in skill.manifest.profiles {
+            assert!(
+                *profile == "default" || crate::tools::validate_tool_profile(Some(profile)).is_ok(),
+                "unknown declared profile {profile}"
+            );
+            router.tool_profile = (*profile != "default").then(|| (*profile).to_owned());
+            let listed = router.list_tools();
+            let available: BTreeSet<_> = listed.iter().map(|t| t.name.as_ref()).collect();
+            check_unit(
+                skill.markdown,
+                &tools,
+                &tools,
+                &registry,
+                &operators,
+                &available,
+            )
+            .unwrap_or_else(|e| panic!("{} in {profile}: {e}", skill.name));
+            for tool in &tools {
+                assert!(
+                    router.has_tool(tool),
+                    "{}/{profile}: dispatch denied {tool}",
+                    skill.name
+                );
+            }
+        }
+
+        // A reference unit's prose may name its owning core's tools (inherited
+        // inventory), but only its own tools plus the core's dependency closure
+        // are required to load it. That is what lets a writer profile compose
+        // story-structure guidance without the core's planning tools.
+        let dependencies = dependency_tools(skill, skills);
+        for reference in skill.manifest.references {
+            let mut inventory = tools.clone();
+            inventory.extend(reference.tools.iter().copied());
+            let mut required = dependencies.clone();
+            required.extend(reference.tools.iter().copied());
+            owned.extend(inventory.iter().copied());
+            for profile in reference.profiles {
                 assert!(
                     *profile == "default"
                         || crate::tools::validate_tool_profile(Some(profile)).is_ok(),
@@ -170,12 +223,20 @@ async fn skill_profile_alignment() {
                 router.tool_profile = (*profile != "default").then(|| (*profile).to_owned());
                 let listed = router.list_tools();
                 let available: BTreeSet<_> = listed.iter().map(|t| t.name.as_ref()).collect();
-                check_unit(markdown, &required, &registry, &operators, &available)
-                    .unwrap_or_else(|e| panic!("{name} in {profile}: {e}"));
+                check_unit(
+                    reference.markdown,
+                    &required,
+                    &inventory,
+                    &registry,
+                    &operators,
+                    &available,
+                )
+                .unwrap_or_else(|e| panic!("{} in {profile}: {e}", reference.name));
                 for tool in &required {
                     assert!(
                         router.has_tool(tool),
-                        "{name}/{profile}: dispatch denied {tool}"
+                        "{}/{profile}: dispatch denied {tool}",
+                        reference.name
                     );
                 }
             }
@@ -246,7 +307,9 @@ fn alignment_negative_fixtures() {
         ),
     ] {
         assert_eq!(
-            check_unit(text, &declared, &registry, &operators, &available),
+            check_unit(
+                text, &declared, &declared, &registry, &operators, &available
+            ),
             Err(expected.to_owned())
         );
     }

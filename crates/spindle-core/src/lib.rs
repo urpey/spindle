@@ -4,6 +4,7 @@ pub mod canon;
 pub mod canonical_facts;
 pub mod character_design;
 pub mod charge;
+pub mod checkpoint_advisory;
 pub mod context_bundle;
 pub mod drafting;
 pub mod embeddings;

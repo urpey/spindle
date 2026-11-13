@@ -451,6 +451,7 @@ mod canon_mining;
 mod canon_policy;
 mod canon_ratification;
 mod character_design;
+mod checkpoint_advisory;
 mod consistency;
 mod context;
 mod drafting;

@@ -473,13 +473,23 @@
         "tools": [
           "annotate_scene_beats",
           "check_consistency",
+          "commit_character_state",
+          "commit_scene_changes",
+          "create_future_knowledge",
           "get_character_snapshot",
           "get_entity",
           "list_chapter_scenes",
           "plan_chapter",
-          "set_scene_clock"
+          "record_knowledge",
+          "save_summary",
+          "set_scene_clock",
+          "update_entity",
+          "update_promise_status",
+          "update_relationship",
+          "update_world_rule",
+          "update_writer_position"
         ],
-        "trigger": "Load when structuring complex scene/sequel turns, calibrating MRU and voice craft, or diagnosing failure modes."
+        "trigger": "Load for paragraph-level rendering craft (MRU causality, scene/sequel rhythm as prose pacing, voice, POV, failure modes, the beat-label vocabulary, the named targeted-repair tools and the anti-slop self-review) while rendering an already-planned McKee Beat; structure stays in the story-structure references."
       },
       {
         "name": "scene-writer/drafting-packets",
@@ -634,7 +644,9 @@
         "name": "story-structure/story-spine",
         "profiles": [
           "default",
-          "mckee"
+          "mckee",
+          "new-book",
+          "planning"
         ],
         "tools": [],
         "trigger": "Load when writing, reviewing, or questioning a Story Spine (series or book sub-spine), its ending type, or its Central Question / Controlling Idea / Counter-Idea / Spine Axis."
@@ -643,7 +655,9 @@
         "name": "story-structure/character-design",
         "profiles": [
           "default",
-          "mckee"
+          "mckee",
+          "new-book",
+          "worldbuilding"
         ],
         "tools": [],
         "trigger": "Load when designing or repairing a character's Character Design (contradictions, the four layers of self, conscious and unconscious desire, pressure on the protagonist, behaviour cues) or when deciding whether an arc milestone is a change or a reveal."
@@ -652,7 +666,11 @@
         "name": "story-structure/value-turns",
         "profiles": [
           "default",
-          "mckee"
+          "mckee",
+          "new-book",
+          "planning",
+          "workflow-authoring",
+          "workflow-write"
         ],
         "tools": [],
         "trigger": "Load when judging or repairing a Value Turn, a Charge, a Gap, a broken value chain, or whether a Scene, Sequence or Act actually turns the Spine Axis, including Act climax Charges, depth progression and the reserved Act climax placeholder."
@@ -661,7 +679,11 @@
         "name": "story-structure/scene-design",
         "profiles": [
           "default",
-          "mckee"
+          "mckee",
+          "new-book",
+          "planning",
+          "workflow-authoring",
+          "workflow-write"
         ],
         "tools": [],
         "trigger": "Load when designing or repairing a planned Scene: its Value Axis pressure, opposition, Scene Question, Gap, Turning Beat, Inaction Cost and structured Beats."
@@ -670,7 +692,11 @@
         "name": "story-structure/dialogue-tactics",
         "profiles": [
           "default",
-          "mckee"
+          "mckee",
+          "new-book",
+          "planning",
+          "workflow-authoring",
+          "workflow-write"
         ],
         "tools": [],
         "trigger": "Load when designing or repairing dialogue as action: tactic, said versus wanted (subtext), Beats inside dialogue, the Turning Beat's line, and Swain labels as optional labels only."
@@ -679,7 +705,10 @@
         "name": "story-structure/dialogue-line",
         "profiles": [
           "default",
-          "mckee"
+          "mckee",
+          "new-book",
+          "workflow-authoring",
+          "workflow-write"
         ],
         "tools": [],
         "trigger": "Load when the dialogue tactics are already decided and the line itself needs work: subtext, exposition used as ammunition rather than explanation, over-obvious foreshadowing, and line-level compression."
