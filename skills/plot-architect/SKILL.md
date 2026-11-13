@@ -28,6 +28,17 @@ Design narrative structure that builds tension, maintains momentum, and delivers
 
 After each episode, compare intent with accepted prose. On a McKee-structured project the system writes a promise's status from the saving Scene's confirmed `realized_report` events, with the Scene recorded as `source_scene_id`; do not call `update_promise_status` there. On other projects call `update_promise_status` (`source_scene_id` or `at` placement; use `replaces_event_id` to correct an erroneous event) only for threads that genuinely moved.
 
+## McKee 專案：先定結構，再談安排
+
+透過 `new-book` 建立的專案是 McKee 結構：Value Axis、Charge、Value Turn 與 Beat／Scene／Sequence／Act 層級都要在寫散文之前決定。在這種專案上，依目前步驟載入對應的 `story-structure` 參考，不要憑印象自創結構：
+
+- 審查或修復 Story Spine：`get_reference(name="story-structure/story-spine")`。
+- Act list、Sequences、plot lines、Convergence Points 與 value chain：`get_reference(name="story-structure/value-turns")`。Act 與 Sequence 是輪廓意圖，不是 canon（ADR 0006）。
+- 場景與 beat 規劃：`get_reference(name="story-structure/scene-design")`；對白戰術：`get_reference(name="story-structure/dialogue-tactics")`。
+- 不要把 Swain 的 goal／conflict／disaster 當成規劃單位；它最多是結構化 Beat 上的可選 `swain_label`（ADR 0007）。
+
+非 McKee 專案不套用這些閘門，維持原本的 plan 形狀。
+
 ## Building the Plot Architecture
 
 ### 1. Central Conflict and Try-Fail Cycles (`create_conflict`)
@@ -53,7 +64,7 @@ Every chapter should change the reader's understanding of the story. Specify cha
 
 ## Initial Planning Rollout Boundary
 
-Staged planning artifacts and bounded `plan`/`outline` route proposals (ADR 0004, Phases A–C) represent intent, not applied canon or a draftable-plan verdict; new-book planning entry tools are not shipped yet. Route generation stages `PlanningArtifactV1` proposals with versioned prompt/schema hashes, pre-dispatch token/cost ceilings, at most one `planning_repair_v1` attempt, and host-fallback requests when routes are missing or rejected. All initial gates default to human; only an explicit author delegation permits automated chapter/scene acceptance after approved roots, and in-run plan amendments always require human ratification.
+Staged planning artifacts and bounded `plan`/`outline` route proposals (ADR 0004, Phases A–C) represent intent, not applied canon or a draftable-plan verdict. The `new-book` skill owns the planning session (begin / advance / status / decide); this skill covers the plot-architecture work inside and around that flow. Route generation stages `PlanningArtifactV1` proposals with versioned prompt/schema hashes, pre-dispatch token/cost ceilings, at most one `planning_repair_v1` attempt, and host-fallback requests when routes are missing or rejected. All initial gates default to human; only an explicit author delegation permits automated chapter/scene acceptance after approved roots, and in-run plan amendments always require human ratification.
 
 <!-- tool: annotate_scene_beats -->
 <!-- tool: authoring_prepare_run -->
@@ -76,6 +87,7 @@ Staged planning artifacts and bounded `plan`/`outline` route proposals (ADR 0004
 <!-- tool: get_chapter_briefing -->
 <!-- tool: get_editorial_queue -->
 <!-- tool: get_series_status -->
+<!-- tool: get_reference -->
 <!-- tool: get_writer_state -->
 <!-- tool: list_book_chapters -->
 <!-- tool: list_chapter_scenes -->

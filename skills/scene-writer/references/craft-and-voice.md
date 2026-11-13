@@ -1,20 +1,19 @@
-# Scene Structure, Voice Craft, and Failure Modes
+# Rendering Craft, Voice, and Failure Modes
 
-Load this reference when structuring complex scene/sequel turns, calibrating line-level MRU and dialogue craft, or diagnosing narrative failure modes.
+Load this reference for **paragraph-level craft while rendering an already-planned Scene**: MRU causality, scene/sequel rhythm as prose pacing, voice and POV discipline, and failure modes. It never decides story structure.
 
-## 1. Swain's Scene / Sequel Framework
+## 0. Structure Is Decided Before This Reference
 
-Use Scene and Sequel patterns in service of the project's genre and reader contract. Blend, compress, or adapt them as the book requires; never force a formulaic disaster when the contract calls for a different turn.
+Under ADR 0007 McKee owns structure: the planned Scene's Value Axis, opening and closing Charge, Gap, Turning Beat and structured Beats (`kind`: `action` / `reaction` / `turn`) are fixed by the plan. Scene and Sequel, and motivation-reaction units, are **paragraph-level rendering habits for a planned Beat** — never planning units, never a second structural framework. If no plan exists or the plan does not turn, load `story-structure/scene-design` (or `story-structure/value-turns`) instead of inventing structure here. The plan's `turning_beat` is the only structural turn; Swain categories survive only as an optional `swain_label` on a planned Beat.
 
-- **SCENE (Action: Goal -> Conflict -> Disaster)**
-  - **Goal**: Concrete, immediate want established early so the reader can measure progress.
-  - **Conflict**: Escalating opposition that tests commitment through try-fail cycles.
-  - **Disaster / Turn**: Ends on **No**, **No, and furthermore** (escalation), **Yes, but** (costly win), or **Yes** (clean win, reserved for earned milestones).
-- **SEQUEL (Reaction: Reaction -> Dilemma -> Decision)**
-  - **Reaction**: Emotional/physical response to the turn, rendered at the book's narrative distance.
-  - **Dilemma**: Hard choice among costly options that reveals character through action.
-  - **Decision**: Commitment that becomes the next scene's goal.
-- **Pacing proportion**: Short/absent sequels speed pacing; extended sequels deepen aftermath. Record beats (`goal`, `conflict`, `disaster`, `reaction`, `dilemma`, `decision`, `revelation`, `reversal`, `escalation`, `calm`, `transition`) with `plan_chapter` or `annotate_scene_beats`.
+## 1. Scene/Sequel Rhythm as Paragraph Craft
+
+Render the planned Beats in the order the plan gives them. Scene/sequel names may describe how a paragraph sequence feels, but they add no units:
+
+- **Rendered scene pressure**: a planned `action` Beat can open on a concrete, immediate want and escalating resistance. The reader should be able to measure progress inside the paragraph, not learn the want from a later summary.
+- **Rendered aftermath**: a planned `reaction` Beat can hold feeling, a costly choice between options, and the commitment that carries into the next Beat. This is where a `reaction` Beat earns its space.
+- **End on the planned turn**: close the sequence on the turn the plan places at `turning_beat`. Do not add a second disaster so the prose feels busier; if the plan's turn is weak, that is a planning repair, not a prose invention.
+- **Pacing proportion**: compress aftermath to speed pacing and extend it to deepen a turn's cost. The book's genre and reader contract decide which; a thriller compresses, a quiet chapter may dwell.
 
 ## 2. Causality, Voice, and POV Discipline
 
@@ -30,7 +29,7 @@ Use Scene and Sequel patterns in service of the project's genre and reader contr
 - **Talking Heads**: Pages of ungrounded back-and-forth speech. *Fix*: Give speakers a physical task that can go wrong or reveal subtext.
 - **Info Dump**: Narrator lecturing on lore or backstory. *Fix*: Surface facts only through active conflict, discovery, or immediate stakes.
 - **Passive Protagonist**: Events happen *to* the lead (`scenes_since_active_choice >= 3`). *Fix*: Force a costly, plot-driving choice in this scene.
-- **Emotional Whiplash**: Instant mood flips from grief to banter. *Fix*: Earn transitions through sequel beats.
+- **Emotional Whiplash**: Instant mood flips from grief to banter. *Fix*: Earn transitions through the planned `reaction` Beat, not a bolt-on sequel.
 - **Homogeneous Voices**: Interchangeable dialogue across cast members. *Fix*: Re-read each character's voice profile and prior lines; strip dialogue tags to test whether each speaker remains identifiable.
 - **Stakes Deflation**: Stated threats fail to bite. *Fix*: Enforce `world_rules` and deliver real costs when a plan goes wrong.
 

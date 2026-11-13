@@ -479,7 +479,7 @@
           "plan_chapter",
           "set_scene_clock"
         ],
-        "trigger": "Load when structuring complex scene/sequel turns, calibrating MRU and voice craft, or diagnosing failure modes."
+        "trigger": "Load for paragraph-level rendering craft (MRU causality, scene/sequel rhythm as prose pacing, voice, POV, failure modes) while rendering an already-planned McKee Beat; structure stays in the story-structure references."
       },
       {
         "name": "scene-writer/drafting-packets",

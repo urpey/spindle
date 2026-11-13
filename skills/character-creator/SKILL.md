@@ -20,6 +20,12 @@ Build characters that are psychologically grounded, narratively purposeful, voca
 6. Call `create_relationship` and `update_relationship` to model directed trust/tension edges, and `create_character_arc` (linked to `create_theme` IDs) to track transformation milestones. Revise the character with `update_character` and the arc with `update_character_arc`; reserve `update_entity` for fields without a typed update.
 7. Call `register_canonical_fact` for durable decision/physical/boundary facts, `get_character_snapshot` to verify the assembled profile, and `check_consistency` (`subjects: [character_id]`) to catch `voice_drift` or `canonical_fact_prose_drift`.
 
+## Character Design（McKee 專案）
+
+在 McKee 結構專案（透過 `new-book` 建立）上，Cast & World 規劃層會為每個主要角色建立一份 **Character Design**：2–5 個會互相拉扯的矛盾、四層自我（public／personal／private／hidden）、自覺與不自覺慾望、對主角的壓力，以及可演出的行為線索。它與 voice profile、emotional profile 是不同紀錄：profile 決定頁面上的聲音，Character Design 決定故事裡的深度。
+
+建立或修復 Character Design 之前，載入 `get_reference(name="story-structure/character-design")`；arc milestone 要標明是 `change` 還是 `reveal`。撰寫時只讀得到去識別後的切片（被測試的矛盾、自覺慾望、行為線索）；不要把隱藏層或不自覺慾望抄進面向散文的欄位，那些是作者層祕密。
+
 ## Step 1: Inner Psychological Architecture
 
 Before persisting fields, define the character's six-part inner engine:
@@ -72,6 +78,7 @@ Call `get_character_snapshot` and verify: `example_lines` and `forbidden_words` 
 <!-- tool: create_theme -->
 <!-- tool: find_entity -->
 <!-- tool: get_character_snapshot -->
+<!-- tool: get_reference -->
 <!-- tool: get_entity -->
 <!-- tool: get_scene_context -->
 <!-- tool: register_canonical_fact -->

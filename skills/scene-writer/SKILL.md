@@ -14,18 +14,18 @@ Deliver on **this project's declared genre and reader contract** (`promise`, `st
 
 Honor the author's creative direction and style contract. Surface concrete canon or boundary conflicts; otherwise execute routine drafting, saving, and local fixes without asking permission.
 
-Before continuing an existing manuscript, locate the preceding scene with `list_chapter_scenes` and read a passage of its actual prose with `get_entity`, alongside supplied `voice_samples` and character voice profiles. Summaries preserve events; prose preserves cadence. Match diction, narrative distance, humor, interiority, and dialogue without copying sample phrases.
+Before continuing an existing manuscript, locate the preceding scene with `list_chapter_scenes` and read a passage of its actual prose with `get_entity`, alongside supplied `voice_samples` and character voice profiles. Summaries preserve events; prose preserves cadence. Match diction, narrative distance, humor, interiority and dialogue without copying phrases.
 
-Save only manuscript prose in the draft text (no assistant prefaces, beat outlines, critique, or closing notes). Use headings or system blocks only when they belong to the book's format. A writing task is complete only when prose and required state updates are saved and verified by tool results.
+Save only manuscript prose (no prefaces, beat outlines, critique or closing notes); use headings only when the book's format has them. A writing task is complete only when prose and required state updates are saved and verified by tool results.
 
 ## Step 1: Prepare Context
 
 1. Call `set_active_project` once per session to set the active project and branch.
-2. Call `prepare_scene` (`intent`: `"draft"`, `"revise"`, or `"continue"`, plus optional `scene_id`, `chapter_id`, `book_number`, `chapter_number`, `scene_order`, `character_ids`, `location_id`, `budget_tokens`) to assemble a bounded scene preparation packet in a single read (`writer_cursor`, `scene_purpose`, `hard_constraints`, `reader_contract`, `style_directive`, `compact_shelf_digest`, `voice_samples`, `scene_negatives`, `novel` and `scene` context, `existing_prose`, `drafting_packet_v1`, `coverage`, and freshness `dependency_tokens`).
-3. Use `get_writer_state`, `get_chapter_briefing`, `get_scene_context`, `get_character_snapshot`, `find_scenes_referencing`, `list_chapter_scenes`, or `list_book_chapters` when inspecting individual slices outside `prepare_scene`.
+2. Call `prepare_scene` (`intent` `"draft"` / `"revise"` / `"continue"`, plus optional `scene_id`, `chapter_id`, `book_number`, `chapter_number`, `scene_order`, `character_ids`, `location_id`, `budget_tokens`) to assemble the bounded packet in one read: cursor, scene purpose, hard constraints, contract, style directive, voice samples, context, `existing_prose`, `drafting_packet_v1` and freshness tokens.
+3. Use the individual read tools when inspecting slices outside `prepare_scene`.
 4. Before offloading to a server-side route, check `bible://config/routing` (`caller_should_send_brief`, `adapter_kind`) and load `get_reference(name="scene-writer/offloaded-generation")`.
 
-**McKee 結構專案：** `drafting_packet_v1` 即完整寫作簡報；只讓看到該 packet 的子代理動筆，其餘場景計畫、隱藏層與回收位置不得進入上下文。細節見 `get_reference(name="scene-writer/drafting-packets")`。
+**McKee 結構專案：** `drafting_packet_v1` 即完整寫作簡報；只讓看到該 packet 的子代理動筆，其餘場景計畫、隱藏層與回收位置不得進入上下文。細節見 `scene-writer/drafting-packets`。
 
 ## Step 2: Enforce Canon, Voice, and Constraints
 
@@ -34,9 +34,11 @@ Save only manuscript prose in the draft text (no assistant prefaces, beat outlin
 - **World Rules & Promises (`novel.world_rules`, `novel.narrative_promises_due`, `novel.semantic_references`)**: Never violate world rules or invent unseeded capabilities; pay off due promises when earned.
 - **Knowledge & `[SECRETS IN PLAY]` (`novel.knowledge_briefing`)**: Characters act only on what they know at this cursor. Under `[SECRETS IN PLAY]`, characters in `Present and NOT in the know` must never reference, imply, or react to the secret; under a POV-only secret, narration may hold private awareness while dialogue and outward behavior stay sealed. For an on-page reveal, set `secret_of_fact_id` on `record_knowledge` with `learned_at` so the circle expands forward without leaking backward.
 
-## Step 3: Plan Beats and Draft Prose
+## Step 3: Render the Planned Beats and Draft Prose
 
-Define the scene's purpose, what changes by the end, and the POV character's concrete goal. Outline beats (`goal`, `conflict`, `disaster`, `reaction`, `dilemma`, `decision`, `revelation`, `reversal`, `escalation`, `calm`, `transition`) with `plan_chapter` or `annotate_scene_beats`.
+On a McKee-structured project the plan already decides structure: the current Scene's Value Axis, opening and closing Charge, opposition, Gap, Turning Beat and structured Beats come from `drafting_packet_v1`. Render that plan; do not re-plan it. Load only the `story-structure` reference for the step in front of you: `get_reference(name="story-structure/scene-design")` when the Scene's pressure, opposition, Gap or Turning Beat is missing or weak; `get_reference(name="story-structure/dialogue-tactics")` when dialogue must be designed as action; `get_reference(name="story-structure/dialogue-line")` once the tactics are settled and the line itself needs work; `get_reference(name="story-structure/value-turns")` when the plan does not turn. Swain categories are optional `swain_label`s on a planned Beat, never a structure; `scene-writer/craft-and-voice` is paragraph-level rendering craft (MRU, voice, failure modes).
+
+On other projects, define the purpose and end-state change, and outline beats with `plan_chapter` or `annotate_scene_beats`.
 
 Write with clear stimulus-response causality, concrete character-specific details, distinct dialogue voices, and strict POV filtering. Ground every in-scene time jump in place, body, and mundane action (`[IN-WORLD TIME]`).
 
@@ -49,32 +51,29 @@ Choose `general`, `teen`, `mature`, or `explicit` deliberately and verify bounda
 
 ## Step 5: Self-Review and Preflight
 
-Preflight with `commit_scene` (`dry_run: true`) using the payload you intend to commit, and inspect `issues`, `warnings`, `blocking_count`, and `coverage`; a blocking finding writes nothing. Review the prose against the checks below, then revise. `save_scene_draft` remains save-only compatibility: it applies no continuity, beats, summary, or cursor.
+Preflight with `commit_scene` (`dry_run: true`) using the payload you intend to commit and inspect `issues`, `warnings`, `blocking_count`, `coverage`; a blocking finding writes nothing. Revise against the checks below. `save_scene_draft` stays save-only: no continuity, beats, summary or cursor.
 
 1. **Findings**: Check world-rule, canonical-fact, retcon-reachability, style-contract, and advisory temporal findings from the preflight.
 2. **Step 5a — Genre & Style Gate**: Verify tone match, `narrator_voice` delivery, genre payload density, active co-leads, `chapter_ending_style`, and cadence. Rewrite and re-save if any check fails.
 3. **Step 5b — Fiction Anti-Slop & Craft Gate**: Check `anti_slop` against `compact_shelf_digest`, `voice_samples`, and `scene_negatives` (full 12-shelf catalog at `bible://references/anti-slop`):
    - **Hard shelves**: `contrast_not_x_but_y` (<=1/chapter), `emotion_cocktail` (0), `fishing_ending` (0).
-   - **Soft shelves**: advisory against the digest; the full 12-shelf catalog and per-shelf limits are at `bible://references/anti-slop`.
+   - **Soft shelves**: advisory against the digest; per-shelf limits are in the catalog.
    - When a shelf hits, rewrite from the scene beat in 1–2 passes (never synonym-swap) and re-save.
-4. **Consistency & Review**: Run `check_consistency` (`canonical_fact_prose_drift`, `world_rule_semantic_drift`, `voice_drift`, `retcon_reachability`, `style_compliance`, `temporal_coherence`, `chronology`, `knowledge_timing`; with `deep_check: true`, inspect `audit_coverage` and `next_offset`). Use `run_dual_persona_review` for Craft Technician, Literary Critic, and Target Reader evaluation.
+4. **Consistency & Review**: Run `check_consistency` with the prose, voice, style, canon, temporal and knowledge checks; with `deep_check: true` inspect `audit_coverage` / `next_offset`. Use `run_dual_persona_review` for Craft Technician, Literary Critic and Target Reader.
 
 ## Step 6: Commit the Scene Atomically
 
-Call `commit_scene` once with `full_text`, `summary`, `content_rating`, `authorship`, the preparation token and `expected_scene_version`, the typed `continuity` package, `beat_annotations`, an optional chapter-final `chapter_summary`, and a client `idempotency_key`. It applies prose, approved continuity, beats, summary, and cursor in one write. On a McKee project include `realized_report` (value turns, character effects, promise events, reported Key Facts); scene verify adds the four deterministic `realized_value_turn`, `realized_key_fact`, `realized_promise_event` and `character_effect` checks.
+Call `commit_scene` once with `full_text`, `summary`, `content_rating`, `authorship`, the preparation token and `expected_scene_version`, the typed `continuity` package, `beat_annotations`, an optional chapter-final `chapter_summary`, and a client `idempotency_key`; it applies prose, approved continuity, beats, summary and cursor atomically. On a McKee project include `realized_report` (value turns, character effects, promise events, reported Key Facts); scene verify adds the four deterministic `realized_value_turn`, `realized_key_fact`, `realized_promise_event` and `character_effect` checks.
 
-1. **Inspect the receipt**: Check `issues`, `warnings`, `blocking_count`, `coverage`, `applied`, `beat_count`, `chapter_summary_saved`, `writer_cursor`, `follow_ups`, and `undo_support`. Retry only with the same key and payload; a different payload fails.
-2. **Targeted repair**: Outside the ordinary loop, `set_scene_clock`, `commit_character_state`, `update_relationship`, `record_knowledge` (or `create_future_knowledge`), `update_promise_status`, `update_entity`, `update_world_rule`, `annotate_scene_beats`, `commit_scene_changes`, `save_summary`, and `update_writer_position` remain available.
+1. **Inspect the receipt**: `issues`, `warnings`, `blocking_count`, `coverage`, `applied`, `beat_count`, `chapter_summary_saved`, `writer_cursor`, `follow_ups`, `undo_support`. Retry only with the same key and payload.
+2. **Targeted repair**: Outside the loop, the manifest's repair tools remain available (clock, state, relationship, knowledge, promise, entity, world rule, beats, summary, cursor).
 3. **Author decisions only**: Mined canon proposals never auto-ratify; use the ratification workflow in `scene-writer/authoring-runs`. After a timeout or reconnect, inspect `get_writer_state` before retrying.
 
 ## On-Demand References (Load Only When Triggered)
 
-Never read every reference before drafting; call `get_reference` only when needed. Each
-manifest trigger names when to load it:
+Call `get_reference` only when a trigger fires; never load every reference first:
 
-- `scene-writer/offloaded-generation`, `scene-writer/craft-and-voice`,
-  `scene-writer/research-and-sources`, `scene-writer/authoring-runs`,
-  `scene-writer/drafting-packets` (McKee packet brief), `anti-slop`.
+- `scene-writer/offloaded-generation`, `scene-writer/craft-and-voice`, `scene-writer/research-and-sources`, `scene-writer/authoring-runs`, `scene-writer/drafting-packets`, `anti-slop`.
 
 <!-- tool: annotate_scene_beats -->
 <!-- tool: check_consistency -->

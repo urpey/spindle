@@ -268,3 +268,82 @@ async fn get_skill_and_get_reference_enforce_profile_coverage_without_mutating_p
     assert_eq!(router.tool_profile.as_deref(), Some("minimal"));
     assert!(!router.has_tool("create_book"));
 }
+
+/// Issue #35: every entry skill names the `story-structure` reference for its
+/// step, and that reference is loadable through the same tool/resource surface.
+#[tokio::test(flavor = "current_thread")]
+async fn entry_skills_wire_the_story_structure_reference_for_their_step() {
+    let (router, _tmp_guard) = router().await;
+    let resources = crate::resources::ResourceRouter::new(router.service().clone());
+
+    for (skill_name, reference) in [
+        ("new-book", "story-structure/story-spine"),
+        ("plot-architect", "story-structure/value-turns"),
+        ("character-creator", "story-structure/character-design"),
+        ("scene-writer", "story-structure/scene-design"),
+    ] {
+        let skill = spindle_adapters::get_skill(skill_name).expect("entry skill");
+        let pointer = format!("get_reference(name=\"{reference}\")");
+        assert!(
+            skill.markdown.contains(&pointer),
+            "{skill_name} must point at {reference} with {pointer}"
+        );
+
+        // The pointer resolves: the reference loads through the tool and as a
+        // resource. Loading only grants guidance, never new capabilities.
+        let result = structured_json(
+            router
+                .call_tool(
+                    "get_reference",
+                    serde_json::json!({ "name": reference }).as_object(),
+                )
+                .await
+                .unwrap(),
+        );
+        assert_eq!(result["name"], reference);
+        assert!(
+            result["markdown"]
+                .as_str()
+                .is_some_and(|text| text.len() > 500)
+        );
+
+        let resource = resources
+            .read_resource(&format!("bible://references/{reference}"))
+            .await
+            .unwrap();
+        let rmcp::model::ResourceContents::TextResourceContents { text, .. } =
+            &resource.contents[0]
+        else {
+            panic!("expected Markdown text");
+        };
+        assert_eq!(text, result["markdown"].as_str().unwrap());
+    }
+}
+
+/// ADR 0007: the Swain / MRU reference is paragraph-level rendering craft for a
+/// planned McKee Beat, never a competing structural framework.
+#[tokio::test(flavor = "current_thread")]
+async fn the_swain_reference_is_paragraph_craft_not_a_structure() {
+    let reference = spindle_adapters::get_reference("scene-writer/craft-and-voice")
+        .expect("craft-and-voice reference");
+    let text = reference.markdown;
+    assert!(
+        text.contains("paragraph-level") && text.contains("McKee"),
+        "the reference must frame itself as paragraph-level craft under McKee"
+    );
+    for structural_promise in [
+        "## 1. Swain's Scene / Sequel Framework",
+        "SCENE (Action: Goal -> Conflict -> Disaster)",
+        "SEQUEL (Reaction: Reaction -> Dilemma -> Decision)",
+        "Outline beats",
+    ] {
+        assert!(
+            !text.contains(structural_promise),
+            "the reference must not present Swain as a structure: found {structural_promise:?}"
+        );
+    }
+    assert!(
+        text.contains("`turning_beat`") && text.contains("`swain_label`"),
+        "the reference must point structure at the plan and keep Swain as an optional label"
+    );
+}
