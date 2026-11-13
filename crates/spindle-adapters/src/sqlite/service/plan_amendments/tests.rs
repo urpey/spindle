@@ -1813,7 +1813,11 @@ mod plan_ratify {
             message.contains("Restage the Chapter planning artifact"),
             "{message}"
         );
-        assert!(message.contains("#34"), "{message}");
+        assert!(
+            message
+                .contains("Adding Sequence membership through a plan amendment is not supported"),
+            "{message}"
+        );
 
         // Zero writes: the plan is unchanged and the amendment stays staged.
         let after = plan_of(&svc, &project.project_id, 2).await;
@@ -2084,5 +2088,677 @@ mod plan_ratify {
             3,
             "existing value fields stay byte-identical across the amendment"
         );
+    }
+
+    // ── McKee amendment cascade over unwritten Scenes (issue #34) ────────────────
+    mod cascade {
+        use super::*;
+        use spindle_core::charge::{ChargeDepth, ChargeSign};
+        use spindle_core::models::{
+            CreateNarrativePromiseInput, RegisterCanonicalFactInput, StoryPlacement,
+        };
+
+        /// A three-chapter McKee plan whose value chain is valid. Chapter 3 is
+        /// drafted (one saved scene); chapters 1–2 are accepted but undrafted.
+        async fn cascade_fixture(
+            svc: &SqliteSpindleService,
+            name: &str,
+            drafted_chapter: Option<i32>,
+        ) -> CreateProjectOutput {
+            let project = svc
+                .create_mckee_project(CreateProjectInput {
+                    name: name.to_string(),
+                    project_type: "novel".to_string(),
+                    genre: "fantasy".to_string(),
+                    reader_contract: ReaderContract {
+                        promise: "McKee cascade".to_string(),
+                        style_notes: Vec::new(),
+                        boundaries: Vec::new(),
+                    },
+                })
+                .await
+                .unwrap();
+            let chapters: [(i32, Vec<PlanChapterSceneInput>); 3] = [
+                (
+                    1,
+                    vec![
+                        value_scene(
+                            1,
+                            "c1s1",
+                            value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                            value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                        ),
+                        value_scene(
+                            2,
+                            "c1s2",
+                            value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                            value_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                        ),
+                        value_scene(
+                            3,
+                            "c1s3",
+                            value_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                            value_charge(ChargeSign::Negative, ChargeDepth::NegationOfTheNegation),
+                        ),
+                    ],
+                ),
+                (
+                    2,
+                    vec![
+                        value_scene(
+                            1,
+                            "c2s1",
+                            value_charge(ChargeSign::Negative, ChargeDepth::NegationOfTheNegation),
+                            value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                        ),
+                        value_scene(
+                            2,
+                            "c2s2",
+                            value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                            value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                        ),
+                    ],
+                ),
+                (
+                    3,
+                    vec![
+                        value_scene(
+                            1,
+                            "c3s1",
+                            value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                            value_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                        ),
+                        value_scene(
+                            2,
+                            "c3s2",
+                            value_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                            value_charge(ChargeSign::Negative, ChargeDepth::NegationOfTheNegation),
+                        ),
+                    ],
+                ),
+            ];
+            for (chapter_number, scenes) in chapters {
+                svc.plan_chapter(PlanChapterInput {
+                    project_id: project.project_id.clone(),
+                    book_number: 1,
+                    chapter_number,
+                    pov_character_id: None,
+                    synopsis: format!("chapter {chapter_number}"),
+                    target_theme_ids: Vec::new(),
+                    target_conflict_ids: Vec::new(),
+                    target_plot_line_ids: Vec::new(),
+                    scenes,
+                })
+                .await
+                .unwrap();
+            }
+            if let Some(chapter_number) = drafted_chapter {
+                svc.save_scene_draft(SaveSceneDraftInput {
+                    project_id: project.project_id.clone(),
+                    book_number: 1,
+                    chapter_number,
+                    chapter_id: None,
+                    scene_order: 1,
+                    full_text: "Drafted prose that must never move.".to_string(),
+                    summary: "the drafted scene".to_string(),
+                    content_rating: spindle_core::models::ContentRating::General,
+                    tone: None,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            }
+            project
+        }
+
+        /// A `scene_replace` that rewrites one Scene's primary axis (and repeats the
+        /// class's required keys), used both as a trigger and as an operator edit.
+        fn axis_repair(
+            scene_order: i32,
+            summary: &str,
+            opening: spindle_core::charge::Charge,
+            closing: spindle_core::charge::Charge,
+        ) -> serde_json::Value {
+            serde_json::json!({
+                "scene_order": scene_order,
+                "summary": summary,
+                "purpose": format!("purpose {scene_order}"),
+                "character_ids": ["character:alice"],
+                "primary_value_axis": {
+                    "axis": "truth",
+                    "opening": {"sign": opening.sign(), "depth": opening.depth()},
+                    "closing": {"sign": closing.sign(), "depth": closing.depth()},
+                }
+            })
+        }
+
+        async fn stale_list(
+            svc: &SqliteSpindleService,
+            project_id: &str,
+        ) -> spindle_core::models::ListPlanAmendmentsOutput {
+            svc.list_plan_amendments(ListPlanAmendmentsInput {
+                project_id: project_id.to_string(),
+                status: None,
+                book_number: None,
+                source_chapter: None,
+            })
+            .await
+            .unwrap()
+        }
+
+        async fn staged_amendments(
+            svc: &SqliteSpindleService,
+            project_id: &str,
+        ) -> Vec<spindle_core::models::PlanAmendment> {
+            svc.list_plan_amendments(ListPlanAmendmentsInput {
+                project_id: project_id.to_string(),
+                status: Some("staged".to_string()),
+                book_number: None,
+                source_chapter: None,
+            })
+            .await
+            .unwrap()
+            .amendments
+        }
+
+        fn charge_json(charge: spindle_core::charge::Charge) -> serde_json::Value {
+            serde_json::json!({"sign": charge.sign(), "depth": charge.depth()})
+        }
+
+        #[tokio::test]
+        async fn cascade_marks_later_undrafted_scene_stale_and_stages_reconciliation() {
+            let (_tmp, svc) = fresh_service_local().await;
+            let project = cascade_fixture(&svc, "Cascade trigger", Some(3)).await;
+            let id = stage(
+                &svc,
+                &project.project_id,
+                "scene_replace",
+                Some(1),
+                // c1s3 now closes at Negative/Contrary instead of
+                // Negative/NegationOfTheNegation: c2s1 no longer continues the axis.
+                axis_repair(
+                    3,
+                    "c1s3",
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                ),
+            )
+            .await;
+
+            let out = apply_one(&svc, &project.project_id, &id).await;
+            assert_eq!(out.results[0].outcome, "applied", "{out:?}");
+            let outcome = out.results[0]
+                .cascade
+                .as_ref()
+                .expect("a closing-Charge change must run the cascade");
+            assert!(
+                outcome.triggers.contains(&"closing_charge".to_string()),
+                "{outcome:?}"
+            );
+
+            let list = stale_list(&svc, &project.project_id).await;
+            assert_eq!(list.stale_scenes.len(), 1, "{list:?}");
+            let stale = &list.stale_scenes[0];
+            assert_eq!(
+                (
+                    stale.book_number,
+                    stale.chapter_number,
+                    stale.scene_order,
+                    stale.status.as_str()
+                ),
+                (1, 2, 1, "stale")
+            );
+            assert!(
+                stale
+                    .finding_codes
+                    .contains(&"value_chain_broken".to_string()),
+                "{stale:?}"
+            );
+            assert_eq!(
+                stale.triggering_amendment_id, id,
+                "the mark names the triggering amendment"
+            );
+            let reconciliation_id = stale
+                .reconciliation_amendment_id
+                .clone()
+                .expect("a chain break has a mechanical repair");
+            assert_eq!(
+                out.staged_reconciliation_ids,
+                vec![reconciliation_id.clone()],
+                "{out:?}"
+            );
+
+            let staged = staged_amendments(&svc, &project.project_id).await;
+            let reconciliation = staged
+                .iter()
+                .find(|amendment| amendment.id == reconciliation_id)
+                .expect("the reconciliation is staged through the normal queue");
+            assert_eq!(reconciliation.amendment_class, "scene_replace");
+            assert_eq!(reconciliation.target_chapter, Some(2));
+            assert_eq!(reconciliation.payload["scene_order"], 1);
+            assert_eq!(
+                reconciliation.payload["primary_value_axis"]["opening"],
+                charge_json(value_charge(ChargeSign::Negative, ChargeDepth::Contrary)),
+                "the repair follows the amended previous closing Charge"
+            );
+            assert_eq!(staged.len(), 1, "nothing else is staged: {staged:?}");
+        }
+
+        #[tokio::test]
+        async fn cascade_reconciliation_accept_clears_the_mark_and_repairs_the_chain() {
+            let (_tmp, svc) = fresh_service_local().await;
+            let project = cascade_fixture(&svc, "Cascade repair", Some(3)).await;
+            let trigger = stage(
+                &svc,
+                &project.project_id,
+                "scene_replace",
+                Some(1),
+                axis_repair(
+                    3,
+                    "c1s3",
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                ),
+            )
+            .await;
+            apply_one(&svc, &project.project_id, &trigger).await;
+            let stale = stale_list(&svc, &project.project_id).await.stale_scenes[0].clone();
+            let reconciliation_id = stale.reconciliation_amendment_id.clone().unwrap();
+
+            let out = apply_one(&svc, &project.project_id, &reconciliation_id).await;
+            assert_eq!(out.results[0].outcome, "applied", "{out:?}");
+            let outcome = out.results[0]
+                .cascade
+                .as_ref()
+                .expect("a reconciliation apply re-validates its own Scene");
+            assert!(
+                outcome
+                    .triggers
+                    .contains(&"reconciliation_repair".to_string()),
+                "{outcome:?}"
+            );
+            assert_eq!(outcome.cleared_stale, 1, "{outcome:?}");
+            assert!(out.stale_scenes.is_empty(), "{out:?}");
+
+            assert!(
+                stale_list(&svc, &project.project_id)
+                    .await
+                    .stale_scenes
+                    .is_empty()
+            );
+            let repaired = plan_of(&svc, &project.project_id, 2).await;
+            let axis = repaired.scenes[0]
+                .primary_value_axis
+                .as_ref()
+                .expect("the repair keeps the axis");
+            assert_eq!(
+                axis.opening,
+                value_charge(ChargeSign::Negative, ChargeDepth::Contrary)
+            );
+            assert_eq!(
+                axis.closing,
+                value_charge(ChargeSign::Positive, ChargeDepth::Positive)
+            );
+            // The history row is retained as cleared, not deleted.
+            let all = svc
+                .repository()
+                .list_scene_plan_stale(&project.project_id, &project.branch_id, Some("cleared"))
+                .await
+                .unwrap();
+            assert_eq!(all.len(), 1, "{all:?}");
+        }
+
+        #[tokio::test]
+        async fn cascade_noop_amendment_stages_and_marks_nothing() {
+            let (_tmp, svc) = fresh_service_local().await;
+            let project = cascade_fixture(&svc, "Cascade no-op", Some(3)).await;
+            let synopsis = stage(
+                &svc,
+                &project.project_id,
+                "synopsis_update",
+                Some(1),
+                serde_json::json!({"synopsis": "same chain, new synopsis"}),
+            )
+            .await;
+            let out = apply_one(&svc, &project.project_id, &synopsis).await;
+            assert_eq!(out.results[0].outcome, "applied", "{out:?}");
+            assert!(
+                out.results[0].cascade.is_none(),
+                "no trigger means no cascade report: {out:?}"
+            );
+            assert!(
+                stale_list(&svc, &project.project_id)
+                    .await
+                    .stale_scenes
+                    .is_empty()
+            );
+            assert!(
+                staged_amendments(&svc, &project.project_id)
+                    .await
+                    .is_empty()
+            );
+
+            // A prose-only scene_replace keeps the closing Charges identical.
+            let prose = stage(
+                &svc,
+                &project.project_id,
+                "scene_replace",
+                Some(2),
+                serde_json::json!({
+                    "scene_order": 1, "summary": "c2s1 rewritten prose",
+                    "purpose": "purpose 1", "character_ids": ["character:alice"]
+                }),
+            )
+            .await;
+            apply_one(&svc, &project.project_id, &prose).await;
+            assert!(
+                stale_list(&svc, &project.project_id)
+                    .await
+                    .stale_scenes
+                    .is_empty()
+            );
+            assert!(
+                staged_amendments(&svc, &project.project_id)
+                    .await
+                    .is_empty()
+            );
+        }
+
+        #[tokio::test]
+        async fn cascade_repeat_trigger_reuses_a_still_staged_reconciliation() {
+            let (_tmp, svc) = fresh_service_local().await;
+            let project = cascade_fixture(&svc, "Cascade repeat", Some(3)).await;
+            let first = stage(
+                &svc,
+                &project.project_id,
+                "scene_replace",
+                Some(1),
+                axis_repair(
+                    3,
+                    "c1s3",
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                ),
+            )
+            .await;
+            apply_one(&svc, &project.project_id, &first).await;
+            let before = stale_list(&svc, &project.project_id).await;
+            let c2s1 = before
+                .stale_scenes
+                .iter()
+                .find(|stale| stale.chapter_number == 2 && stale.scene_order == 1)
+                .expect("c2s1 is stale");
+            let reconciliation_id = c2s1.reconciliation_amendment_id.clone().unwrap();
+
+            // A second trigger upstream: c1s1 now closes at Negative/Contradictory,
+            // which breaks c1s2 and leaves c2s1 exactly as broken as before (same
+            // required repair, so the staged proposal is still the right one).
+            let second = stage(
+                &svc,
+                &project.project_id,
+                "scene_replace",
+                Some(1),
+                axis_repair(
+                    1,
+                    "c1s1",
+                    value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                ),
+            )
+            .await;
+            apply_one(&svc, &project.project_id, &second).await;
+
+            let staged = staged_amendments(&svc, &project.project_id).await;
+            let chapter_two_repairs: Vec<&spindle_core::models::PlanAmendment> = staged
+                .iter()
+                .filter(|amendment| {
+                    amendment.amendment_class == "scene_replace"
+                        && amendment.target_chapter == Some(2)
+                        && amendment.payload["scene_order"] == 1
+                })
+                .collect();
+            assert_eq!(
+                chapter_two_repairs.len(),
+                1,
+                "a repeat cascade never duplicates a Scene's staged repair: {staged:?}"
+            );
+            assert_eq!(chapter_two_repairs[0].id, reconciliation_id);
+
+            let after = stale_list(&svc, &project.project_id).await;
+            let c2s1_after = after
+                .stale_scenes
+                .iter()
+                .find(|stale| stale.chapter_number == 2 && stale.scene_order == 1)
+                .expect("c2s1 is still stale");
+            assert_eq!(
+                c2s1_after.reconciliation_amendment_id.as_deref(),
+                Some(reconciliation_id.as_str())
+            );
+            // The new break at c1s2 has no mechanical repair (its expected opening
+            // would equal its closing Charge, a non-event): marked, proposal-less.
+            let c1s2 = after
+                .stale_scenes
+                .iter()
+                .find(|stale| stale.chapter_number == 1 && stale.scene_order == 2)
+                .expect("c1s2 is stale");
+            assert!(c1s2.reconciliation_amendment_id.is_none(), "{c1s2:?}");
+        }
+
+        #[tokio::test]
+        async fn cascade_leaves_drafted_scene_prose_and_plan_untouched() {
+            let (_tmp, svc) = fresh_service_local().await;
+            let project = cascade_fixture(&svc, "Cascade drafted", Some(3)).await;
+            let plan_before =
+                serde_json::to_string(&plan_of(&svc, &project.project_id, 3).await).unwrap();
+            let scene_before = svc
+                .repository()
+                .list_scenes_by_project_and_branch(&project.project_id, &project.branch_id)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|scene| scene.chapter_number == 3 && scene.scene_order == 1)
+                .expect("the drafted scene exists");
+            let text_before = scene_before.full_text.clone();
+
+            let trigger = stage(
+                &svc,
+                &project.project_id,
+                "scene_replace",
+                Some(1),
+                axis_repair(
+                    3,
+                    "c1s3",
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                ),
+            )
+            .await;
+            apply_one(&svc, &project.project_id, &trigger).await;
+
+            let plan_after =
+                serde_json::to_string(&plan_of(&svc, &project.project_id, 3).await).unwrap();
+            assert_eq!(
+                plan_before, plan_after,
+                "a drafted chapter's plan is untouched"
+            );
+            let scene_after = svc
+                .repository()
+                .list_scenes_by_project_and_branch(&project.project_id, &project.branch_id)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|scene| scene.id == scene_before.id)
+                .expect("the drafted scene still exists");
+            assert_eq!(text_before, scene_after.full_text);
+            assert_eq!(scene_before.realized_report, scene_after.realized_report);
+
+            let list = stale_list(&svc, &project.project_id).await;
+            assert!(
+                list.stale_scenes
+                    .iter()
+                    .all(|stale| stale.chapter_number != 3),
+                "a drafted Scene is never marked stale: {list:?}"
+            );
+            let staged = staged_amendments(&svc, &project.project_id).await;
+            assert!(
+                staged
+                    .iter()
+                    .all(|amendment| amendment.target_chapter != Some(3)),
+                "no amendment targets the drafted chapter: {staged:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn cascade_detects_key_fact_and_promise_payoff_binding_changes() {
+            let (_tmp, svc) = fresh_service_local().await;
+            let project = cascade_fixture(&svc, "Cascade bindings", Some(3)).await;
+            let placement = StoryPlacement {
+                book_number: 1,
+                chapter_number: 1,
+                scene_order: Some(2),
+                note: None,
+            };
+            svc.create_narrative_promise(CreateNarrativePromiseInput {
+                project_id: project.project_id.clone(),
+                promise_type: "mystery".to_string(),
+                description: "the forged seal".to_string(),
+                planted_at: StoryPlacement {
+                    book_number: 1,
+                    chapter_number: 1,
+                    scene_order: Some(1),
+                    note: None,
+                },
+                planned_payoff: Some(placement.clone()),
+                planned_payoff_turning_beat: None,
+                target_act: None,
+                notes: Vec::new(),
+            })
+            .await
+            .unwrap();
+            svc.register_canonical_fact(RegisterCanonicalFactInput {
+                project_id: project.project_id.clone(),
+                scene_id: None,
+                book_number: 1,
+                chapter_number: 1,
+                fact_type: None,
+                key: Some("seal".to_string()),
+                value: Some("the seal was forged".to_string()),
+                context: None,
+                subject_table: None,
+                subject_id: None,
+                predicate: Some("key_fact.revealed_secret:seal".to_string()),
+                value_kind: None,
+                value_text: Some("the seal was forged".to_string()),
+                value_number: None,
+                value_unit: None,
+                value_json: None,
+                aliases: Vec::new(),
+                scope: None,
+                valid_from: Some(placement),
+                valid_until: None,
+                legacy_untyped: None,
+                supersedes_fact_id: None,
+                secrecy: None,
+            })
+            .await
+            .unwrap();
+
+            // Dropping the Scene both bindings resolve to changes the binding
+            // (and, incidentally, the closing-Charge vector).
+            let drop = stage(
+                &svc,
+                &project.project_id,
+                "scene_drop",
+                Some(1),
+                serde_json::json!({"scene_order": 2}),
+            )
+            .await;
+            let out = apply_one(&svc, &project.project_id, &drop).await;
+            let outcome = out.results[0].cascade.as_ref().expect("cascade ran");
+            assert!(
+                outcome.triggers.contains(&"key_fact".to_string()),
+                "a Key Fact's planned-Scene binding changed: {outcome:?}"
+            );
+            assert!(
+                outcome.triggers.contains(&"promise_payoff".to_string()),
+                "a promise payoff binding changed: {outcome:?}"
+            );
+            assert!(
+                outcome.triggers.contains(&"closing_charge".to_string()),
+                "{outcome:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn non_mckee_amendment_outputs_and_plans_stay_unchanged() {
+            let (_tmp, svc) = fresh_service_local().await;
+            let scenes = vec![
+                value_scene(
+                    1,
+                    "open",
+                    value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                ),
+                value_scene(
+                    2,
+                    "close",
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contrary),
+                    value_charge(ChargeSign::Negative, ChargeDepth::Contradictory),
+                ),
+            ];
+            let project =
+                project_with_future_chapter(&svc, "Cascade unmarked", 2, scenes, Vec::new()).await;
+            let before = plan_of(&svc, &project.project_id, 2).await;
+            let id = stage(
+                &svc,
+                &project.project_id,
+                "scene_replace",
+                Some(2),
+                axis_repair(
+                    1,
+                    "open",
+                    value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                    value_charge(ChargeSign::Positive, ChargeDepth::Positive),
+                ),
+            )
+            .await;
+            let out = apply_one(&svc, &project.project_id, &id).await;
+            assert_eq!(out.results[0].outcome, "applied", "{out:?}");
+            assert!(out.results[0].cascade.is_none(), "{out:?}");
+            let after = plan_of(&svc, &project.project_id, 2).await;
+            assert_eq!(
+                before.scenes[0].primary_value_axis, after.scenes[0].primary_value_axis,
+                "a non-McKee scene_replace ignores the additive value fields"
+            );
+
+            let list = svc
+                .list_plan_amendments(ListPlanAmendmentsInput {
+                    project_id: project.project_id.clone(),
+                    status: None,
+                    book_number: None,
+                    source_chapter: None,
+                })
+                .await
+                .unwrap();
+            let value = serde_json::to_value(&list).unwrap();
+            assert!(
+                value.get("stale_scenes").is_none(),
+                "a non-McKee list output has no stale key: {value:?}"
+            );
+            let decide_value = serde_json::to_value(&out).unwrap();
+            assert!(
+                decide_value.get("stale_scenes").is_none(),
+                "{decide_value:?}"
+            );
+            assert!(
+                decide_value.get("staged_reconciliation_ids").is_none(),
+                "{decide_value:?}"
+            );
+            assert_eq!(
+                staged_amendments(&svc, &project.project_id).await.len(),
+                0,
+                "nothing is staged downstream for a non-McKee project"
+            );
+        }
     }
 }
