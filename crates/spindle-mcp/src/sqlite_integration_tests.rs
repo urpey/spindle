@@ -2554,7 +2554,30 @@ EOF
   # otherwise-identical mock literal aliasing two scenes together. Inert unless a
   # synopsis carries a MOCK_SCENE_* marker.
   SCENE=$(echo "$PROMPT" | grep -oE 'MOCK_SCENE_[A-Z_]+' | head -1)
-  cat <<EOF
+  if echo "$PROMPT" | grep -q "MOCK_MCKEE_REPORT_SCENE"; then
+    # Agent-mode McKee fixture: the writer returns the typed realized report the
+    # prompt asks for, matching the planned axis and charges in the fixture. The
+    # report is what lets the harness verify a clean McKee agent-mode scene.
+    cat <<EOF
+{
+  "full_text": "The grey-eyed stranger crossed the hall. MOCK_CANON_MINE $READER $SCENE as the door swung wide.",
+  "summary": "Stranger crosses",
+  "tone": "$TONE",
+  "character_states": [],
+  "canonical_facts": [],
+  "relationship_updates": [],
+  "beats": [],
+  "continuity_notes": [],
+  "realized_report": {
+    "value_turns": [{"axis": "Mara's vow", "opening": {"sign": "positive", "depth": "positive"}, "closing": {"sign": "negative", "depth": "contrary"}}],
+    "character_effects": [],
+    "promise_events": [],
+    "key_fact_ids": []
+  }
+}
+EOF
+  else
+    cat <<EOF
 {
   "full_text": "The grey-eyed stranger crossed the hall. MOCK_CANON_MINE $READER $SCENE as the door swung wide.",
   "summary": "Stranger crosses",
@@ -2566,6 +2589,7 @@ EOF
   "continuity_notes": []
 }
 EOF
+  fi
 elif echo "$PROMPT" | grep -q "cumulative reader simulation"; then
   # The reader-sim pass rides the review route (reader_sim falls back to review).
   # MOCK_READER_DIP -> dipping + one warning concern (retread).
@@ -4428,6 +4452,256 @@ async fn verify_shutdown(fx: VerifyRunFixture) {
     fx.ct.cancel();
     fx.server_handle.await.unwrap();
     crate::remove_addr_file(&fx.data_dir);
+}
+
+/// Build a McKee-structured agent-mode run whose mock writer returns the typed
+/// realized report the dispatch prompt asks for. The plan's only Value Axis and
+/// charges match the mock report exactly, so a clean verify proves the
+/// agent-mode package carries the report instead of parking on "no report".
+async fn mckee_agent_fixture() -> VerifyRunFixture {
+    use crate::tools::{ToolRouter, ToolSerializationState};
+    use spindle_core::charge::{Charge, ChargeDepth, ChargeSign};
+    use spindle_core::models::ConfigureAgentsInput;
+    use spindle_core::scene_value::SceneValueAxis;
+    use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
+
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test_mckee_agent.db");
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    let script_path = universal_mock_agent_path();
+    let config_path = tmp.path().join("config.toml");
+    let config_content = format!(
+        r#"
+[[agents]]
+id = "cli-agent-draft"
+name = "CLI Agent Draft"
+provider = "cli"
+endpoint = "{script}"
+model = "default"
+ratings = ["general", "explicit"]
+
+[[routing]]
+route = "draft"
+agent = "cli-agent-draft"
+"#,
+        script = script_path.display(),
+    );
+    std::fs::write(&config_path, config_content).unwrap();
+
+    let pool = SqlitePool::open(&db_path).await.unwrap();
+    let repo =
+        Repository::with_model_router(pool.clone(), data_dir.clone(), ModelRouter::local_only());
+    let svc = SqliteSpindleService::new(repo);
+    svc.configure_agents(ConfigureAgentsInput {
+        config_path: Some(config_path.to_string_lossy().to_string()),
+    })
+    .unwrap();
+
+    let (project, _branch, _, _) = svc
+        .repository()
+        .create_project_with_mckee_marker(&CreateProjectInput {
+            name: "McKee Agent Verify".into(),
+            project_type: "novel".into(),
+            genre: "fantasy".into(),
+            reader_contract: ReaderContract {
+                promise: "A vow kept under pressure.".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+
+    let mara = svc
+        .create_character(CreateCharacterInput {
+            aliases: Vec::new(),
+            project_id: project.id.clone(),
+            name: "Mara".into(),
+            summary: "Oathbound warden.".into(),
+            role: "protagonist".into(),
+            realm: None,
+            voice_profile: CharacterVoiceProfileData::default(),
+            emotional_profile: CharacterEmotionalProfileData::default(),
+            initial_state: None,
+        })
+        .await
+        .unwrap();
+
+    let loc = svc
+        .create_location(CreateLocationInput {
+            project_id: project.id.clone(),
+            name: "Ash Gate".into(),
+            kind: "fortress".into(),
+            realm: None,
+            summary: "Blackened wall.".into(),
+            initial_state: WorldStateInput::default(),
+        })
+        .await
+        .unwrap();
+
+    let positive = Charge::new(ChargeSign::Positive, ChargeDepth::Positive).unwrap();
+    let contrary = Charge::new(ChargeSign::Negative, ChargeDepth::Contrary).unwrap();
+    svc.plan_chapter(PlanChapterInput {
+        project_id: project.id.clone(),
+        book_number: 1,
+        chapter_number: 1,
+        pov_character_id: Some(mara.character_id.clone()),
+        synopsis: "First watch. MOCK_MCKEE_REPORT_SCENE".into(),
+        target_theme_ids: Vec::new(),
+        target_conflict_ids: Vec::new(),
+        target_plot_line_ids: Vec::new(),
+        scenes: vec![PlanChapterSceneInput {
+            scene_order: 1,
+            summary: "Mara takes the watch. MOCK_MCKEE_REPORT_SCENE".into(),
+            character_ids: vec![mara.character_id.clone()],
+            location_id: Some(loc.location_id.clone()),
+            content_rating: Some(ContentRating::General),
+            purpose: "establishing".into(),
+            primary_value_axis: Some(SceneValueAxis {
+                axis: "Mara's vow".into(),
+                opening: positive,
+                closing: contrary,
+            }),
+            risk: Some(3),
+            ..Default::default()
+        }],
+    })
+    .await
+    .unwrap();
+
+    let router = ToolRouter::with_tool_profile_and_serialization(
+        svc.clone(),
+        Some("write".to_string()),
+        Arc::new(ToolSerializationState::default()),
+    );
+    let start_res = router
+        .call_tool(
+            "authoring_start_run",
+            Some(
+                serde_json::json!({
+                    "project_id": project.id.clone(),
+                    "book_number": 1,
+                    "start_chapter": 1,
+                    "end_chapter": 1,
+                    "checkpoint_interval": 1,
+                    "mode": "agent",
+                    "max_revise_attempts": 1,
+                })
+                .as_object()
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    let start_val = start_res.structured_content.unwrap();
+    assert_eq!(
+        start_val["status"].as_str(),
+        Some("active"),
+        "McKee agent run should start active: {start_val:?}"
+    );
+    let run_id = start_val["run_id"].as_str().unwrap().to_string();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    crate::write_addr_file(&data_dir, addr).unwrap();
+    let svc_clone = svc.clone();
+    let ct = CancellationToken::new();
+    let ct_clone1 = ct.clone();
+    let ct_clone2 = ct.clone();
+    let server_handle = tokio::spawn(async move {
+        axum::serve(listener, crate::http::mcp_router(svc_clone, ct_clone1))
+            .with_graceful_shutdown(async move { ct_clone2.cancelled_owned().await })
+            .await
+            .unwrap();
+    });
+
+    VerifyRunFixture {
+        _tmp: tmp,
+        svc,
+        router,
+        project_id: project.id,
+        run_id,
+        ct,
+        server_handle,
+        data_dir,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mckee_agent_mode_realized_report_verifies_clean_instead_of_parking() {
+    // Issue #32 review fix: the agent-mode generated package must carry the
+    // realized report. Otherwise every McKee agent-mode scene verifies as "no
+    // realized report" and can never converge.
+    let fx = mckee_agent_fixture().await;
+
+    let draft = verify_execute_next(&fx).await;
+    assert!(
+        draft["executed_action"]
+            .as_str()
+            .unwrap()
+            .contains("draft book scene"),
+        "expected agent draft, got {draft:?}"
+    );
+
+    // The saved Scene carries the report the mock writer returned.
+    let scenes = fx
+        .svc
+        .repository()
+        .list_scenes_by_project_and_branch(&fx.project_id, &branch_of(&fx).await)
+        .await
+        .unwrap();
+    assert_eq!(scenes.len(), 1, "{scenes:?}");
+    let report = scenes[0]
+        .realized_report
+        .as_ref()
+        .expect("agent-mode save must persist the realized report");
+    assert_eq!(report.value_turns[0].axis, "Mara's vow");
+
+    // Verify is clean: not "findings", not "parked_findings".
+    let verify = verify_execute_next(&fx).await;
+    assert!(
+        verify["executed_action"]
+            .as_str()
+            .unwrap()
+            .contains("verify scene"),
+        "expected verify after draft, got {verify:?}"
+    );
+    let status = verify_status(&fx).await;
+    let scene = &status["chapters"][0]["scenes"][0];
+    assert_eq!(
+        scene["verify_status"].as_str(),
+        Some("clean"),
+        "a clean McKee agent-mode scene must verify clean, got {scene:?}"
+    );
+    assert_eq!(
+        scene["revise_attempts"].as_i64(),
+        Some(0),
+        "a clean verify must not spend revision budget: {scene:?}"
+    );
+
+    // The clean scene proceeds to commit rather than parking.
+    let commit = verify_execute_next(&fx).await;
+    assert!(
+        commit["executed_action"]
+            .as_str()
+            .unwrap()
+            .contains("commit scene changes"),
+        "clean verify must proceed to commit, got {commit:?}"
+    );
+
+    verify_shutdown(fx).await;
+}
+
+async fn branch_of(fx: &VerifyRunFixture) -> String {
+    fx.svc
+        .repository()
+        .get_active_branch(&fx.project_id)
+        .await
+        .unwrap()
+        .id
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -9923,11 +10197,25 @@ async fn new_book_agent_entry_reaches_scene_one_one_ready_through_mcp_tools() {
         4,
         "{status}"
     );
-    assert_eq!(status["readiness"]["ready_to_draft"], true, "{status}");
+    // A McKee project needs a non-zero revise budget, and readiness carries no
+    // budget field: it must report blocked exactly as `authoring_start_run`
+    // would refuse, instead of advertising a ready range the run cannot start.
     assert_eq!(status["readiness"]["planner_checks_passed"], true);
     assert_eq!(status["readiness"]["stale_projection"], false);
+    assert_eq!(status["readiness"]["ready_to_draft"], false, "{status}");
     assert_eq!(
-        status["readiness"]["prepare_run"]["ready_to_draft"], true,
+        status["readiness"]["prepare_run"]["ready_to_draft"], false,
+        "{status}"
+    );
+    assert!(
+        status["readiness"]["prepare_run"]["missing_requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|requirement| requirement
+                .as_str()
+                .unwrap()
+                .contains("max_revise_attempts")),
         "{status}"
     );
 
@@ -9942,7 +10230,18 @@ async fn new_book_agent_entry_reaches_scene_one_one_ready_through_mcp_tools() {
     )
     .await;
     assert_eq!(prepared["action"], "prepare_authoring_run");
-    assert_eq!(prepared["readiness"]["ready_to_draft"], true, "{prepared}");
+    assert_eq!(prepared["readiness"]["ready_to_draft"], false, "{prepared}");
+    assert!(
+        prepared["readiness"]["prepare_run"]["missing_requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|requirement| requirement
+                .as_str()
+                .unwrap()
+                .contains("max_revise_attempts")),
+        "{prepared}"
+    );
     assert_eq!(prepared["readiness"]["prepare_run"]["book_number"], 1);
     assert_eq!(prepared["readiness"]["prepare_run"]["start_chapter"], 1);
     assert_eq!(prepared["readiness"]["prepare_run"]["end_chapter"], 2);
@@ -10712,13 +11011,22 @@ async fn phase_f_disposable_smoke_blank_project_to_scene_one_one_draft() {
         }),
     )
     .await;
+    // Readiness enforces the same McKee revise-budget requirement as
+    // `authoring_start_run`: it has no budget field, so it reports blocked
+    // rather than claiming a ready range the run would refuse.
     assert_eq!(
-        readiness["readiness"]["ready_to_draft"], true,
+        readiness["readiness"]["ready_to_draft"], false,
         "{readiness}"
     );
-    assert_eq!(
-        readiness["readiness"]["prepare_run"]["missing_requirements"],
-        serde_json::json!([]),
+    assert!(
+        readiness["readiness"]["prepare_run"]["missing_requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|requirement| requirement
+                .as_str()
+                .unwrap()
+                .contains("max_revise_attempts")),
         "{readiness}"
     );
 

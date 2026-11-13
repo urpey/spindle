@@ -309,6 +309,70 @@ async fn tool_schema_lint() {
     );
 }
 
+#[test]
+fn realized_report_closed_sets_survive_input_schema_sanitisation() {
+    // Regression: per-variant enum doc comments emitted a `oneOf` of const
+    // objects, which the Gemini sanitiser degraded to `{"type":"object"}`, so
+    // the closed CharacterEffect / RealizedPromiseEventKind sets vanished from
+    // every input schema. The sanitised schema must carry one string enum.
+    let tools = all_tool_schemas();
+    let cases = [
+        (
+            "commit_scene",
+            "/inputSchema/properties/continuity/properties/realized_report",
+        ),
+        (
+            "save_scene_draft",
+            "/inputSchema/properties/realized_report",
+        ),
+        (
+            "authoring_save_scene_draft",
+            "/inputSchema/properties/realized_report",
+        ),
+    ];
+    let expected: [(&str, &str, [&str; 5]); 2] = [
+        (
+            "character_effects",
+            "effect",
+            ["reinforce", "reveal", "contradict", "change", "none"],
+        ),
+        (
+            "promise_events",
+            "event",
+            [
+                "setup",
+                "reinforcement",
+                "payoff",
+                "subversion",
+                "abandonment",
+            ],
+        ),
+    ];
+    for (tool_name, base) in cases {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == tool_name)
+            .unwrap_or_else(|| panic!("{tool_name} is not in the registry"));
+        let schema = serde_json::to_value(tool).unwrap();
+        for (collection, field, values) in expected {
+            let pointer = format!("{base}/properties/{collection}/items/properties/{field}");
+            let node = schema
+                .pointer(&pointer)
+                .unwrap_or_else(|| panic!("{tool_name}: missing {pointer}"));
+            assert_eq!(node["type"], "string", "{tool_name}/{field}: {node}");
+            assert!(
+                node.get("oneOf").is_none(),
+                "{tool_name}/{field} must not carry oneOf: {node}"
+            );
+            assert_eq!(
+                node["enum"],
+                serde_json::json!(values),
+                "{tool_name}/{field}: {node}"
+            );
+        }
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn closed_set_enum_values_round_trip_through_parsers() {
     for mode in ["hybrid", "agent", "  Hybrid ", "AGENT", "agent_draft"] {

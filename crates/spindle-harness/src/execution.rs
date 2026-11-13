@@ -316,7 +316,9 @@ async fn draft_scene(
                 // Automated drafting does not flag on-page reveals; the reveal
                 // package is a host/interactive (authoring_save_scene_draft) flow.
                 knowledge_learned: Vec::new(),
-                realized_report: None,
+                // The dispatch prompt asks the writer for the same typed realized
+                // report the host path sends; a non-McKee writer omits it.
+                realized_report: package.realized_report.clone(),
             })
             .await
             .with_context(|| {
@@ -1997,7 +1999,8 @@ fn assemble_host_scene_prompt(
             "  \"canonical_facts\": [{{\"fact_type\": \"...\", \"key\": \"...\", \"value\": \"...\", \"context\": \"optional\"}}],\n",
             "  \"relationship_updates\": [{{\"character_a_id\": \"...\", \"character_b_id\": \"...\", \"trust_delta\": 0, \"tension_delta\": 0, \"reason\": \"...\"}}],\n",
             "  \"beats\": [{{\"beat_type\": \"...\", \"summary\": \"...\"}}],\n",
-            "  \"continuity_notes\": [\"optional notes\"]\n",
+            "  \"continuity_notes\": [\"optional notes\"],\n",
+            "  \"realized_report\": {{\"value_turns\": [{{\"axis\": \"...\", \"opening\": {{\"sign\": \"positive\", \"depth\": \"positive\"}}, \"closing\": {{\"sign\": \"negative\", \"depth\": \"contrary\"}}, \"gap\": {{\"expected\": \"...\", \"actual\": \"...\"}}, \"turning_beat\": 1}}], \"character_effects\": [{{\"character_id\": \"...\", \"effect\": \"reinforce|reveal|contradict|change|none\"}}], \"promise_events\": [{{\"narrative_promise_id\": \"...\", \"event\": \"setup|reinforcement|payoff|subversion|abandonment\"}}], \"key_fact_ids\": [\"canonical_fact:...\"]}}\n",
             "}}\n\n",
             "Rules:\n",
             "- Return valid JSON only. No markdown fences. No prose outside the JSON object.\n",
@@ -2006,6 +2009,7 @@ fn assemble_host_scene_prompt(
             "- Treat chapter briefing Continuity sheets as authoritative for character details, habits, voice, state, relationships, recent appearances, and location continuity.\n",
             "- Keep the scene aligned to the requested content rating and tone target.\n",
             "- Use empty arrays instead of null when you have no structured updates.\n",
+            "- On a McKee-structured project return `realized_report` for what the prose actually did (omit it otherwise): one realized Value Turn per planned axis with exact opening/closing Charge, the Character Effect per present major character, the Narrative Promise events advanced, and the planned Key Fact ids dramatised.\n",
             "- Honor compact_shelf_digest in this prompt. Soft shelves are advisory on save; hard shelves fail-closed only when verify/revise is on. Rewrite-from-beats at most 1-2 times — do not paraphrase-humanize.\n\n",
             "{packet_section}",
             "Editorial directives:\n{directives}\n\n",
@@ -2124,13 +2128,15 @@ fn build_scene_mcp_pull_prompt(
             "  \"canonical_facts\": [{{\"fact_type\": \"...\", \"key\": \"...\", \"value\": \"...\", \"context\": \"optional\"}}],\n",
             "  \"relationship_updates\": [{{\"character_a_id\": \"...\", \"character_b_id\": \"...\", \"trust_delta\": 0, \"tension_delta\": 0, \"reason\": \"...\"}}],\n",
             "  \"beats\": [{{\"beat_type\": \"...\", \"summary\": \"...\"}}],\n",
-            "  \"continuity_notes\": [\"optional notes\"]\n",
+            "  \"continuity_notes\": [\"optional notes\"],\n",
+            "  \"realized_report\": {{\"value_turns\": [{{\"axis\": \"...\", \"opening\": {{\"sign\": \"positive\", \"depth\": \"positive\"}}, \"closing\": {{\"sign\": \"negative\", \"depth\": \"contrary\"}}, \"gap\": {{\"expected\": \"...\", \"actual\": \"...\"}}, \"turning_beat\": 1}}], \"character_effects\": [{{\"character_id\": \"...\", \"effect\": \"reinforce|reveal|contradict|change|none\"}}], \"promise_events\": [{{\"narrative_promise_id\": \"...\", \"event\": \"setup|reinforcement|payoff|subversion|abandonment\"}}], \"key_fact_ids\": [\"canonical_fact:...\"]}}\n",
             "}}\n\n",
             "Rules:\n",
             "- Use only the provided character ids and location id unless the pulled canon clearly requires another referenced entity.\n",
             "- Preserve continuity from Spindle canon, prior chapter summaries, scene context, and research claims.\n",
             "- Keep the scene aligned to the requested content rating and target tone.\n",
-            "- Use empty arrays instead of null when you have no structured updates.\n\n",
+            "- Use empty arrays instead of null when you have no structured updates.\n",
+            "- On a McKee-structured project return `realized_report` for what the prose actually did (omit it otherwise): one realized Value Turn per planned axis with exact opening/closing Charge, the Character Effect per present major character, the Narrative Promise events advanced, and the planned Key Fact ids dramatised.\n\n",
             "Editorial directives:\n{directives}\n\n",
             "{threads_section}",
             "Scene manifest:\n{manifest_json}\n\n",
@@ -3481,6 +3487,7 @@ mod tests {
                 summary: "The ledger names the casino owner.".to_string(),
             }],
             continuity_notes: vec!["The ledger stays in Dave's coat.".to_string()],
+            realized_report: None,
         });
         store.save_json(&rel_path, &scene_artifact).unwrap();
         chapter.scenes = vec![scene1];

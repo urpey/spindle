@@ -24,10 +24,9 @@
 use super::*;
 use crate::sqlite::json_records::StoredPlannedScene;
 use crate::sqlite::records::{CanonicalFact, CharacterArc, NarrativePromise, Scene};
-use spindle_core::models::{ArcMilestoneKind, ConsistencyIssue, StoryPlacement};
+use spindle_core::models::{ArcMilestoneKind, ConsistencyIssue};
 use spindle_core::realized::{
-    CHARACTER_EFFECT_CHECK, CharacterEffect, REALIZED_KEY_FACT_CHECK, REALIZED_PROMISE_EVENT_CHECK,
-    REALIZED_VALUE_TURN_CHECK, RealizedPromiseEventKind, RealizedReport, format_value_turn,
+    CharacterEffect, RealizedCheck, RealizedPromiseEventKind, RealizedReport, format_value_turn,
 };
 use std::collections::BTreeMap;
 
@@ -46,10 +45,13 @@ impl RealizedChecks {
     /// Resolve the requested check names.
     pub(super) fn from_requested(requested: &std::collections::BTreeSet<String>) -> Self {
         Self {
-            value_turn: should_run_check(requested, REALIZED_VALUE_TURN_CHECK),
-            key_fact: should_run_check(requested, REALIZED_KEY_FACT_CHECK),
-            promise_event: should_run_check(requested, REALIZED_PROMISE_EVENT_CHECK),
-            character_effect: should_run_check(requested, CHARACTER_EFFECT_CHECK),
+            value_turn: should_run_check(requested, RealizedCheck::ValueTurn.check_type()),
+            key_fact: should_run_check(requested, RealizedCheck::KeyFact.check_type()),
+            promise_event: should_run_check(requested, RealizedCheck::PromiseEvent.check_type()),
+            character_effect: should_run_check(
+                requested,
+                RealizedCheck::CharacterEffect.check_type(),
+            ),
         }
     }
 
@@ -125,7 +127,7 @@ fn preview_text(text: &str) -> String {
 }
 
 fn realized_issue(
-    check_type: &str,
+    check: RealizedCheck,
     scene_id: &str,
     message: String,
     mut entity_ids: Vec<String>,
@@ -134,71 +136,66 @@ fn realized_issue(
     entity_ids.dedup();
     ConsistencyIssue {
         severity: "error".to_string(),
-        check_type: check_type.to_string(),
+        check_type: check.check_type().to_string(),
         message,
         entity_ids,
-        suggested_action: Some(match check_type {
-            REALIZED_VALUE_TURN_CHECK => {
-                "revise the scene so it realizes the planned Value Turn, or re-plan the scene \
-                 (plan amendment) before drafting"
-                    .to_string()
-            }
-            REALIZED_KEY_FACT_CHECK => {
-                "dramatise the planned Key Fact in the scene and list its canonical fact id in \
-                 the realized report, or re-plan the Key Fact's placement"
-                    .to_string()
-            }
-            REALIZED_PROMISE_EVENT_CHECK => {
-                "report the promise event the scene actually delivers, or re-plan the promise \
-                 placement"
-                    .to_string()
-            }
-            _ => "report 'change' only where a planned change milestone lands, or re-plan the \
-                 character arc milestone"
-                .to_string(),
-        }),
+        suggested_action: Some(check.suggested_action().to_string()),
     }
+}
+
+/// Everything the deterministic realized-report checks need for one Scene.
+///
+/// Bundled so the call site cannot silently transpose the four collections and
+/// so adding a chapter-level rule input does not grow another positional
+/// argument. `chapter_scenes` is every Scene of this Scene's chapter on the
+/// checked branch (including `scene` itself), because a planned chapter-level
+/// `change` milestone is satisfied by a `change` effect anywhere in the chapter.
+pub(super) struct RealizedFindingsInputs<'a> {
+    pub scene: &'a Scene,
+    pub planned_scene: Option<&'a StoredPlannedScene>,
+    pub checks: RealizedChecks,
+    pub key_facts: &'a [CanonicalFact],
+    pub promises: &'a [NarrativePromise],
+    pub arcs: &'a [CharacterArc],
+    pub character_names: &'a BTreeMap<String, String>,
+    pub chapter_scenes: &'a [Scene],
 }
 
 /// Every deterministic McKee realized-report finding for one written Scene.
 ///
 /// Pure over already-read rows: the caller has the branch-scoped Scene, its
 /// planned Scene (when the chapter has a plan), the branch's Key Facts and
-/// promises, the project's character arcs and a character-name map. Non-McKee
-/// projects never call this.
-#[allow(clippy::too_many_arguments)]
+/// promises, the project's character arcs, a character-name map and the
+/// chapter's Scenes (for the chapter-level change rule). Non-McKee projects
+/// never call this.
 pub(super) fn realized_findings_for_scene(
-    scene: &Scene,
-    planned_scene: Option<&StoredPlannedScene>,
-    checks: RealizedChecks,
-    key_facts: &[CanonicalFact],
-    promises: &[NarrativePromise],
-    arcs: &[CharacterArc],
-    character_names: &BTreeMap<String, String>,
+    inputs: RealizedFindingsInputs<'_>,
 ) -> Vec<ConsistencyIssue> {
     let mut issues = Vec::new();
+    let scene = inputs.scene;
     let book = scene.book_number;
     let chapter = scene.chapter_number;
     let order = scene.scene_order;
     let scene_ref = format!("book {book}, chapter {chapter} scene {order}");
     let report = scene.realized_report.as_ref();
 
-    if checks.value_turn {
-        realized_value_turn_findings(&mut issues, scene, planned_scene, report, &scene_ref);
+    if inputs.checks.value_turn {
+        realized_value_turn_findings(&mut issues, scene, inputs.planned_scene, report, &scene_ref);
     }
-    if checks.key_fact {
-        realized_key_fact_findings(&mut issues, scene, report, key_facts, &scene_ref);
+    if inputs.checks.key_fact {
+        realized_key_fact_findings(&mut issues, scene, report, inputs.key_facts, &scene_ref);
     }
-    if checks.promise_event {
-        realized_promise_event_findings(&mut issues, scene, report, promises, &scene_ref);
+    if inputs.checks.promise_event {
+        realized_promise_event_findings(&mut issues, scene, report, inputs.promises, &scene_ref);
     }
-    if checks.character_effect {
+    if inputs.checks.character_effect {
         realized_character_effect_findings(
             &mut issues,
             scene,
             report,
-            arcs,
-            character_names,
+            inputs.arcs,
+            inputs.character_names,
+            inputs.chapter_scenes,
             &scene_ref,
         );
     }
@@ -226,7 +223,7 @@ fn realized_value_turn_findings(
     }
     let Some(report) = report else {
         issues.push(realized_issue(
-            REALIZED_VALUE_TURN_CHECK,
+            RealizedCheck::ValueTurn,
             &scene.id,
             format!(
                 "{scene_ref} has a planned Value Turn but no realized report; report the realized \
@@ -240,7 +237,7 @@ fn realized_value_turn_findings(
         let name = axis.axis.trim();
         let Some(realized) = report.value_turn(name) else {
             issues.push(realized_issue(
-                REALIZED_VALUE_TURN_CHECK,
+                RealizedCheck::ValueTurn,
                 &scene.id,
                 format!(
                     "{scene_ref} plans the Value Axis '{name}' but the realized report does not \
@@ -252,7 +249,7 @@ fn realized_value_turn_findings(
         };
         if realized.opening != axis.opening || realized.closing != axis.closing {
             issues.push(realized_issue(
-                REALIZED_VALUE_TURN_CHECK,
+                RealizedCheck::ValueTurn,
                 &scene.id,
                 format!(
                     "{scene_ref} realizes '{name}' as {} but the plan is {} (Charge comparison is \
@@ -272,7 +269,7 @@ fn realized_value_turn_findings(
         && !report.value_turns.iter().any(|turn| turn.gap.is_some())
     {
         issues.push(realized_issue(
-            REALIZED_VALUE_TURN_CHECK,
+            RealizedCheck::ValueTurn,
             &scene.id,
             format!(
                 "{scene_ref} plans a Gap (expected '{}', actual '{}') but the realized report \
@@ -289,7 +286,7 @@ fn realized_value_turn_findings(
         && planned_beat != realized_beat
     {
         issues.push(realized_issue(
-            REALIZED_VALUE_TURN_CHECK,
+            RealizedCheck::ValueTurn,
             &scene.id,
             format!(
                 "{scene_ref} realizes the Turning Beat at beat {realized_beat} but the plan \
@@ -302,7 +299,7 @@ fn realized_value_turn_findings(
         let name = realized.axis.trim();
         if !planned_axes.iter().any(|axis| axis.axis.trim() == name) {
             issues.push(realized_issue(
-                REALIZED_VALUE_TURN_CHECK,
+                RealizedCheck::ValueTurn,
                 &scene.id,
                 format!(
                     "{scene_ref} reports a realized Value Turn on '{name}', which is not one of \
@@ -333,7 +330,7 @@ fn realized_key_fact_findings(
             continue;
         }
         issues.push(realized_issue(
-            REALIZED_KEY_FACT_CHECK,
+            RealizedCheck::KeyFact,
             &scene.id,
             format!(
                 "{scene_ref} has the planned Key Fact '{}' due but the realized report does not \
@@ -380,7 +377,7 @@ fn realized_promise_event_findings(
                 continue;
             }
             issues.push(realized_issue(
-                REALIZED_PROMISE_EVENT_CHECK,
+                RealizedCheck::PromiseEvent,
                 &scene.id,
                 format!(
                     "{scene_ref} is planned to {verb} the narrative promise '{}' but the realized \
@@ -399,11 +396,15 @@ fn realized_character_effect_findings(
     report: Option<&RealizedReport>,
     arcs: &[CharacterArc],
     character_names: &BTreeMap<String, String>,
+    chapter_scenes: &[Scene],
     scene_ref: &str,
 ) {
-    // Planned change milestones at this Scene, grouped per character so one
-    // finding names every planned change the Scene owes that character.
-    let mut planned_change: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Planned change milestones are grouped per character so one finding names
+    // every planned change the Scene owes that character. A milestone is
+    // either pinned to this Scene (`scene_order: Some`) or chapter-level
+    // (`scene_order: None`, the placement shape planning accepts).
+    let mut planned_at_scene: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut planned_in_chapter: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for arc in arcs.iter().filter(|arc| arc.archived_at.is_none()) {
         for milestone in &arc.milestones {
             if milestone.kind != Some(ArcMilestoneKind::Change) {
@@ -412,15 +413,17 @@ fn realized_character_effect_findings(
             let Some(placement) = milestone.placement.as_ref() else {
                 continue;
             };
-            if !placement_names_scene(
-                placement,
-                scene.book_number,
-                scene.chapter_number,
-                scene.scene_order,
-            ) {
+            if placement.book_number != scene.book_number
+                || placement.chapter_number != scene.chapter_number
+            {
                 continue;
             }
-            planned_change
+            let planned = match placement.scene_order {
+                Some(order) if order == scene.scene_order => &mut planned_at_scene,
+                Some(_) => continue,
+                None => &mut planned_in_chapter,
+            };
+            planned
                 .entry(arc.character_id.clone())
                 .or_default()
                 .push(milestone.label.clone());
@@ -432,41 +435,82 @@ fn realized_character_effect_findings(
             .cloned()
             .unwrap_or_else(|| character_id.to_string())
     };
-    for (character_id, labels) in &planned_change {
+    let labels_of = |labels: &[String]| {
+        labels
+            .iter()
+            .map(|label| format!("'{label}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    // A milestone placed at this Scene must be realized here as `change`; a
+    // downgrade to `reveal` (or no effect) is the classic character jump.
+    for (character_id, labels) in &planned_at_scene {
         let name = name_of(character_id);
         match report.and_then(|report| report.character_effect(character_id)) {
             Some(CharacterEffect::Change) => {}
             Some(other) => issues.push(realized_issue(
-                CHARACTER_EFFECT_CHECK,
+                RealizedCheck::CharacterEffect,
                 &scene.id,
                 format!(
                     "{scene_ref} plans the change milestone(s) {} for {name}, but the realized \
                      report records '{other}'; a planned change must be reported as 'change' and \
                      is never downgraded to a reveal",
-                    labels
-                        .iter()
-                        .map(|label| format!("'{label}'"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    labels_of(labels)
                 ),
                 vec![character_id.clone()],
             )),
             None => issues.push(realized_issue(
-                CHARACTER_EFFECT_CHECK,
+                RealizedCheck::CharacterEffect,
                 &scene.id,
                 format!(
                     "{scene_ref} plans the change milestone(s) {} for {name} but the realized \
                      report records no Character Effect for them",
-                    labels
-                        .iter()
-                        .map(|label| format!("'{label}'"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    labels_of(labels)
                 ),
                 vec![character_id.clone()],
             )),
         }
     }
+    // A chapter-level milestone is satisfied by a `change` effect in ANY Scene
+    // of the chapter, so this Scene is not demanded to carry one. The one
+    // reportable mismatch is a Scene that claims only `reveal` while no Scene
+    // in the chapter reports the planned `change`: attribute that finding to
+    // the Scene making the reveal claim.
+    for (character_id, labels) in &planned_in_chapter {
+        if planned_at_scene.contains_key(character_id) {
+            continue;
+        }
+        if report.and_then(|report| report.character_effect(character_id))
+            != Some(CharacterEffect::Reveal)
+        {
+            continue;
+        }
+        let change_elsewhere = chapter_scenes.iter().any(|sibling| {
+            sibling.id != scene.id
+                && sibling
+                    .realized_report
+                    .as_ref()
+                    .and_then(|report| report.character_effect(character_id))
+                    == Some(CharacterEffect::Change)
+        });
+        if change_elsewhere {
+            continue;
+        }
+        issues.push(realized_issue(
+            RealizedCheck::CharacterEffect,
+            &scene.id,
+            format!(
+                "{scene_ref} plans the chapter-level change milestone(s) {} for {}, but the \
+                 realized report records only 'reveal' and no scene in this chapter reports \
+                 'change'; a planned change is never downgraded to a reveal",
+                labels_of(labels),
+                name_of(character_id)
+            ),
+            vec![character_id.clone()],
+        ));
+    }
+    // A reported `change` needs a planned change milestone either at this Scene
+    // or at chapter level in this chapter.
     for effect in report
         .map(|report| report.character_effects.as_slice())
         .unwrap_or_default()
@@ -474,156 +518,21 @@ fn realized_character_effect_findings(
         if effect.effect != CharacterEffect::Change {
             continue;
         }
-        if planned_change.contains_key(&effect.character_id) {
+        if planned_at_scene.contains_key(&effect.character_id)
+            || planned_in_chapter.contains_key(&effect.character_id)
+        {
             continue;
         }
         issues.push(realized_issue(
-            CHARACTER_EFFECT_CHECK,
+            RealizedCheck::CharacterEffect,
             &scene.id,
             format!(
                 "{scene_ref} reports the Character Effect 'change' for {}, but no planned arc \
-                 milestone of kind change is placed at this scene; 'change' is accepted only at a \
-                 planned change milestone",
+                 milestone of kind change is placed at this scene or at chapter level in this \
+                 chapter; 'change' is accepted only at a planned change milestone",
                 name_of(&effect.character_id)
             ),
             vec![effect.character_id.clone()],
         ));
-    }
-}
-
-impl SqliteSpindleService {
-    /// Pre-validate a realized report's promise events before the prose write.
-    ///
-    /// A report that names an unknown promise, a promise on another branch, or a
-    /// Scene that precedes the promise's planting placement is rejected before
-    /// anything is written, so the save stays all-or-nothing. Non-McKee projects
-    /// are untouched: their report never advances a promise.
-    pub(super) async fn validate_realized_promise_events(
-        &self,
-        project_id: &str,
-        branch_id: &str,
-        placement: StoryPlacement,
-        report: Option<&RealizedReport>,
-    ) -> Result<()> {
-        let Some(report) = report else {
-            return Ok(());
-        };
-        if report.promise_events.is_empty() {
-            return Ok(());
-        }
-        let project = self.repository.get_project(project_id).await?;
-        if !project.mckee_structured {
-            return Ok(());
-        }
-        let lineage = self
-            .repository
-            .resolve_branch_lineage(project_id, branch_id)
-            .await?;
-        let scene_order = placement
-            .scene_order
-            .ok_or_else(|| anyhow::anyhow!("a realized promise event needs a scene placement"))?;
-        let scene_index = crate::format::story_index(
-            placement.book_number,
-            placement.chapter_number,
-            scene_order,
-        );
-        for event in &report.promise_events {
-            let promise = self
-                .repository
-                .get_narrative_promise(&event.narrative_promise_id)
-                .await
-                .with_context(|| {
-                    format!(
-                        "realized promise event names unknown narrative promise '{}'",
-                        event.narrative_promise_id
-                    )
-                })?;
-            anyhow::ensure!(
-                promise.project_id == project_id,
-                "realized promise event names narrative promise '{}' from another project",
-                event.narrative_promise_id
-            );
-            anyhow::ensure!(
-                lineage.iter().any(|branch| branch == &promise.branch_id),
-                "realized promise event names narrative promise '{}' from a branch the scene does \
-                 not inherit",
-                event.narrative_promise_id
-            );
-            anyhow::ensure!(
-                scene_index >= crate::format::story_index_from_placement(&promise.planted_at),
-                "the scene precedes the planting placement of narrative promise '{}'; a promise \
-                 event cannot precede its planting",
-                event.narrative_promise_id
-            );
-        }
-        Ok(())
-    }
-
-    /// Advance Narrative Promise status from a confirmed realized report.
-    ///
-    /// Runs after the Scene write commits, so a Scene that never committed never
-    /// advances a promise. Each event maps to one status
-    /// (`spindle_core::realized::RealizedPromiseEventKind::promise_status`) and
-    /// records the Scene as the source scene through the existing promise
-    /// status-history event. Re-saving the same Scene is idempotent: an event
-    /// this Scene already recorded is not appended twice. Non-McKee projects are
-    /// untouched and the agent-facing `update_promise_status` keeps working.
-    pub(super) async fn apply_realized_promise_events(
-        &self,
-        project_id: &str,
-        scene_id: &str,
-        report: Option<&RealizedReport>,
-    ) -> Result<()> {
-        let Some(report) = report else {
-            return Ok(());
-        };
-        if report.promise_events.is_empty() {
-            return Ok(());
-        }
-        let project = self.repository.get_project(project_id).await?;
-        if !project.mckee_structured {
-            return Ok(());
-        }
-        for event in &report.promise_events {
-            let status = event.event.promise_status();
-            let promise = self
-                .repository
-                .get_narrative_promise(&event.narrative_promise_id)
-                .await
-                .with_context(|| {
-                    format!(
-                        "realized promise event names unknown narrative promise '{}'",
-                        event.narrative_promise_id
-                    )
-                })?;
-            if promise.status_history.iter().any(|recorded| {
-                recorded.source_scene_id.as_deref() == Some(scene_id) && recorded.status == status
-            }) {
-                continue;
-            }
-            let mut note = format!(
-                "system: realized '{}' event reported with scene {scene_id}",
-                event.event
-            );
-            if let Some(extra) = event
-                .note
-                .as_deref()
-                .map(str::trim)
-                .filter(|note| !note.is_empty())
-            {
-                note.push_str(" — ");
-                note.push_str(extra);
-            }
-            self.update_promise_status(spindle_core::models::UpdatePromiseStatusInput {
-                narrative_promise_id: event.narrative_promise_id.clone(),
-                status: status.to_string(),
-                note: Some(note),
-                at: None,
-                source_scene_id: Some(scene_id.to_string()),
-                replaces_event_id: None,
-            })
-            .await?;
-        }
-        Ok(())
     }
 }

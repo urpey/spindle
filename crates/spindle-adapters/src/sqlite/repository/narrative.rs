@@ -398,8 +398,16 @@ impl Repository {
         .await
     }
 
-    pub async fn update_promise_status(
-        &self,
+    /// Apply one promise status-history event inside an already-open
+    /// transaction.
+    ///
+    /// This is the write primitive behind both the agent-facing
+    /// [`Repository::update_promise_status`] and the system realized-report path
+    /// (which runs it inside the Scene's own save transaction). It never opens or
+    /// commits a transaction of its own: the caller owns the boundary and a
+    /// failure must roll the promise rows back with the prose.
+    pub(crate) fn apply_promise_status_in_conn(
+        conn: &rusqlite::Connection,
         input: &spindle_core::models::UpdatePromiseStatusInput,
     ) -> Result<()> {
         use crate::format::{CHAPTER_RADIX, SCENE_RADIX, story_index, story_index_from_placement};
@@ -409,126 +417,209 @@ impl Repository {
             "promise status must not be empty"
         );
         let input = input.clone();
+        let mut promise = conn.query_row(
+            &format!("SELECT {NARRATIVE_PROMISE_COLUMNS} FROM narrative_promise WHERE id = ?1"),
+            [&input.narrative_promise_id],
+            |row| NarrativePromise::try_from(row),
+        )?;
+        let mut at = input.at;
+        if let Some(scene_id) = &input.source_scene_id {
+            let scene = conn.query_row(
+                &format!("SELECT {SCENE_COLUMNS} FROM scene WHERE id = ?1"),
+                [scene_id],
+                |row| Scene::try_from(row),
+            )?;
+            let scene_lineage =
+                resolve_branch_lineage_in_conn(conn, Some(&scene.project_id), &scene.branch_id)?;
+            anyhow::ensure!(
+                scene.project_id == promise.project_id
+                    && scene_lineage.iter().any(|b| b == &promise.branch_id),
+                "promise evidence must belong to the same project and branch"
+            );
+            if let Some(at) = &at {
+                anyhow::ensure!(
+                    at.book_number == scene.book_number
+                        && at.chapter_number == scene.chapter_number
+                        && at
+                            .scene_order
+                            .is_none_or(|order| order == scene.scene_order),
+                    "promise placement must match its evidence scene"
+                );
+            }
+            at = Some(StoryPlacement {
+                book_number: scene.book_number,
+                chapter_number: scene.chapter_number,
+                scene_order: Some(scene.scene_order),
+                note: at.and_then(|p| p.note),
+            });
+        }
+        if let Some(at) = &at {
+            anyhow::ensure!(
+                at.book_number > 0
+                    && (0..CHAPTER_RADIX as i32).contains(&at.chapter_number)
+                    && at
+                        .scene_order
+                        .is_none_or(|s| (0..SCENE_RADIX as i32).contains(&s)),
+                "promise placement is out of range"
+            );
+            anyhow::ensure!(
+                story_index(
+                    at.book_number,
+                    at.chapter_number,
+                    at.scene_order.unwrap_or((SCENE_RADIX - 1) as i32)
+                ) >= story_index_from_placement(&promise.planted_at),
+                "promise event cannot precede its planting"
+            );
+        }
+        if let Some(id) = &input.replaces_event_id {
+            anyhow::ensure!(
+                promise.status_history.iter().any(|e| &e.id == id)
+                    && !promise
+                        .status_history
+                        .iter()
+                        .any(|e| e.replaces_event_id.as_ref() == Some(id)),
+                "replacement must name a current event of this promise"
+            );
+        }
+        let now = chrono::Utc::now();
+        let mirror_at = at.clone();
+        let mirror_project_id = promise.project_id.clone();
+        let mirror_branch_id = promise.branch_id.clone();
+        let mirror_promise_id = promise.id.clone();
+        let mirror_status = input.status.clone();
+        let mirror_replaces_event_id = input.replaces_event_id.clone();
+        let mirror_source_scene_id = input.source_scene_id.clone();
+        promise.status_history.push(PromiseStatusEvent {
+            id: mint_id("promise_event"),
+            previous_status: promise.status.clone(),
+            status: input.status.clone(),
+            at,
+            source_scene_id: input.source_scene_id,
+            note: input.note,
+            replaces_event_id: input.replaces_event_id,
+            recorded_at: now.to_rfc3339(),
+        });
+        let status = promise.status_at(i64::MAX).unwrap_or(&input.status);
+        conn.execute("UPDATE narrative_promise SET status = ?1, status_history = ?2, updated_at = ?3 WHERE id = ?4",
+            rusqlite::params![status, serde_json::to_string(&promise.status_history)?, timestamp_to_micros(now), &promise.id])?;
+        let operation = match mirror_status.trim().to_ascii_lowercase().as_str() {
+            "plant" | "planted" => PromiseOperation::Plant,
+            "payoff" | "paid" | "paid_off" | "paid-off" | "fulfilled" => PromiseOperation::Payoff,
+            "abandon" | "abandoned" => PromiseOperation::Abandon,
+            _ => PromiseOperation::Reinforce,
+        };
+        let revision_id = format!(
+            "legacy:promise:{}:{}:{}:{mirror_replaces_event_id:?}",
+            mirror_promise_id,
+            mirror_status,
+            mirror_at.is_some()
+        );
+        let placement = mirror_at.unwrap_or(StoryPlacement {
+            book_number: 1,
+            chapter_number: 1,
+            scene_order: None,
+            note: None,
+        });
+        let claim = legacy_claim(
+            &mirror_project_id,
+            &mirror_branch_id,
+            &revision_id,
+            mirror_source_scene_id.as_deref(),
+            &placement,
+            ClaimEntity::Resolved {
+                id: mirror_promise_id.clone(),
+            },
+            ClaimAssertion::Promise {
+                operation,
+                thread: ClaimEntity::Resolved {
+                    id: mirror_promise_id.clone(),
+                },
+            },
+            None,
+            1,
+        );
+        let snapshot_claim = legacy_snapshot_claim(
+            &mirror_project_id,
+            &mirror_branch_id,
+            &revision_id,
+            mirror_source_scene_id.as_deref(),
+            &placement,
+            &mirror_promise_id,
+            "legacy.narrative_promise".to_string(),
+            &promise,
+            None,
+            0,
+        )?;
+        let mirrored = mirror_legacy_claims_in_tx(
+            conn,
+            &mirror_project_id,
+            &mirror_branch_id,
+            &revision_id,
+            mirror_source_scene_id.as_deref(),
+            vec![snapshot_claim, claim],
+        )?;
+        if mirrored.is_some() {
+            mark_legacy_rows_mapped_in_conn(
+                conn,
+                &mirror_project_id,
+                &mirror_branch_id,
+                &[("narrative_promise".to_string(), promise.id.clone())],
+                timestamp_to_micros(chrono::Utc::now()),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Reject a hand-written status change on a McKee project.
+    ///
+    /// A McKee project's promise status is system-written from the saving
+    /// Scene's confirmed realized events; letting `update_promise_status` (or an
+    /// `update_entity` status write) advance it by hand would bypass the report
+    /// and the plan comparison. A no-op call (the stored status already equals
+    /// the requested one, with no replacement event) is allowed so an idempotent
+    /// caller is not punished. Non-McKee projects are unchanged.
+    pub(crate) fn ensure_manual_promise_status_allowed_in_conn(
+        conn: &rusqlite::Connection,
+        input: &spindle_core::models::UpdatePromiseStatusInput,
+    ) -> Result<()> {
+        let row: Option<(String, String)> = conn
+            .query_row(
+                "SELECT project_id, status FROM narrative_promise WHERE id = ?1",
+                [&input.narrative_promise_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional_inner()?;
+        let Some((project_id, current_status)) = row else {
+            // The write primitive reports an unknown promise.
+            return Ok(());
+        };
+        if !project_is_mckee_in_conn(conn, &project_id)? {
+            return Ok(());
+        }
+        if input.replaces_event_id.is_none() && current_status.trim() == input.status.trim() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "narrative promise status is system-written on a McKee project: report the event in \
+             the saving Scene's realized_report (commit_scene continuity.realized_report or \
+             authoring_save_scene_draft.realized_report) instead of changing it by hand. \
+             Re-saving a Scene's report appends any corrective status history; \
+             update_promise_status and update_entity promise-status writes are rejected here."
+        )
+    }
+
+    pub async fn update_promise_status(
+        &self,
+        input: &spindle_core::models::UpdatePromiseStatusInput,
+    ) -> Result<()> {
+        let input = input.clone();
         self.inner
             .pool
             .write(move |conn| {
                 Ok((|| -> Result<()> {
                     let tx = conn.transaction()?;
-                    let mut promise = tx.query_row(
-                        &format!("SELECT {NARRATIVE_PROMISE_COLUMNS} FROM narrative_promise WHERE id = ?1"),
-                        [&input.narrative_promise_id], |row| NarrativePromise::try_from(row))?;
-                    let mut at = input.at;
-                    if let Some(scene_id) = &input.source_scene_id {
-                        let scene = tx.query_row(&format!("SELECT {SCENE_COLUMNS} FROM scene WHERE id = ?1"),
-                            [scene_id], |row| Scene::try_from(row))?;
-                        let scene_lineage =
-                            resolve_branch_lineage_in_conn(&tx, Some(&scene.project_id), &scene.branch_id)?;
-                        anyhow::ensure!(
-                            scene.project_id == promise.project_id
-                                && scene_lineage.iter().any(|b| b == &promise.branch_id),
-                            "promise evidence must belong to the same project and branch"
-                        );
-                        if let Some(at) = &at {
-                            anyhow::ensure!(at.book_number == scene.book_number && at.chapter_number == scene.chapter_number
-                                && at.scene_order.is_none_or(|order| order == scene.scene_order),
-                                "promise placement must match its evidence scene");
-                        }
-                        at = Some(StoryPlacement { book_number: scene.book_number, chapter_number: scene.chapter_number,
-                            scene_order: Some(scene.scene_order), note: at.and_then(|p| p.note) });
-                    }
-                    if let Some(at) = &at {
-                        anyhow::ensure!(at.book_number > 0 && (0..CHAPTER_RADIX as i32).contains(&at.chapter_number)
-                            && at.scene_order.is_none_or(|s| (0..SCENE_RADIX as i32).contains(&s)),
-                            "promise placement is out of range");
-                        anyhow::ensure!(story_index(at.book_number, at.chapter_number, at.scene_order.unwrap_or((SCENE_RADIX - 1) as i32))
-                            >= story_index_from_placement(&promise.planted_at), "promise event cannot precede its planting");
-                    }
-                    if let Some(id) = &input.replaces_event_id {
-                        anyhow::ensure!(promise.status_history.iter().any(|e| &e.id == id)
-                            && !promise.status_history.iter().any(|e| e.replaces_event_id.as_ref() == Some(id)),
-                            "replacement must name a current event of this promise");
-                    }
-                    let now = chrono::Utc::now();
-                    let mirror_at = at.clone();
-                    let mirror_project_id = promise.project_id.clone();
-                    let mirror_branch_id = promise.branch_id.clone();
-                    let mirror_promise_id = promise.id.clone();
-                    let mirror_status = input.status.clone();
-                    let mirror_replaces_event_id = input.replaces_event_id.clone();
-                    let mirror_source_scene_id = input.source_scene_id.clone();
-                    promise.status_history.push(PromiseStatusEvent {
-                        id: mint_id("promise_event"), previous_status: promise.status.clone(),
-                        status: input.status.clone(), at, source_scene_id: input.source_scene_id,
-                        note: input.note, replaces_event_id: input.replaces_event_id, recorded_at: now.to_rfc3339(),
-                    });
-                    let status = promise.status_at(i64::MAX).unwrap_or(&input.status);
-                    tx.execute("UPDATE narrative_promise SET status = ?1, status_history = ?2, updated_at = ?3 WHERE id = ?4",
-                        rusqlite::params![status, serde_json::to_string(&promise.status_history)?, timestamp_to_micros(now), &promise.id])?;
-                    let operation = match mirror_status.trim().to_ascii_lowercase().as_str() {
-                        "plant" | "planted" => PromiseOperation::Plant,
-                        "payoff" | "paid" | "paid_off" | "paid-off" | "fulfilled" => {
-                            PromiseOperation::Payoff
-                        }
-                        "abandon" | "abandoned" => PromiseOperation::Abandon,
-                        _ => PromiseOperation::Reinforce,
-                    };
-                    let revision_id = format!(
-                        "legacy:promise:{}:{}:{}:{mirror_replaces_event_id:?}",
-                        mirror_promise_id, mirror_status, mirror_at.is_some()
-                    );
-                    let placement = mirror_at.unwrap_or(StoryPlacement {
-                        book_number: 1,
-                        chapter_number: 1,
-                        scene_order: None,
-                        note: None,
-                    });
-                    let claim = legacy_claim(
-                        &mirror_project_id,
-                        &mirror_branch_id,
-                        &revision_id,
-                        mirror_source_scene_id.as_deref(),
-                        &placement,
-                        ClaimEntity::Resolved {
-                            id: mirror_promise_id.clone(),
-                        },
-                        ClaimAssertion::Promise {
-                            operation,
-                            thread: ClaimEntity::Resolved {
-                                id: mirror_promise_id.clone(),
-                            },
-                        },
-                        None,
-                        1,
-                    );
-                    let snapshot_claim = legacy_snapshot_claim(
-                        &mirror_project_id,
-                        &mirror_branch_id,
-                        &revision_id,
-                        mirror_source_scene_id.as_deref(),
-                        &placement,
-                        &mirror_promise_id,
-                        "legacy.narrative_promise".to_string(),
-                        &promise,
-                        None,
-                        0,
-                    )?;
-                    let mirrored = mirror_legacy_claims_in_tx(
-                        &tx,
-                        &mirror_project_id,
-                        &mirror_branch_id,
-                        &revision_id,
-                        mirror_source_scene_id.as_deref(),
-                        vec![snapshot_claim, claim],
-                    )?;
-                    if mirrored.is_some() {
-                        mark_legacy_rows_mapped_in_conn(
-                            &tx,
-                            &mirror_project_id,
-                            &mirror_branch_id,
-                            &[("narrative_promise".to_string(), promise.id.clone())],
-                            timestamp_to_micros(chrono::Utc::now()),
-                        )?;
-                    }
+                    Self::ensure_manual_promise_status_allowed_in_conn(&tx, &input)?;
+                    Self::apply_promise_status_in_conn(&tx, &input)?;
                     tx.commit()?;
                     Ok(())
                 })())

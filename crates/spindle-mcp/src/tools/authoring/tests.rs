@@ -69,7 +69,7 @@ fn knowledge_learned_counts_toward_package_satisfaction() {
         realized_report: None,
     };
     assert_eq!(
-        super::authoring_structured_update_count(&base),
+        super::authoring_structured_update_count(&base, false),
         0,
         "an empty package is empty"
     );
@@ -81,12 +81,48 @@ fn knowledge_learned_counts_toward_package_satisfaction() {
             secret_of_fact_id: Some("canonical_fact:reinc".into()),
             reader_visible: Some(true),
         }],
+        ..base.clone()
+    };
+    assert_eq!(
+        super::authoring_structured_update_count(&with_reveal, false),
+        1,
+        "a knowledge_learned reveal satisfies the mandatory package"
+    );
+
+    // The McKee-only realized report satisfies the package on a McKee project
+    // and is inert on every other project.
+    let report = spindle_core::realized::RealizedReport {
+        value_turns: vec![spindle_core::realized::RealizedValueTurn {
+            axis: "trust".into(),
+            opening: spindle_core::charge::Charge::new(
+                spindle_core::charge::ChargeSign::Positive,
+                spindle_core::charge::ChargeDepth::Positive,
+            )
+            .unwrap(),
+            closing: spindle_core::charge::Charge::new(
+                spindle_core::charge::ChargeSign::Negative,
+                spindle_core::charge::ChargeDepth::Contrary,
+            )
+            .unwrap(),
+            gap: None,
+            turning_beat: None,
+            turning_beat_summary: None,
+        }],
+        ..Default::default()
+    };
+    let report_only = AuthoringSaveSceneDraftInput {
+        realized_report: Some(report),
         ..base
     };
     assert_eq!(
-        super::authoring_structured_update_count(&with_reveal),
+        super::authoring_structured_update_count(&report_only, false),
+        0,
+        "a non-McKee save cannot satisfy the package with a realized report"
+    );
+    assert_eq!(
+        super::authoring_structured_update_count(&report_only, true),
         1,
-        "a knowledge_learned reveal satisfies the mandatory package"
+        "a McKee save may satisfy the package with a realized report"
     );
 }
 

@@ -482,22 +482,6 @@ impl SqliteSpindleService {
             }
         }
 
-        // A McKee realized report's promise events are pre-validated here so an
-        // unusable report fails the save before any write (the report describes
-        // prose this save is about to create). Non-McKee projects skip this.
-        self.validate_realized_promise_events(
-            &save_input.project_id,
-            &branch_id,
-            spindle_core::models::StoryPlacement {
-                book_number: save_input.book_number,
-                chapter_number: save_input.chapter_number,
-                scene_order: Some(save_input.scene_order),
-                note: None,
-            },
-            save_input.realized_report.as_ref(),
-        )
-        .await?;
-
         before_scene_write().await;
 
         let (mut scene, created) = match receipt_claim {
@@ -583,18 +567,6 @@ impl SqliteSpindleService {
         {
             tracing::warn!(error = %error, "layered memory invalidation failed");
         }
-
-        // McKee: advance Narrative Promise status from the report's confirmed
-        // realized events, with this Scene recorded as the source scene, instead
-        // of the agent calling update_promise_status by hand (issue #32). This
-        // runs after the Scene write committed, so a failed save advances
-        // nothing.
-        self.apply_realized_promise_events(
-            &save_input.project_id,
-            &scene.id,
-            save_input.realized_report.as_ref(),
-        )
-        .await?;
 
         // Record the knowledge_learned package (design §2.3 path 2). Each entry
         // is written through the SAME service path record_knowledge uses, stamped

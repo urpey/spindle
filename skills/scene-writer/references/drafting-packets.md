@@ -39,8 +39,11 @@ canonical predicate 使用保留命名空間 `key_fact.<kind>:<作者 key>`，�
 
 `chapter_plan.scenes` 只暴露當前 Scene，並以 `scene_scope.mode =
 current_scene_only` 標記這次縮減是刻意的（非 McKee 專案沒有這個欄位）。
-`novel.realized_scenes` 目前只有 `{scene_order, summary}`；#32 會補上 realized
-Value Turn 與 Character Effect。
+`novel.realized_scenes` 的每一筆是 `{scene_order, summary, realized_report?}`；
+`realized_report` 就是該場儲存的 realized report（`value_turns` 的 axis、
+opening／closing Charge、gap、turning_beat，`character_effects`、
+`promise_events`、`key_fact_ids`）。沒有報告的場次會整個省略該欄位，
+不是空物件。
 
 ### Packet rollout boundary
 

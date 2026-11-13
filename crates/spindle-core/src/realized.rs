@@ -34,14 +34,73 @@ use crate::scene_value::SceneGap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// One of the four deterministic realized-report verify rules.
+///
+/// This is the single source of the rule's `check_type` name and of the repair
+/// action its suggestions carry, so the exported constants, the requested-check
+/// selection and the finding text cannot drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RealizedCheck {
+    /// Realized versus planned Value Turn.
+    ValueTurn,
+    /// A planned Key Fact the report does not list.
+    KeyFact,
+    /// A planned promise event the report does not list.
+    PromiseEvent,
+    /// Character Effect rules.
+    CharacterEffect,
+}
+
+impl RealizedCheck {
+    /// Every rule, in wire order.
+    pub const ALL: [Self; 4] = [
+        Self::ValueTurn,
+        Self::KeyFact,
+        Self::PromiseEvent,
+        Self::CharacterEffect,
+    ];
+
+    /// The consistency finding `check_type` and scene-verify check name.
+    pub const fn check_type(self) -> &'static str {
+        match self {
+            Self::ValueTurn => "realized_value_turn",
+            Self::KeyFact => "realized_key_fact",
+            Self::PromiseEvent => "realized_promise_event",
+            Self::CharacterEffect => "character_effect",
+        }
+    }
+
+    /// The repair action a finding for this rule carries.
+    pub const fn suggested_action(self) -> &'static str {
+        match self {
+            Self::ValueTurn => {
+                "revise the scene so it realizes the planned Value Turn, or re-plan the scene \
+                 (plan amendment) before drafting"
+            }
+            Self::KeyFact => {
+                "dramatise the planned Key Fact in the scene and list its canonical fact id in \
+                 the realized report, or re-plan the Key Fact's placement"
+            }
+            Self::PromiseEvent => {
+                "report the promise event the scene actually delivers, or re-plan the promise \
+                 placement"
+            }
+            Self::CharacterEffect => {
+                "report 'change' only where a planned change milestone lands, or re-plan the \
+                 character arc milestone"
+            }
+        }
+    }
+}
+
 /// Deterministic verify check: realized versus planned Value Turn.
-pub const REALIZED_VALUE_TURN_CHECK: &str = "realized_value_turn";
+pub const REALIZED_VALUE_TURN_CHECK: &str = RealizedCheck::ValueTurn.check_type();
 /// Deterministic verify check: a planned Key Fact the report does not list.
-pub const REALIZED_KEY_FACT_CHECK: &str = "realized_key_fact";
+pub const REALIZED_KEY_FACT_CHECK: &str = RealizedCheck::KeyFact.check_type();
 /// Deterministic verify check: a planned promise event the report does not list.
-pub const REALIZED_PROMISE_EVENT_CHECK: &str = "realized_promise_event";
+pub const REALIZED_PROMISE_EVENT_CHECK: &str = RealizedCheck::PromiseEvent.check_type();
 /// Deterministic verify check: Character Effect rules.
-pub const CHARACTER_EFFECT_CHECK: &str = "character_effect";
+pub const CHARACTER_EFFECT_CHECK: &str = RealizedCheck::CharacterEffect.check_type();
 
 /// One realized Value Turn on one planned Value Axis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -69,21 +128,25 @@ pub struct RealizedValueTurn {
 
 /// What a written Scene did to one character.
 ///
-/// `Change` is character growth and is accepted only at a planned arc milestone
-/// of kind `change`; `reveal` is a revelation about a character and never
-/// substitutes for a planned change (GLOSSARY: Character Effect).
+/// The closed set is `reinforce` (the Scene reinforced what the character
+/// already is), `reveal` (the Scene revealed something about the character),
+/// `contradict` (the Scene put the character's contradiction under pressure),
+/// `change` (the Scene changed the character, earned only at a planned change
+/// milestone) and `none` (the Scene left the character as they were).
+///
+/// The variants deliberately carry no individual doc comments: schemars would
+/// emit one `oneOf` const object per variant, which the Gemini schema sanitiser
+/// degrades to a plain `object`, so the closed set would vanish from input
+/// schemas. Keeping the variants bare emits one closed string enum instead (the
+/// same reason `SubplotJob` does it). A planned `change` is never downgraded to
+/// `reveal` (GLOSSARY: Character Effect).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CharacterEffect {
-    /// The Scene reinforced what the character already is.
     Reinforce,
-    /// The Scene revealed something about the character.
     Reveal,
-    /// The Scene put the character's contradiction under pressure.
     Contradict,
-    /// The Scene changed the character; earned only at a planned change milestone.
     Change,
-    /// The Scene left the character as they were.
     None,
 }
 
@@ -129,18 +192,21 @@ pub struct RealizedCharacterEffect {
 }
 
 /// A Narrative Promise event a written Scene actually advanced.
+///
+/// The closed set is `setup` (the promise was planted), `reinforcement`,
+/// `payoff`, `subversion` and `abandonment`.
+///
+/// The variants deliberately carry no individual doc comments, for the same
+/// schema reason as [`CharacterEffect`]: a bare fieldless enum emits one closed
+/// string enum and survives the Gemini schema sanitiser, while per-variant docs
+/// degrade to a plain `object` in input schemas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RealizedPromiseEventKind {
-    /// The promise was planted (setup).
     Setup,
-    /// The promise was reinforced.
     Reinforcement,
-    /// The promise paid off.
     Payoff,
-    /// The promise was subverted.
     Subversion,
-    /// The promise was abandoned.
     Abandonment,
 }
 
@@ -457,5 +523,58 @@ mod tests {
             ),
             "contrary -> negation of the negation"
         );
+    }
+
+    #[test]
+    fn effect_and_promise_event_schemas_are_one_closed_string_enum() {
+        // Per-variant doc comments would emit one `oneOf` const object per
+        // variant, which the Gemini schema sanitiser turns into a plain
+        // `object`; the closed set must survive as a single string enum.
+        for (name, schema) in [
+            (
+                "character_effect",
+                serde_json::to_value(schemars::schema_for!(CharacterEffect)).unwrap(),
+            ),
+            (
+                "realized_promise_event",
+                serde_json::to_value(schemars::schema_for!(RealizedPromiseEventKind)).unwrap(),
+            ),
+        ] {
+            assert_eq!(schema["type"], "string", "{name}: {schema}");
+            assert!(
+                schema.get("oneOf").is_none(),
+                "{name} must not emit per-variant oneOf: {schema}"
+            );
+            assert!(
+                schema["enum"]
+                    .as_array()
+                    .is_some_and(|values| values.len() == 5),
+                "{name} must carry the closed five-value set: {schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn check_mapping_matches_the_exported_constants() {
+        let consts = [
+            REALIZED_VALUE_TURN_CHECK,
+            REALIZED_KEY_FACT_CHECK,
+            REALIZED_PROMISE_EVENT_CHECK,
+            CHARACTER_EFFECT_CHECK,
+        ];
+        for (check, expected) in RealizedCheck::ALL.iter().zip(consts) {
+            assert_eq!(check.check_type(), expected);
+            assert!(!check.suggested_action().trim().is_empty());
+        }
+        let names: std::collections::BTreeSet<_> = RealizedCheck::ALL
+            .iter()
+            .map(|check| check.check_type())
+            .collect();
+        assert_eq!(names.len(), RealizedCheck::ALL.len());
+        let actions: std::collections::BTreeSet<_> = RealizedCheck::ALL
+            .iter()
+            .map(|check| check.suggested_action())
+            .collect();
+        assert_eq!(actions.len(), RealizedCheck::ALL.len());
     }
 }

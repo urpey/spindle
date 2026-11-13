@@ -26,7 +26,7 @@ Design narrative structure that builds tension, maintains momentum, and delivers
 - **Current arc**: Flexible book outline (`set_book_outline`), active plot lines, conflicts, and arc milestones. Name the central question, irreversible character changes, promises to advance, and exit condition.
 - **Next episode**: Concrete `plan_chapter` scene list with POV, location, content rating, purpose, one local satisfaction, and one reason to return (curiosity, emotional anticipation, humor, or consequence — never force a cliffhanger where the contract does not want one).
 
-After each episode, compare intent with accepted prose and call `update_promise_status` (`source_scene_id` or `at` placement; use `replaces_event_id` to correct an erroneous event) only for threads that genuinely moved.
+After each episode, compare intent with accepted prose. On a McKee-structured project the system writes a promise's status from the saving Scene's confirmed `realized_report` events, with the Scene recorded as `source_scene_id`; do not call `update_promise_status` there. On other projects call `update_promise_status` (`source_scene_id` or `at` placement; use `replaces_event_id` to correct an erroneous event) only for threads that genuinely moved.
 
 ## Building the Plot Architecture
 
@@ -40,7 +40,7 @@ Create `main`, `parallel`, `mirror`, `conflict`, and `romantic` plot lines with 
 Define `theme_statement`, `thesis_antithesis` (exploring both sides without preaching), `introduction_point`, and `resolution_point`. Pair themes with recurring symbols via `create_motif` (or `batch_create_motifs`) and set `max_uses_per_chapter`.
 
 ### 4. Narrative Promises (`create_narrative_promise`, `update_promise_status`)
-Plant `chekhov_gun`, `foreshadowing`, `setup`, and `question_raised` promises (or seed in bulk via `batch_create_narrative_promises`) and advance their lifecycle (`planted` -> `reinforced` -> `paid_off` / `subverted` / `abandoned`) with `update_promise_status`.
+Plant `chekhov_gun`, `foreshadowing`, `setup`, and `question_raised` promises (or seed in bulk via `batch_create_narrative_promises`). Their lifecycle (`planted` -> `reinforced` -> `paid_off` / `subverted` / `abandoned`) is system-written on a McKee project from confirmed realized events; use the direct `update_promise_status` only for non-McKee projects and other flows.
 
 ### 5. Pacing Architecture (`create_pacing_config`, `create_pacing_curve`, `set_arc_pacing_constraints`)
 - `create_pacing_config`: Set `total_planned_books`, `avg_chapters_per_book`, `avg_scenes_per_chapter`, and `tension_model` (`escalating`, `wave`, `slow_burn`, `explosive`).

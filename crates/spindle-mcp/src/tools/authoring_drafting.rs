@@ -182,7 +182,10 @@ pub(super) fn authoring_save_scene_input(
     }
 }
 
-pub(super) fn authoring_structured_update_count(input: &AuthoringSaveSceneDraftInput) -> usize {
+pub(super) fn authoring_structured_update_count(
+    input: &AuthoringSaveSceneDraftInput,
+    mckee_structured: bool,
+) -> usize {
     input.character_states.len()
         + input.canonical_facts.len()
         + input.relationship_updates.len()
@@ -190,13 +193,16 @@ pub(super) fn authoring_structured_update_count(input: &AuthoringSaveSceneDraftI
         + input.continuity_notes.len()
         + input.knowledge_learned.len()
         // A McKee realized report is structured content about the saved Scene,
-        // so it satisfies the mandatory package on its own: a Scene whose prose
-        // turns the plan without changing canon still reports what it did.
+        // so on a McKee project it satisfies the mandatory package on its own: a
+        // Scene whose prose turns the plan without changing canon still reports
+        // what it did. On every other project the field is inert, so it must not
+        // satisfy the gate there.
         + usize::from(
-            input
-                .realized_report
-                .as_ref()
-                .is_some_and(|report| !report.is_empty()),
+            mckee_structured
+                && input
+                    .realized_report
+                    .as_ref()
+                    .is_some_and(|report| !report.is_empty()),
         )
 }
 
@@ -909,19 +915,23 @@ impl ToolRouter {
         H: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ()>,
     {
-        let structured_update_count = authoring_structured_update_count(&input);
+        let project_id = input.project_id.clone();
+        let repo = self.service.repository();
+        let mckee_structured = repo.get_project(&project_id).await?.mckee_structured;
+        let structured_update_count = authoring_structured_update_count(&input, mckee_structured);
         if structured_update_count == 0 {
             anyhow::bail!(
                 "authoring_save_scene_draft requires a structured continuity package: \
                  provide character_states, canonical_facts, relationship_updates, beats, \
-                 continuity_notes, or (on a McKee project) a realized_report. If the scene \
-                 introduces no durable canon changes, add a continuity_notes entry saying \
-                 that explicitly."
+                 continuity_notes{}. If the scene introduces no durable canon changes, add a \
+                 continuity_notes entry saying that explicitly.",
+                if mckee_structured {
+                    ", or a realized_report"
+                } else {
+                    ""
+                }
             );
         }
-
-        let project_id = input.project_id.clone();
-        let repo = self.service.repository();
         let run_id = match input.run_id.clone() {
             Some(rid) if !rid.is_empty() => rid,
             _ => repo
@@ -1051,6 +1061,7 @@ impl ToolRouter {
             relationship_updates: input.relationship_updates.clone(),
             beats: input.beats.clone(),
             continuity_notes: input.continuity_notes.clone(),
+            realized_report: input.realized_report.clone(),
         });
         artifact.save_draft_output = Some(save_output.clone());
         artifact.commit_output = None;

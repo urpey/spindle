@@ -614,17 +614,6 @@ impl SqliteSpindleService {
                 .map_err(|error| anyhow::anyhow!("invalid quantity state: {error}"))?;
         }
 
-        // A McKee realized report's promise events are pre-validated before the
-        // write transaction opens: an unusable report must not leave prose (or a
-        // half-applied promise history) behind. Non-McKee projects skip this.
-        self.validate_realized_promise_events(
-            &input.project_id,
-            &branch.id,
-            scene_placement(book_number, chapter_number, scene_order),
-            input.continuity.realized_report.as_ref(),
-        )
-        .await?;
-
         // Deterministic gates. A blocking failure returns findings without
         // opening the write transaction, so nothing is persisted.
         let mut issues: Vec<CommitSceneIssue> = Vec::new();
@@ -1042,18 +1031,6 @@ impl SqliteSpindleService {
             .await?;
 
         let (output, scene_id, committed_book, committed_chapter, committed_order) = output;
-
-        // McKee: advance Narrative Promise status from the report's confirmed
-        // realized events, with this committed Scene recorded as the source
-        // scene, instead of the agent calling update_promise_status by hand
-        // (issue #32). Nothing runs for a blocked or dry-run commit (they return
-        // above) and nothing runs for a non-McKee project.
-        self.apply_realized_promise_events(
-            &input.project_id,
-            &scene_id,
-            input.continuity.realized_report.as_ref(),
-        )
-        .await?;
 
         self.log_scene_commit_activity(
             &log_project_id,

@@ -1,6 +1,31 @@
 {
-  "authoring_execute_next": ["/properties/mode"],
-  "authoring_prepare_run": ["/properties/mining_policy", "/properties/checkpoint_policy", "/properties/replan_policy"],
-  "authoring_start_run": ["/properties/mode", "/properties/mining_policy", "/properties/checkpoint_policy", "/properties/replan_policy"],
-  "prepare_scene": ["/properties/intent"]
+  "authoring_execute_next": [
+    "/properties/mode"
+  ],
+  "authoring_prepare_run": [
+    "/properties/mining_policy",
+    "/properties/checkpoint_policy",
+    "/properties/replan_policy"
+  ],
+  "authoring_save_scene_draft": [
+    "/properties/realized_report/properties/character_effects/items/properties/effect",
+    "/properties/realized_report/properties/promise_events/items/properties/event"
+  ],
+  "authoring_start_run": [
+    "/properties/mode",
+    "/properties/mining_policy",
+    "/properties/checkpoint_policy",
+    "/properties/replan_policy"
+  ],
+  "commit_scene": [
+    "/properties/continuity/properties/realized_report/properties/character_effects/items/properties/effect",
+    "/properties/continuity/properties/realized_report/properties/promise_events/items/properties/event"
+  ],
+  "prepare_scene": [
+    "/properties/intent"
+  ],
+  "save_scene_draft": [
+    "/properties/realized_report/properties/character_effects/items/properties/effect",
+    "/properties/realized_report/properties/promise_events/items/properties/event"
+  ]
 }

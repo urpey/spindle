@@ -1343,11 +1343,14 @@ serde-defaulted sections:
 - `key_fact_ids`: the planned **Key Facts** the Scene dramatised (canonical-fact
   ids).
 
-The report rides both continuity-carrying save paths: `commit_scene`'s
-`CommitSceneContinuityPackage.realized_report` and
+The report rides all three continuity-carrying save entry points:
+`commit_scene`'s `CommitSceneContinuityPackage.realized_report`,
 `authoring_save_scene_draft`'s structured `realized_report` field (which also
-counts as structured continuity content, so a McKee Scene that only reports its
-turn still satisfies the mandatory package). It is persisted on the Scene row
+counts as structured continuity content on a McKee project, so a McKee Scene that
+only reports its turn still satisfies the mandatory package; it is inert on a
+non-McKee project), and the raw `save_scene_draft` field used by the agent
+drafting path and standalone saves. The raw path carries no continuity package
+but does apply realized promise status. It is persisted on the Scene row
 and read back additively: `get_entity(table="scene")` carries `realized_report`
 when set, `get_scene_context`/`get_chapter_briefing` carry it on each earlier
 Scene's `novel.realized_scenes` entry, and an unset report is skipped entirely —
@@ -1356,7 +1359,11 @@ byte-identically. A save replaces the stored report (the report describes the
 text just saved); omitting it leaves the Scene with none.
 
 Four deterministic checks join the fast scene-verify subset
-(`SCENE_VERIFY_CHECKS`, no model calls) and run only for a McKee project. All
+(`SCENE_VERIFY_CHECKS`, no model calls) and run only for a McKee project when a
+caller asks for them in `check_consistency` (the run's verify step does). They do
+not run inside a bare `commit_scene`/`save_scene_draft` outside a run, so the
+"mismatch cannot commit" guarantee is the run's bounded revise loop; parked
+findings at commit are #33. All
 four findings are `error`, use the existing consistency-finding shape and are
 attributed to the Scene (`entity_ids` starts with the Scene id):
 
@@ -1365,7 +1372,7 @@ attributed to the Scene (`entity_ids` starts with the Scene id):
 | `realized_value_turn` | A planned Value Axis with no realized turn, a realized opening/closing **Charge** that differs from the plan (exact comparison), a planned Gap the report never mentions, a realized Turning Beat position that differs from the plan, a report with no Value Turn at all for a Scene that has a planned one, or a realized axis the plan does not contain. |
 | `realized_key_fact` | A planned Key Fact due in this Scene (the same due rule the drafting packet uses) that the report does not list in `key_fact_ids`. |
 | `realized_promise_event` | A promise planned to be planted or paid off in this Scene (an exact Scene placement, not a chapter-wide one) that the report does not report as the matching event. |
-| `character_effect` | `change` reported where no planned arc milestone of kind `change` is placed, or a planned change milestone reported as anything other than `change` (including `reveal`, and including no effect at all). |
+| `character_effect` | `change` reported where no planned arc milestone of kind `change` is placed (a milestone pinned to the Scene, or placed chapter-wide in that chapter), or a planned Scene-level change milestone reported as anything other than `change` (including `reveal`, and including no effect at all). A chapter-level milestone is satisfied by `change` in any Scene of the chapter; the reportable mismatch is a Scene claiming only `reveal` while no Scene in the chapter reports `change`. |
 
 Comparison tolerances are deliberate and documented on
 `spindle_core::realized`: Charge comparison is exact (a closed typed pair);
@@ -1376,26 +1383,33 @@ a Key Fact by the reserved predicate namespace, so an ordinary planned fact is
 never demanded.
 
 **Promise status is system-written.** After a confirmed realized promise event
-saves through either path, the system itself advances that promise's status
-through the existing promise status-history mechanism, with the saved Scene as
-`source_scene_id`: `setup` → `planted`, `reinforcement` → `reinforced`, `payoff`
-→ `paid_off`, `subversion` → `subverted`, `abandonment` → `abandoned`. The agent
-no longer calls `update_promise_status` for a McKee scene. The report is
-pre-validated before the prose write (the promise must exist, be on a branch the
-Scene inherits, and not be planted after the Scene), so an unusable event fails
-the save before it writes anything; a re-save of the same Scene with the same
-event is idempotent. Non-McKee projects never advance a status from a report, and
-the `update_promise_status` tool keeps working for every other flow.
+saves through any of the three entry points, the system itself advances that
+promise's status through the existing promise status-history mechanism, with the
+saved Scene as `source_scene_id`: `setup` → `planted`, `reinforcement` →
+`reinforced`, `payoff` → `paid_off`, `subversion` → `subverted`, `abandonment` →
+`abandoned`. The agent no longer calls `update_promise_status` for a McKee scene:
+on a McKee project that tool (and an `update_entity` promise-status write) is
+rejected with an error that points at the realized-events path, except for a
+no-op status call. Validation and status application run in the same transaction
+as the Scene write (the promise must exist, be on a branch the Scene inherits,
+and not be planted after the Scene), so an unusable event rolls the Scene row
+back with the status rows. A re-save of the same Scene with the same event is
+idempotent; a re-save whose report no longer claims a previously reported event
+appends a corrective status-history event that restores the pre-Scene status
+(append-only: the original event stays as history). Non-McKee projects never
+advance a status from a report, and their `update_promise_status` flow is
+unchanged.
 
 **Revise budget.** A McKee run must prepare with a non-zero
 `max_revise_attempts` (`1` or `2`): `authoring_prepare_run` reports a missing
 requirement and `ready_to_draft=false`, and `authoring_start_run` therefore
 refuses to start. A zero/absent run budget means a Scene that realized a turn
 different from its plan would have no bounded revise attempt before the
-checkpoint. The `authoring_prepare_run` tool resolves an absent budget to the
-run default of zero, so an omitted field blocks a McKee run just as an explicit
-`0` does; the internal planning readiness probe is not a run and keeps reporting
-planning readiness. Non-McKee projects are unaffected.
+checkpoint. An absent budget means the run default of zero, so an omitted field
+blocks a McKee run just as an explicit `0` does at both `authoring_prepare_run`
+and `planning_readiness`: planning readiness passes no budget, so it now reports
+the same missing requirement `authoring_start_run` would refuse on instead of
+advertising a ready range. Non-McKee projects are unaffected.
 
 The hidden layer and the unconscious desire are not plain columns: they are
 registered as secret canonical facts (`secret = 1`, one `knowledge_fact` row

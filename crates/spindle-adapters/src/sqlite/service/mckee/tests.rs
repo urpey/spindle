@@ -15,11 +15,15 @@
 use super::*;
 use spindle_core::charge::{Charge, ChargeDepth, ChargeSign};
 use spindle_core::models::{
-    CharacterArcMilestone, CheckConsistencyInput, CommitSceneInput, ConsistencyScopeInput,
+    CharacterArcMilestone, CheckConsistencyInput, CommitSceneCharacterStateEntry,
+    CommitSceneCharacterStatePatch, CommitSceneInput, ConsistencyScopeInput,
     CreateCharacterArcInput, CreateCharacterInput, CreateLocationInput,
-    CreateNarrativePromisesInput, CreateProjectInput, PlanChapterInput, PlanChapterSceneInput,
-    ReaderContract, RegisterCanonicalFactInput, SCENE_VERIFY_CHECKS, SaveSceneDraftInput,
-    StoryPlacement,
+    CreateNarrativePromiseInput, CreateNarrativePromisesInput, CreateProjectInput,
+    PlanChapterInput, PlanChapterSceneInput, ReaderContract, RegisterCanonicalFactInput,
+    SCENE_VERIFY_CHECKS, SaveSceneDraftInput, StoryPlacement, UpdatePromiseStatusInput,
+};
+use spindle_core::planning::{
+    BeginPlanningInput, PlanningReadinessInput, PlanningScope, PlanningTargetRange,
 };
 use spindle_core::realized::{
     CHARACTER_EFFECT_CHECK, CharacterEffect, REALIZED_KEY_FACT_CHECK, REALIZED_PROMISE_EVENT_CHECK,
@@ -928,6 +932,21 @@ async fn a_mckee_run_requires_a_non_zero_revise_budget_at_prepare_time() {
         zero.missing_requirements
     );
 
+    // An absent budget is the run default of zero, so it blocks too.
+    let absent = prepare_run_for(&svc, &fixture.project_id, None).await;
+    assert!(
+        !absent.ready_to_draft,
+        "an absent budget blocks a McKee run"
+    );
+    assert!(
+        absent
+            .missing_requirements
+            .iter()
+            .any(|requirement| requirement.contains("max_revise_attempts")),
+        "{:?}",
+        absent.missing_requirements
+    );
+
     // A real budget removes that requirement (other route requirements may
     // still apply on this model-router-less fixture).
     let non_zero = prepare_run_for(&svc, &fixture.project_id, Some(1)).await;
@@ -964,4 +983,418 @@ async fn a_mckee_run_requires_a_non_zero_revise_budget_at_prepare_time() {
         "{:?}",
         legacy.missing_requirements
     );
+}
+
+#[tokio::test]
+async fn mckee_planning_readiness_enforces_the_revise_budget() {
+    // Review fix (issue #32): readiness must enforce the same McKee budget
+    // requirement as the run, not pass `None` and advertise a ready range the
+    // run would refuse.
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    let scope = PlanningScope {
+        project_id: fixture.project_id.clone(),
+        branch_id: fixture.branch_id.clone(),
+    };
+    let session = svc
+        .begin_planning(BeginPlanningInput {
+            premise: "Readiness must match the run gate.".into(),
+            scope: Some(scope.clone()),
+        })
+        .await
+        .unwrap();
+    let readiness = svc
+        .planning_readiness(PlanningReadinessInput {
+            session_id: session.id,
+            scope: Some(scope),
+            target_range: Some(PlanningTargetRange {
+                book_number: 1,
+                chapter_start: 1,
+                chapter_end: 1,
+                scenes_per_chapter: 2,
+            }),
+            mining_policy: None,
+            checkpoint_policy: None,
+        })
+        .await
+        .unwrap();
+    assert!(
+        !readiness.ready_to_draft,
+        "a McKee range without a revise budget is not ready: {readiness:?}"
+    );
+    assert!(
+        readiness
+            .prepare_run
+            .missing_requirements
+            .iter()
+            .any(|requirement| requirement.contains("max_revise_attempts")),
+        "{:?}",
+        readiness.prepare_run.missing_requirements
+    );
+}
+
+#[tokio::test]
+async fn a_chapter_level_change_milestone_is_satisfied_anywhere_in_the_chapter() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    // A chapter-level `change` milestone (`scene_order: None`) is the shape
+    // planning accepts; it is not pinned to one Scene.
+    svc.create_character_arc(CreateCharacterArcInput {
+        project_id: fixture.project_id.clone(),
+        character_id: fixture.ben.clone(),
+        arc_type: "growth".into(),
+        starting_state: "Guarded".into(),
+        ending_state: "Trusting".into(),
+        milestones: vec![CharacterArcMilestone {
+            label: "Chapter turn".into(),
+            placement: Some(StoryPlacement {
+                book_number: 1,
+                chapter_number: 1,
+                scene_order: None,
+                note: None,
+            }),
+            description: "Ben chooses to testify".into(),
+            unlocks: Vec::new(),
+            reached_at: None,
+            kind: Some(spindle_core::models::ArcMilestoneKind::Change),
+        }],
+        thematic_purpose: "Trust is earned in public".into(),
+        connected_theme_ids: Vec::new(),
+    })
+    .await
+    .unwrap();
+
+    // Scene 1 also has Ada's Scene-level change milestone, so every Scene 1
+    // report must satisfy it; the chapter-level rule only concerns Ben.
+    let report = |effects: Vec<RealizedCharacterEffect>| RealizedReport {
+        value_turns: Vec::new(),
+        character_effects: effects,
+        promise_events: Vec::new(),
+        key_fact_ids: Vec::new(),
+    };
+    let ada_change = || RealizedCharacterEffect {
+        character_id: fixture.ada.clone(),
+        effect: CharacterEffect::Change,
+        note: None,
+    };
+    let ben = |effect: CharacterEffect| RealizedCharacterEffect {
+        character_id: fixture.ben.clone(),
+        effect,
+        note: None,
+    };
+
+    // Only a reveal anywhere in the chapter: the finding is attributed to the
+    // Scene making the reveal claim.
+    save_mckee_scene(
+        &svc,
+        &fixture,
+        1,
+        Some(report(vec![ada_change(), ben(CharacterEffect::Reveal)])),
+    )
+    .await;
+    let issues = verify_scene(&svc, fixture.project_id(), 1, &[CHARACTER_EFFECT_CHECK]).await;
+    let findings = findings_of(&issues, CHARACTER_EFFECT_CHECK);
+    assert_eq!(findings.len(), 1, "{issues:?}");
+    assert!(
+        findings[0]
+            .message
+            .contains("chapter-level change milestone")
+            && findings[0].message.contains("only 'reveal'"),
+        "{issues:?}"
+    );
+    assert!(findings[0].entity_ids.contains(&fixture.ben));
+
+    // A `change` in another Scene of the chapter satisfies the milestone, so the
+    // reveal at Scene 1 is no longer a false error.
+    save_mckee_scene(
+        &svc,
+        &fixture,
+        2,
+        Some(report(vec![ben(CharacterEffect::Change)])),
+    )
+    .await;
+    let issues = verify_scene(&svc, fixture.project_id(), 1, &[CHARACTER_EFFECT_CHECK]).await;
+    assert!(
+        issues.is_empty(),
+        "a change elsewhere in the chapter clears the reveal: {issues:?}"
+    );
+    let issues = verify_scene(&svc, fixture.project_id(), 2, &[CHARACTER_EFFECT_CHECK]).await;
+    assert!(
+        issues.is_empty(),
+        "a change at a Scene in the chapter is accepted for a chapter-level milestone: {issues:?}"
+    );
+
+    // The same Scene reporting the change is accepted too.
+    save_mckee_scene(
+        &svc,
+        &fixture,
+        1,
+        Some(report(vec![ada_change(), ben(CharacterEffect::Change)])),
+    )
+    .await;
+    let issues = verify_scene(&svc, fixture.project_id(), 1, &[CHARACTER_EFFECT_CHECK]).await;
+    assert!(issues.is_empty(), "{issues:?}");
+}
+
+#[tokio::test]
+async fn a_failed_continuity_commit_rolls_back_the_scene_and_its_promise_status() {
+    // The report's status history is written in the Scene's save transaction.
+    // A later failure in the same commit unit (a foreign character state) must
+    // roll both the Scene row and the status rows back.
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    let before = svc
+        .repository
+        .get_narrative_promise(&fixture.promise_id)
+        .await
+        .unwrap();
+
+    let other = svc
+        .create_project(CreateProjectInput {
+            name: "Elsewhere".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Unrelated".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    let foreign_character = svc
+        .create_character(CreateCharacterInput {
+            project_id: other.project_id.clone(),
+            name: "Outsider".into(),
+            summary: "Not in this book".into(),
+            role: "support".into(),
+            realm: None,
+            aliases: Vec::new(),
+            voice_profile: Default::default(),
+            emotional_profile: Default::default(),
+            initial_state: None,
+        })
+        .await
+        .unwrap();
+
+    let mut continuity = spindle_core::models::CommitSceneContinuityPackage {
+        realized_report: Some(matching_report(&fixture)),
+        ..Default::default()
+    };
+    continuity.character_states = vec![CommitSceneCharacterStateEntry {
+        character_id: foreign_character.character_id,
+        changes: CommitSceneCharacterStatePatch::default(),
+    }];
+
+    let err = svc
+        .commit_scene(CommitSceneInput {
+            project_id: fixture.project_id.clone(),
+            branch_id: Some(fixture.branch_id.clone()),
+            preparation_id: None,
+            context_revision_token: None,
+            dependency_tokens: None,
+            scene_id: None,
+            book_number: Some(1),
+            chapter_number: Some(1),
+            scene_order: Some(1),
+            expected_scene_version: None,
+            full_text: "Ada follows the ledger to the tidal gate.".to_string(),
+            summary: "Ada follows the ledger".to_string(),
+            content_rating: spindle_core::models::ContentRating::General,
+            location_id: None,
+            tone: None,
+            authorship: spindle_core::models::SceneAuthorship::Assistant,
+            generation_receipt: None,
+            continuity,
+            beat_annotations: Vec::new(),
+            chapter_summary: None,
+            run_id: None,
+            expected_phase: None,
+            dry_run: false,
+            idempotency_key: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("does not belong to project"),
+        "{err}"
+    );
+
+    let scenes = svc
+        .repository
+        .list_scenes_by_project_and_branch(fixture.project_id(), &fixture.branch_id)
+        .await
+        .unwrap();
+    assert!(
+        scenes.is_empty(),
+        "the rolled-back Scene must not exist: {scenes:?}"
+    );
+    let promise = svc
+        .repository
+        .get_narrative_promise(&fixture.promise_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        promise.status, before.status,
+        "a failed unit must not advance the promise"
+    );
+    assert_eq!(
+        promise.status_history.len(),
+        before.status_history.len(),
+        "a failed unit must not leave a status event behind"
+    );
+}
+
+#[tokio::test]
+async fn resaving_a_scene_without_its_payoff_restores_the_pre_scene_status() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    let payoff_report = RealizedReport {
+        value_turns: vec![RealizedValueTurn {
+            axis: "trust".into(),
+            opening: contradictory(),
+            closing: contrary(),
+            gap: None,
+            turning_beat: Some(3),
+            turning_beat_summary: None,
+        }],
+        character_effects: Vec::new(),
+        promise_events: vec![RealizedPromiseEvent {
+            narrative_promise_id: fixture.promise_id.clone(),
+            event: RealizedPromiseEventKind::Payoff,
+            note: None,
+        }],
+        key_fact_ids: Vec::new(),
+    };
+    let scene_two = save_mckee_scene(&svc, &fixture, 2, Some(payoff_report)).await;
+    let paid = svc
+        .repository
+        .get_narrative_promise(&fixture.promise_id)
+        .await
+        .unwrap();
+    assert_eq!(paid.status, "paid_off");
+    let events_before = paid.status_history.len();
+
+    // Re-saving Scene 2 without the payoff must not leave a stale paid_off: an
+    // append-only corrective event restores the pre-Scene status.
+    save_mckee_scene(&svc, &fixture, 2, Some(RealizedReport::default())).await;
+    let restored = svc
+        .repository
+        .get_narrative_promise(&fixture.promise_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        restored.status, "planted",
+        "the pre-scene status is restored"
+    );
+    assert_eq!(
+        restored.status_history.len(),
+        events_before + 1,
+        "one corrective event is appended"
+    );
+    let corrective = restored.status_history.last().unwrap();
+    assert_eq!(corrective.status, "planted");
+    assert_eq!(corrective.previous_status, "paid_off");
+    assert_eq!(
+        corrective.source_scene_id.as_deref(),
+        Some(scene_two.as_str())
+    );
+    assert!(
+        corrective
+            .note
+            .as_deref()
+            .is_some_and(|note| note.contains("no longer reports")),
+        "{corrective:?}"
+    );
+    assert!(
+        restored
+            .status_history
+            .iter()
+            .any(|event| event.status == "paid_off"
+                && event.source_scene_id.as_deref() == Some(scene_two.as_str())),
+        "the original payoff event stays as history (append-only)"
+    );
+
+    // An unchanged re-save that still reports no event is a no-op.
+    let stable_events = restored.status_history.len();
+    save_mckee_scene(&svc, &fixture, 2, Some(RealizedReport::default())).await;
+    let stable = svc
+        .repository
+        .get_narrative_promise(&fixture.promise_id)
+        .await
+        .unwrap();
+    assert_eq!(stable.status, "planted");
+    assert_eq!(
+        stable.status_history.len(),
+        stable_events,
+        "a repeated removal does not append a second corrective event"
+    );
+}
+
+#[tokio::test]
+async fn a_mckee_project_rejects_manual_promise_status_changes() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    let err = svc
+        .update_promise_status(UpdatePromiseStatusInput {
+            narrative_promise_id: fixture.promise_id.clone(),
+            status: "paid_off".into(),
+            note: None,
+            at: None,
+            source_scene_id: None,
+            replaces_event_id: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("system-written") && err.to_string().contains("realized_report"),
+        "{err}"
+    );
+    // The stored status did not advance.
+    let promise = svc
+        .repository
+        .get_narrative_promise(&fixture.promise_id)
+        .await
+        .unwrap();
+    assert_eq!(promise.status, "planted");
+
+    // Non-McKee projects keep the direct status path.
+    let project = svc
+        .create_project(CreateProjectInput {
+            name: "Legacy".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Unchanged".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    let promise = svc
+        .create_narrative_promise(CreateNarrativePromiseInput {
+            project_id: project.project_id.clone(),
+            promise_type: "mystery".into(),
+            description: "Who took the letter?".into(),
+            planted_at: placement(1, 1, 1),
+            planned_payoff: None,
+            notes: Vec::new(),
+            planned_payoff_turning_beat: None,
+            target_act: None,
+        })
+        .await
+        .unwrap();
+    let output = svc
+        .update_promise_status(UpdatePromiseStatusInput {
+            narrative_promise_id: promise.narrative_promise_id.clone(),
+            status: "paid_off".into(),
+            note: None,
+            at: None,
+            source_scene_id: None,
+            replaces_event_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(output.status, "paid_off");
 }

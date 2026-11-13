@@ -180,12 +180,12 @@ impl SqliteSpindleService {
         // McKee projects require a non-zero revise budget at prepare time. A
         // zero/absent budget leaves a Scene that realized a turn different from
         // its plan with no bounded revise attempt before the checkpoint, so the
-        // plan could never be upheld (issue #32). Only a run passes a budget:
-        // the authoring entry tools resolve an absent run budget to the default
-        // zero before calling here, while `planning_readiness` passes `None`
-        // because it prepares no run — otherwise planning readiness would be
-        // blocked forever on a value only the authoring run can supply.
-        if project.mckee_structured && input.max_revise_attempts.is_some_and(|budget| budget <= 0) {
+        // plan could never be upheld (issue #32). An absent budget means the
+        // run's documented default of zero, not "no run": `planning_readiness`
+        // passes `None` and must reach the same verdict as `authoring_start_run`,
+        // so planning readiness can no longer advertise a McKee range as ready
+        // while the run would refuse to start.
+        if project.mckee_structured && input.max_revise_attempts.unwrap_or(0) <= 0 {
             missing_requirements.push(
                 "McKee project requires a non-zero max_revise_attempts (1 or 2): a scene that \
                  realizes a turn different from its plan needs a bounded revise attempt before \

@@ -2493,14 +2493,28 @@ impl SqliteSpindleService {
                             .iter()
                             .find(|planned| planned.scene_order == scene.scene_order)
                     });
+                // A chapter-level planned `change` milestone may be satisfied
+                // in any Scene of the chapter, so the character-effect rule
+                // needs the chapter's other saved reports even when the caller
+                // pinned a single Scene.
+                let chapter_scenes = if realized_checks.character_effect {
+                    self.repository
+                        .list_scenes_by_chapter_and_branch(&scene.chapter_id, &active_branch.id)
+                        .await?
+                } else {
+                    Vec::new()
+                };
                 issues.extend(super::mckee::realized_findings_for_scene(
-                    scene,
-                    planned_scene,
-                    realized_checks,
-                    &key_facts,
-                    &promises,
-                    &arcs,
-                    &character_names,
+                    super::mckee::RealizedFindingsInputs {
+                        scene,
+                        planned_scene,
+                        checks: realized_checks,
+                        key_facts: &key_facts,
+                        promises: &promises,
+                        arcs: &arcs,
+                        character_names: &character_names,
+                        chapter_scenes: &chapter_scenes,
+                    },
                 ));
             }
         }

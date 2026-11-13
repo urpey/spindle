@@ -189,8 +189,9 @@ with a non-zero budget**: `authoring_prepare_run` reports the requirement and
 `ready_to_draft=false`, so `authoring_start_run` refuses a run whose budget is
 `0` or absent (an absent budget is the run default of zero). Without a budget a
 Scene that realized a turn different from its plan would have no bounded revise
-attempt before the checkpoint. The internal planning readiness probe is not a
-run and keeps reporting planning readiness; unmarked projects are unaffected.
+attempt before the checkpoint. `planning_readiness` passes no budget, so it
+reports the same missing requirement (and `ready_to_draft=false`) instead of
+advertising a ready range the run would refuse; unmarked projects are unaffected.
 Set it to `1` or `2` (a bound; higher
 values are rejected as an input error) to insert a deterministic `verify scene`
 step between `draft` and `commit`. Verify runs the scene-scoped check subset
@@ -215,12 +216,14 @@ the prose actually did (`spindle_core::realized`): the realized Value Turn per
 planned Value Axis (opening/closing Charge, Gap, Turning Beat), the Character
 Effect per present major character (`reinforce` / `reveal` / `contradict` /
 `change` / `none`), the Narrative Promise events the Scene advanced, and the
-planned Key Facts it dramatised. Both save paths accept it: `commit_scene`'s
-continuity package and `authoring_save_scene_draft`'s `realized_report` field.
-It persists on the Scene (V0061), reads back through `get_entity(table:
-"scene")`, and travels with earlier Scenes' results in the briefing and scene
-context. A save replaces the recorded report; omitting it leaves the Scene with
-none, and a non-McKee project is unchanged.
+planned Key Facts it dramatised. All three continuity-carrying save entry points
+accept it: `commit_scene`'s continuity package, `authoring_save_scene_draft`'s
+structured `realized_report` field, and the raw `save_scene_draft` field (the raw
+path has no continuity package, but it does apply realized promise status). It
+persists on the Scene (V0061), reads back through `get_entity(table: "scene")`,
+and travels with earlier Scenes' results in the briefing and scene context. A
+save replaces the recorded report; omitting it leaves the Scene with none, and a
+non-McKee project is unchanged.
 
 The report is held to the plan by four deterministic checks in the fast
 scene-verify subset — `realized_value_turn`, `realized_key_fact`,
@@ -228,20 +231,28 @@ scene-verify subset — `realized_value_turn`, `realized_key_fact`,
 report `error` findings attributed to the Scene when the realized Charge, Gap
 presence or Turning Beat differs from the plan, when a planned Key Fact or
 planned promise event is missing from the report, when `change` is reported
-outside a planned `change` arc milestone, or when a planned change is reported as
-a reveal (or not reported at all). A mismatch therefore goes through the same
-bounded revise loop and can never commit silently; a matching Scene verifies
-clean.
+outside a planned `change` arc milestone (a milestone may be pinned to a Scene or
+placed chapter-wide, in which case a `change` anywhere in the chapter satisfies
+it), or when a planned change is reported only as a reveal while no Scene in the
+chapter reports a `change`. These checks run in `check_consistency` — the
+scene-verify set a run calls — and do not run inside a bare `commit_scene` or
+`save_scene_draft` outside a run, so the convergence guarantee is the bounded
+revise loop, not the store itself. Parked-findings commit handling is ticket
+#33. A matching Scene verifies clean.
 
 Promise status is **system-written** on a McKee project: after a confirmed
 realized promise event saves, Spindle advances that promise's status with the
 Scene recorded as the source scene (`setup` -> `planted`, `reinforcement` ->
 `reinforced`, `payoff` -> `paid_off`, `subversion` -> `subverted`, `abandonment`
 -> `abandoned`). The host does not call `update_promise_status` for a McKee
-scene; the tool still works for every other flow, and re-saving the same Scene
-does not duplicate the event. A report is pre-validated before the prose write,
-so an unknown promise, a promise on an unrelated branch, or an event placed
-before the promise's planting fails the save without writing anything.
+scene; on a McKee project `update_promise_status` is rejected with an error
+that points at the realized-events path (a no-op status call is allowed, and
+non-McKee projects keep the direct tool). Validation and status application run
+inside the same Scene transaction, so an unknown promise, a promise on an
+unrelated branch, or an event placed before the promise's planting rolls the
+Scene row back with the status rows. Re-saving a Scene whose new report no longer
+claims a previously reported event appends an append-only corrective status
+event that restores the pre-Scene status; an unchanged re-save is a no-op.
 
 
 `checkpoint_policy` on `authoring_start_run` is optional and defaults to

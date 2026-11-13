@@ -453,12 +453,24 @@ impl Repository {
         let location_id = input.location_id.clone();
         // A save REPLACES the Scene's realized report: the report describes the
         // text just saved, and omitting it leaves the Scene with none (V0061).
-        let realized_report_json = input
-            .realized_report
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?;
+        // Serialization and the column edit live in one helper shared with the
+        // in-transaction persist path; the promise-status consequences are
+        // applied below in this same transaction.
+        let realized_report_json =
+            super::realized::realized_report_json(input.realized_report.as_ref())?;
+        let realized_report = input.realized_report.clone();
+        let placement = StoryPlacement {
+            book_number: input.book_number,
+            chapter_number: input.chapter_number,
+            scene_order: Some(input.scene_order),
+            note: None,
+        };
         let receipt_claim_owned = receipt_claim;
+        // A realized-report failure must surface with its own message, not the
+        // pool's generic SQL wrapper; the slot carries it across the rusqlite
+        // closure that owns the transaction boundary.
+        let realized_error: std::sync::Arc<std::sync::Mutex<Option<anyhow::Error>>> =
+            Default::default();
 
         if let Some(existing) = existing {
             // UPDATE path: snapshot the previous prose into scene_version when
@@ -482,8 +494,10 @@ impl Repository {
             let new_summary = summary.clone();
             let new_content_rating = content_rating.to_string();
             let new_tone = tone.clone();
+            let realized_error_slot = realized_error.clone();
 
-            self.inner
+            let write_result = self
+                .inner
                 .pool
                 .write(move |conn| {
                     let tx = conn.transaction()?;
@@ -530,9 +544,8 @@ impl Repository {
                         // COALESCE preserves the existing location when this
                         // re-save omits one, so a prose-only edit never clears it.
                         "UPDATE scene SET full_text = ?1, summary = ?2, content_rating = ?3, \
-                         tone = ?4, location_id = COALESCE(?5, location_id), updated_at = ?6, \
-                         realized_report = ?7 \
-                         WHERE id = ?8",
+                         tone = ?4, location_id = COALESCE(?5, location_id), updated_at = ?6 \
+                         WHERE id = ?7",
                         rusqlite::params![
                             &new_full_text,
                             &new_summary,
@@ -540,9 +553,28 @@ impl Repository {
                             &new_tone,
                             &location_id,
                             now,
-                            &realized_report_json,
                             &existing_id,
                         ],
+                    )?;
+                    super::realized::set_scene_realized_report_in_conn(
+                        &tx,
+                        &existing_id,
+                        realized_report_json.as_deref(),
+                    )
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+                    // Validation and the status history share this transaction:
+                    // an unusable event rolls the prose back with it, and a
+                    // re-save reconciles any status the old report advanced.
+                    super::realized::capture_transaction_error(
+                        &realized_error_slot,
+                        super::realized::apply_realized_promise_events_in_conn(
+                            &tx,
+                            &project_id_owned,
+                            &branch_id_owned,
+                            &existing_id,
+                            &placement,
+                            realized_report.as_ref(),
+                        ),
                     )?;
                     if scene_changed {
                         // Resolve any open validator findings on the prior version.
@@ -562,7 +594,11 @@ impl Repository {
                     tx.commit()?;
                     Ok(())
                 })
-                .await?;
+                .await;
+            if let Some(error) = realized_error.lock().unwrap().take() {
+                return Err(error);
+            }
+            write_result?;
             let updated = self.get_scene(&existing.id).await?;
             Ok((updated, false))
         } else {
@@ -572,7 +608,9 @@ impl Repository {
             let scene_id = mint_id("scene");
             let scene_id_lookup = scene_id.clone();
             let rating_owned = content_rating.to_string();
-            self.inner
+            let realized_error_slot = realized_error.clone();
+            let write_result = self
+                .inner
                 .pool
                 .write(move |conn| {
                     let tx = conn.transaction()?;
@@ -592,9 +630,8 @@ impl Repository {
                     tx.execute(
                         "INSERT INTO scene (id, project_id, branch_id, book_id, chapter_id, \
                          book_number, chapter_number, scene_order, full_text, summary, \
-                         content_rating, tone, draft_origin, location_id, created_at, updated_at, \
-                         realized_report) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, ?14, ?14, ?15)",
+                         content_rating, tone, draft_origin, location_id, created_at, updated_at) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, ?14, ?14)",
                         rusqlite::params![
                             &scene_id,
                             &project_id_owned,
@@ -610,13 +647,33 @@ impl Repository {
                             &tone,
                             &location_id,
                             now,
-                            &realized_report_json,
                         ],
+                    )?;
+                    super::realized::set_scene_realized_report_in_conn(
+                        &tx,
+                        &scene_id,
+                        realized_report_json.as_deref(),
+                    )
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+                    super::realized::capture_transaction_error(
+                        &realized_error_slot,
+                        super::realized::apply_realized_promise_events_in_conn(
+                            &tx,
+                            &project_id_owned,
+                            &branch_id_owned,
+                            &scene_id,
+                            &placement,
+                            realized_report.as_ref(),
+                        ),
                     )?;
                     tx.commit()?;
                     Ok(())
                 })
-                .await?;
+                .await;
+            if let Some(error) = realized_error.lock().unwrap().take() {
+                return Err(error);
+            }
+            write_result?;
             let created = self.get_scene(&scene_id_lookup).await?;
             Ok((created, true))
         }
