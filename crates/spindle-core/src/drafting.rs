@@ -1,11 +1,13 @@
 //! Versioned prose-task data. No retrieval, tokenizer implementation or transport.
 pub mod chapter;
+pub mod critic;
 pub mod critique;
 pub mod editorial;
 pub mod extraction;
 pub mod revision;
 
 pub use chapter::*;
+pub use critic::*;
 pub use critique::*;
 pub use editorial::*;
 pub use revision::*;

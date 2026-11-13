@@ -47,6 +47,7 @@ async fn run_dual_persona_review_round_trips_local_adapter() {
             branch_id: None,
             scene_id: saved.scene_id.clone(),
             rounds: Some(1),
+            critic_output: None,
         })
         .await
         .unwrap();
@@ -129,6 +130,7 @@ async fn dual_persona_review_rounds_top_up_across_calls_on_same_prose() {
         branch_id: None,
         scene_id: saved.scene_id.clone(),
         rounds: Some(1),
+        critic_output: None,
     };
     let first = svc
         .run_dual_persona_review(review_input.clone())
@@ -421,6 +423,7 @@ async fn poisoned_review_job_registry_returns_err_naming_the_lock() {
         branch_id: None,
         scene_id: scene_id.clone(),
         rounds: Some(1),
+        critic_output: None,
     };
     let err = match svc.spawn_review_job("job-key", &input, &scene, 1, vec![]) {
         Ok(_) => panic!("spawn must fail on poisoned lock"),

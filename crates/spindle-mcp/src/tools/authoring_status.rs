@@ -201,6 +201,9 @@ impl ToolRouter {
                     spindle_harness::state::ScenePhase::DraftSaved => "draft_saved",
                     spindle_harness::state::ScenePhase::ChangesCommitted => "changes_committed",
                     spindle_harness::state::ScenePhase::BeatsAnnotated => "beats_annotated",
+                    spindle_harness::state::ScenePhase::ParkedForCheckpoint => {
+                        "parked_for_checkpoint"
+                    }
                 };
                 status_scenes.push(AuthoringStatusScene {
                     scene_order: sc.scene_order,
@@ -279,6 +282,16 @@ impl ToolRouter {
             });
         }
 
+        // Parked scenes are surfaced as ids/counts only, never prose: a McKee
+        // Scene whose verify never became clean is waiting for a human decision
+        // at its checkpoint, and the status must say so.
+        let parked_scene_refs = spindle_harness::operator::parked_scene_refs(&outcome.state)
+            .into_iter()
+            .map(|(chapter_number, scene_order)| {
+                spindle_harness::operator::parked_scene_ref(chapter_number, scene_order)
+            })
+            .collect();
+
         Ok(AuthoringStatusOutput {
             run_id,
             project_id,
@@ -292,6 +305,7 @@ impl ToolRouter {
             total_chapter_count: outcome.state.chapters.len(),
             chapters: status_chapters,
             checkpoint_reports: cp_reports,
+            parked_scene_refs,
         })
     }
 }

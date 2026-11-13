@@ -1559,6 +1559,7 @@ async fn style_enforcement_pipeline_flags_offgenre_comedy_scene() {
             branch_id: None,
             scene_id: literary.scene_id.clone(),
             rounds: Some(1),
+            critic_output: None,
         })
         .await
         .unwrap();

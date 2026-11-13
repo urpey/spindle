@@ -490,6 +490,21 @@ pub struct StoredDualPersonaReviewRound {
     #[serde(default)]
     pub genre_reader: Option<StoredPersonaReviewNotes>,
     pub priority_actions: Vec<String>,
+    /// Scene-critic rubric this round answered under. `None` for every
+    /// non-McKee project and every row persisted before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critic_rubric_version: Option<String>,
+    /// Independent McKee critic verdict, when the critic produced one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critic_verdict: Option<spindle_core::drafting::critic::McKeeCriticVerdict>,
+    /// Provenance of `critic_verdict` (ADR 0005). Skipped when the `review`
+    /// route produced it, so existing rows keep their exact bytes; a
+    /// host-submitted verdict is stored as `"host"`.
+    #[serde(
+        default,
+        skip_serializing_if = "spindle_core::drafting::critic::CriticVerdictSource::skip_if_route"
+    )]
+    pub critic_verdict_source: Option<spindle_core::drafting::critic::CriticVerdictSource>,
 }
 
 impl StoredDualPersonaReviewRound {
@@ -503,6 +518,9 @@ impl StoredDualPersonaReviewRound {
                 .map(StoredPersonaReviewNotes::into_core)
                 .unwrap_or_default(),
             priority_actions: self.priority_actions,
+            critic_rubric_version: self.critic_rubric_version,
+            critic_verdict: self.critic_verdict,
+            critic_verdict_source: self.critic_verdict_source,
         }
     }
 }
@@ -515,6 +533,9 @@ impl From<core::DualPersonaReviewRound> for StoredDualPersonaReviewRound {
             craft_technician: value.craft_technician.into(),
             genre_reader: Some(value.genre_reader.into()),
             priority_actions: value.priority_actions,
+            critic_rubric_version: value.critic_rubric_version,
+            critic_verdict: value.critic_verdict,
+            critic_verdict_source: value.critic_verdict_source,
         }
     }
 }

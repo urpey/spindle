@@ -11,12 +11,69 @@ pub(super) fn authoring_checkpoint_sampled_scene_ids(
         .unwrap_or_default()
 }
 
+/// Map disagreeing Scene ids to `(chapter, scene)` refs in spine order.
+pub(super) fn scene_refs_for_scene_ids(
+    state: &HarnessState,
+    scene_ids: &[String],
+) -> Vec<(i32, i32)> {
+    state
+        .chapters
+        .iter()
+        .flat_map(|chapter| {
+            chapter
+                .scenes
+                .iter()
+                .filter(|scene| {
+                    scene
+                        .scene_id
+                        .as_deref()
+                        .is_some_and(|id| scene_ids.iter().any(|want| want == id))
+                })
+                .map(|scene| (chapter.chapter_number, scene.scene_order))
+        })
+        .collect()
+}
+
+/// Record the disagreed Scene ids on the checkpoint report artifact so an
+/// operator reading the report sees exactly which samples blocked approval.
+fn record_checkpoint_critic_disagreements(
+    state: &HarnessState,
+    state_path: &Path,
+    start_chapter: i32,
+    end_chapter: i32,
+    scene_ids: &[String],
+) -> anyhow::Result<()> {
+    let path = checkpoint_report_path(state, state_path, start_chapter, end_chapter)?;
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read checkpoint report {}", path.display()))?;
+    let mut report: spindle_harness::artifacts::CheckpointReportArtifact =
+        serde_json::from_str(&raw)
+            .with_context(|| format!("failed to parse checkpoint report {}", path.display()))?;
+    report.critic_disagreement_scene_ids = scene_ids.to_vec();
+    std::fs::write(&path, serde_json::to_string_pretty(&report)?)
+        .with_context(|| format!("failed to write checkpoint report {}", path.display()))?;
+    Ok(())
+}
+
+/// A ready-to-paste `redraft_scenes` payload for an operator-facing error.
+pub(super) fn redraft_scenes_json(refs: &[(i32, i32)]) -> String {
+    format!(
+        "[{}]",
+        refs.iter()
+            .map(|(chapter_number, scene_order)| format!(
+                "{{\"chapter_number\": {chapter_number}, \"scene_order\": {scene_order}}}"
+            ))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 pub(super) fn authoring_status_after_checkpoint_review(state: &HarnessState) -> &'static str {
     if state.chapters.iter().any(|chapter| {
-        chapter
-            .scenes
-            .iter()
-            .any(|scene| scene.blocked_reason.is_some())
+        chapter.scenes.iter().any(|scene| {
+            scene.blocked_reason.is_some()
+                || spindle_harness::operator::is_parked_for_checkpoint(scene)
+        })
     }) {
         return "blocked";
     }
@@ -247,42 +304,17 @@ pub(super) fn authoring_dedup_preserve_order(items: Vec<String>) -> Vec<String> 
     deduped
 }
 
+/// The checkpoint's sampled Scene ids.
+///
+/// Thin delegate to the one shared harness helper (the executor, the MCP
+/// checkpoint payload and the auto-checkpoint automation must sample the same
+/// Scenes; the McKee save-aware rule lives in that helper).
 pub(super) fn authoring_sample_checkpoint_scene_ids(
     state: &HarnessState,
     start_chapter: i32,
     end_chapter: i32,
 ) -> anyhow::Result<Vec<String>> {
-    let selected_chapters = [
-        start_chapter,
-        start_chapter + ((end_chapter - start_chapter) / 2),
-        end_chapter,
-    ];
-    let mut seen = BTreeSet::new();
-    let mut candidates = Vec::new();
-    for chapter_number in selected_chapters {
-        if !seen.insert(chapter_number) {
-            continue;
-        }
-        let chapter = state
-            .chapters
-            .iter()
-            .find(|chapter| chapter.chapter_number == chapter_number)
-            .with_context(|| format!("checkpoint chapter {} missing from state", chapter_number))?;
-        let scene = if chapter_number == end_chapter {
-            chapter.scenes.last()
-        } else {
-            chapter.scenes.first()
-        }
-        .with_context(|| format!("checkpoint chapter {} has no scenes", chapter_number))?;
-        let scene_id = scene.scene_id.clone().with_context(|| {
-            format!(
-                "checkpoint chapter {} scene {} has no scene_id",
-                chapter_number, scene.scene_order
-            )
-        })?;
-        candidates.push(scene_id);
-    }
-    Ok(candidates)
+    spindle_harness::operator::sample_checkpoint_scene_ids(state, start_chapter, end_chapter)
 }
 
 /// Map a run's persisted `checkpoint_policy` to the auto policy in force, or
@@ -685,6 +717,7 @@ impl ToolRouter {
                 chapter_summaries,
                 narrative_promises,
                 sampled_scene_ids,
+                critic_disagreement_scene_ids: Vec::new(),
                 // Reader-sim runs later, inside the auto-checkpoint automation
                 // (evolution §3.6); the report is created with no section.
                 reader_sim: None,
@@ -787,6 +820,9 @@ impl ToolRouter {
             .with_context(|| format!("Authoring run {} not found", run_id))?;
 
         let mut harness_state = map_records_to_harness(&run, &chapters, &scenes, &checkpoints);
+        // The live project marker is authoritative for the checkpoint gate and
+        // for the McKee redraft semantics the review may apply.
+        harness_state.mckee_structured = repo.get_project(&project_id).await?.mckee_structured;
 
         let data_dir = repo.data_dir();
         let state_path = authoring_state_path(data_dir, &run_id);
@@ -849,11 +885,38 @@ impl ToolRouter {
                 missing_reviews.join(", ")
             );
         }
+        // Independent critic gate (ADR 0005, issue #33 review): a verdict only
+        // exists after a dual-persona review, so this is the first moment the
+        // critic can gate the run. A persisted ROUTE-produced verdict that
+        // disagrees with the writer's realized report makes the Scene(s)
+        // redraft-required and refuses the review — approval (manual or auto)
+        // must never clear a Scene the independent critic judged a mismatch.
+        // Host/fixture verdicts from `critic_output` are ignored by the
+        // service-side check.
+        let critic_disagreement_scene_ids = self
+            .service
+            .critic_disagreement_scene_ids(
+                &project_id,
+                &harness_state.active_branch_id,
+                &report.sampled_scene_ids,
+            )
+            .await?;
+        let critic_mismatch_refs =
+            scene_refs_for_scene_ids(&harness_state, &critic_disagreement_scene_ids);
+        // Every disagreed Scene must resolve to a chapter/scene slot; an id the
+        // run state cannot place is not something the operator could redraft, so
+        // it can never be silently approved.
+        let all_critic_ids_resolved =
+            critic_mismatch_refs.len() == critic_disagreement_scene_ids.len();
+
         if !report.sampled_scene_ids.is_empty() {
             report.sampled_reviews = sampled_reviews;
             report.sampled_review_status = "complete".to_string();
             report.sampled_review_instruction =
                 "Sampled dual-persona reviews verified from the local Spindle database before operator checkpoint review.".to_string();
+        }
+        report.critic_disagreement_scene_ids = critic_disagreement_scene_ids;
+        if !report.sampled_scene_ids.is_empty() || !critic_mismatch_refs.is_empty() {
             let report_json = serde_json::to_string_pretty(&report)?;
             std::fs::write(&report_path, report_json).with_context(|| {
                 format!(
@@ -861,6 +924,47 @@ impl ToolRouter {
                     report_path.display()
                 )
             })?;
+        }
+
+        // A review that explicitly redrafts the disagreed Scenes IS the
+        // decision the gate demands: the redraft resets the prose, which makes
+        // the persisted verdict stale for the new draft. It must proceed.
+        let unaddressed_mismatch = if all_critic_ids_resolved {
+            critic_mismatch_refs
+                .iter()
+                .filter(|(chapter_number, scene_order)| {
+                    !input.redraft_scenes.iter().any(|target| {
+                        target.chapter_number == *chapter_number
+                            && target.scene_order == *scene_order
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            // Unresolvable ids are refused as a whole: the operator cannot
+            // redraft a Scene the run state does not place.
+            critic_mismatch_refs.clone()
+        };
+
+        if !unaddressed_mismatch.is_empty() {
+            // Nothing is mutated: the Scene is normally already committed by
+            // checkpoint time, so forcing it back to `parked_for_checkpoint`
+            // would contradict the saved chapter summary and beats. The Scene
+            // is REDRAFT-REQUIRED instead — the refusal names it, the report
+            // lists it, and only passing it in `redraft_scenes` clears it. The
+            // run stays at this pending checkpoint (never a commit).
+            anyhow::bail!(
+                "checkpoint {}-{} cannot be reviewed: the independent McKee critic judged the prose \
+                 of scene(s) [{}] a mismatch against the plan while the writer's realized report \
+                 matches it, so approval cannot clear them. They are now redraft-required (the \
+                 report lists them in critic_disagreement_scene_ids); apply any plan amendment, \
+                 then call authoring_review_checkpoint again with redraft_scenes={} to re-draft \
+                 them",
+                input.start_chapter,
+                input.end_chapter,
+                spindle_harness::operator::format_scene_refs(&unaddressed_mismatch),
+                redraft_scenes_json(&unaddressed_mismatch)
+            );
         }
 
         if let Some(unresolved) = authoring_unresolved_checkpoint_directive(&input.directives) {
@@ -875,12 +979,18 @@ impl ToolRouter {
 
         harness_state.save(&state_path)?;
 
+        let redraft_scenes = input
+            .redraft_scenes
+            .iter()
+            .map(|target| (target.chapter_number, target.scene_order))
+            .collect::<Vec<_>>();
         let review_result = spindle_harness::operator::review_checkpoint(
             &mut harness_state,
             &state_path,
             input.start_chapter,
             input.end_chapter,
             &input.directives,
+            &redraft_scenes,
         );
 
         let _ = std::fs::remove_file(&state_path);
@@ -1068,6 +1178,7 @@ impl ToolRouter {
                     branch_id: Some(harness_state.active_branch_id.clone()),
                     scene_id: scene_id.clone(),
                     rounds: Some(2),
+                    critic_output: None,
                 })
                 .await
             {
@@ -1193,6 +1304,78 @@ impl ToolRouter {
             ));
         }
 
+        // A persisted ROUTE critic disagreement is never auto-approved either:
+        // verdicts only exist after these sampled reviews, so this is the first
+        // point the independent critic can gate. Park the Scenes (so the manual
+        // review must redraft them) and block with a prose-free reason. A
+        // host/fixture verdict is ignored by the service-side check.
+        let critic_disagreement_scene_ids = self
+            .service
+            .critic_disagreement_scene_ids(
+                &harness_state.project_id,
+                &harness_state.active_branch_id,
+                &sampled_scene_ids,
+            )
+            .await?;
+        let critic_mismatch_refs =
+            scene_refs_for_scene_ids(harness_state, &critic_disagreement_scene_ids);
+        if !critic_disagreement_scene_ids.is_empty() {
+            // Redraft-required, not parked: at checkpoint time the Scene is
+            // already committed, and the manual review must redraft it before
+            // approval. Mutual exclusion with the parked check below keeps the
+            // reason unambiguous.
+            if let Err(error) = record_checkpoint_critic_disagreements(
+                harness_state,
+                &state_path,
+                start_chapter,
+                end_chapter,
+                &critic_disagreement_scene_ids,
+            ) {
+                tracing::warn!(
+                    run_id,
+                    step = "record_critic_disagreement",
+                    error = format!("{error:#}"),
+                    "auto-checkpoint could not record the critic disagreement in the report;                      still blocking (I8)"
+                );
+            }
+            let _ = std::fs::remove_file(&state_path);
+            let refs = if critic_mismatch_refs.is_empty() {
+                critic_disagreement_scene_ids.join(", ")
+            } else {
+                spindle_harness::operator::format_scene_refs(&critic_mismatch_refs)
+            };
+            return Ok(auto_checkpoint_block(
+                harness_state,
+                start_chapter,
+                end_chapter,
+                &format!("critic_disagreement_review_required: {refs}"),
+                Vec::new(),
+            ));
+        }
+
+        // A parked Scene is never auto-approved. The deep audit can be clean
+        // while a Scene's scene-verify ended parked, so this check is explicit:
+        // approving would otherwise ask `review_checkpoint` to clear a park it
+        // must refuse, turning an honest blocked run into a tool error.
+        let parked = spindle_harness::operator::parked_scene_refs_in_range(
+            harness_state,
+            start_chapter,
+            end_chapter,
+        );
+        if !parked.is_empty() {
+            let _ = std::fs::remove_file(&state_path);
+            return Ok(auto_checkpoint_block(
+                harness_state,
+                start_chapter,
+                end_chapter,
+                &format!(
+                    "parked_scene_review_required: {}",
+                    spindle_harness::operator::format_scene_refs(&parked)
+                ),
+                Vec::new(),
+            ));
+        }
+
         // ── Step 3: verdict from the deep-consistency severity counts ──
         let errors = *finding_counts.get("error").unwrap_or(&0);
         let warnings = *finding_counts.get("warning").unwrap_or(&0);
@@ -1215,12 +1398,16 @@ impl ToolRouter {
             // honest auto-approval directive, then operator::review_checkpoint.
             let directives = vec![format!("auto-approved under {policy}: 0 blocking findings")];
             harness_state.save(&state_path)?;
+            // Auto-approval cannot clear a parked Scene: `review_checkpoint`
+            // refuses while any Scene in the window is parked, so a McKee
+            // mismatch can never self-approve into a commit.
             let review_result = spindle_harness::operator::review_checkpoint(
                 harness_state,
                 &state_path,
                 start_chapter,
                 end_chapter,
                 &directives,
+                &[],
             );
             let _ = std::fs::remove_file(&state_path);
             review_result?;

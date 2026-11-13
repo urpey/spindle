@@ -472,6 +472,7 @@ async fn slow_review_completes_and_persists_after_caller_stops_waiting() {
             branch_id: None,
             scene_id: scene_id.clone(),
             rounds: Some(2),
+            critic_output: None,
         })
         .await
         .expect("the call must return, not hang, when the model is slow");
@@ -520,6 +521,7 @@ async fn retrying_a_timed_out_review_collects_instead_of_topping_up() {
         branch_id: None,
         scene_id: scene_id.clone(),
         rounds: Some(2),
+        critic_output: None,
     };
 
     // First call times out its join wait and leaves the job running.
@@ -565,6 +567,7 @@ async fn concurrent_review_calls_join_one_job() {
         branch_id: None,
         scene_id: scene_id.clone(),
         rounds: Some(1),
+        critic_output: None,
     };
 
     let (a, b) = tokio::join!(

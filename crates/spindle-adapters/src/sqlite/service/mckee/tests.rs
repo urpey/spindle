@@ -1398,3 +1398,584 @@ async fn a_mckee_project_rejects_manual_promise_status_changes() {
         .unwrap();
     assert_eq!(output.status, "paid_off");
 }
+
+// ── Independent critic (issue #33) ──────────────────────────────────────────
+
+/// One fixed critic output fixture. `value_turn`/`promise_events` are the
+/// closed verdict words; the four McKee dimensions are always present so the
+/// production parser validates a realistic contract.
+fn fixed_critic_output(value_turn: &str, promise_events: &str) -> String {
+    let verdict = serde_json::json!({
+        "rubric_version": spindle_core::drafting::critic::MCKEE_SCENE_CRITIC_RUBRIC_VERSION,
+        "value_turn": {"verdict": value_turn, "notes": "the gate refuses the log"},
+        "promise_events": {"verdict": promise_events, "notes": "the seal is never shown"},
+        "dimensions": [
+            {"dimension": "value_turn_realized", "score_1_to_5": 4, "rationale": "trust breaks at the gate"},
+            {"dimension": "gap_lands", "score_1_to_5": 3, "rationale": "the missing page lands"},
+            {"dimension": "exposition_as_ammunition", "score_1_to_5": 3, "rationale": "the log is used in conflict"},
+            {"dimension": "over_obvious_foreshadowing", "score_1_to_5": 2, "rationale": "the seal is telegraphed"}
+        ]
+    });
+    format!(
+        "STRENGTHS:\n- the gate scene has real pressure\n\nCONCERNS:\n- the seal is too plainly promised\n\nCRITIC VERDICT: {verdict}"
+    )
+}
+
+/// Run one fixed-output dual-persona review round and return the persisted
+/// round read back through the repository.
+async fn review_with_fixed_critic_output(
+    svc: &SqliteSpindleService,
+    project_id: &str,
+    scene_id: &str,
+    output: String,
+) -> spindle_core::models::DualPersonaReviewRound {
+    let review = svc
+        .run_dual_persona_review(spindle_core::models::RunDualPersonaReviewInput {
+            project_id: project_id.to_string(),
+            branch_id: None,
+            scene_id: scene_id.to_string(),
+            rounds: Some(1),
+            critic_output: Some(output),
+        })
+        .await
+        .unwrap();
+    assert_eq!(review.rounds_completed, 1);
+    assert_eq!(review.status, "current");
+    let branch_id = review.branch_id.clone();
+    let scene = svc.repository.get_scene(scene_id).await.unwrap();
+    let fingerprint = crate::sqlite::repository::Repository::scene_revision_fingerprint(&scene);
+    svc.persisted_review_rounds(&branch_id, scene_id, &fingerprint)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the round must be persisted and read back")
+}
+
+/// Re-stamp the persisted round as ROUTE-produced (ADR 0005 provenance).
+///
+/// A unit test cannot dispatch a real `review` route, so the fixed fixture is
+/// persisted through the same host seam the production parser uses and then the
+/// provenance marker alone is rewritten. That is exactly the field the gating
+/// rule keys on, which is what these tests need to prove.
+async fn restamp_review_as_route(svc: &SqliteSpindleService, branch_id: &str, scene_id: &str) {
+    let scene = svc.repository.get_scene(scene_id).await.unwrap();
+    let fingerprint = crate::sqlite::repository::Repository::scene_revision_fingerprint(&scene);
+    let mut rounds = svc
+        .persisted_review_rounds(branch_id, scene_id, &fingerprint)
+        .await
+        .unwrap();
+    assert!(!rounds.is_empty(), "a review must be persisted first");
+    for round in &mut rounds {
+        round.critic_verdict_source = None;
+    }
+    let rounds_completed = rounds.len();
+    svc.repository
+        .upsert_dual_persona_review(crate::sqlite::repository::UpsertDualPersonaReviewParams {
+            project_id: scene.project_id.clone(),
+            branch_id: branch_id.to_string(),
+            scene_id: scene_id.to_string(),
+            rounds_completed,
+            review_rounds: rounds,
+            scene_revision_fingerprint: fingerprint,
+            status: "current".to_string(),
+        })
+        .await
+        .unwrap();
+}
+
+/// Run one fixed-output review and mark its verdict as route-produced.
+async fn review_with_route_critic_output(
+    svc: &SqliteSpindleService,
+    project_id: &str,
+    scene_id: &str,
+    output: String,
+) -> spindle_core::models::DualPersonaReviewRound {
+    let round = review_with_fixed_critic_output(svc, project_id, scene_id, output).await;
+    let branch_id = svc.repository.get_scene(scene_id).await.unwrap().branch_id;
+    restamp_review_as_route(svc, &branch_id, scene_id).await;
+    round
+}
+
+#[tokio::test]
+async fn mckee_selects_the_bumped_critic_rubric_and_persists_the_verdict() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    let scene_id = save_mckee_scene(&svc, &fixture, 1, Some(matching_report(&fixture))).await;
+
+    let round = review_with_fixed_critic_output(
+        &svc,
+        &fixture.project_id,
+        &scene_id,
+        fixed_critic_output("agree", "agree"),
+    )
+    .await;
+
+    assert_eq!(
+        round.critic_rubric_version.as_deref(),
+        Some(spindle_core::drafting::critic::MCKEE_SCENE_CRITIC_RUBRIC_VERSION)
+    );
+    let verdict = round
+        .critic_verdict
+        .clone()
+        .expect("McKee verdict must persist");
+    assert!(verdict.validate().is_ok());
+    assert!(verdict.value_turn.is_agreement());
+    assert!(verdict.promise_events.is_agreement());
+    assert_eq!(verdict.dimensions.len(), 4);
+    // The fixed-output seam is the host/offline seam: its verdict is tagged
+    // `host` (and therefore never gates independence).
+    assert_eq!(
+        round.critic_verdict_source,
+        Some(spindle_core::drafting::critic::CriticVerdictSource::Host)
+    );
+    assert!(round.route_critic_verdict().is_none());
+    let json = serde_json::to_value(&round).unwrap();
+    assert_eq!(json["critic_verdict_source"], "host");
+}
+
+#[tokio::test]
+async fn a_non_mckee_review_stays_byte_identical_without_a_critic_verdict() {
+    let (_tmp, svc) = fresh_service_local().await;
+    let project = svc
+        .create_project(CreateProjectInput {
+            name: "Legacy".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Unchanged".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    let scene_id = svc
+        .save_scene_draft(SaveSceneDraftInput {
+            project_id: project.project_id.clone(),
+            book_number: 1,
+            chapter_number: 1,
+            chapter_id: None,
+            scene_order: 1,
+            full_text: "A plain scene.".into(),
+            summary: "a sketch".into(),
+            content_rating: spindle_core::models::ContentRating::General,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .scene_id;
+
+    let round = review_with_fixed_critic_output(
+        &svc,
+        &project.project_id,
+        &scene_id,
+        fixed_critic_output("agree", "agree"),
+    )
+    .await;
+
+    assert!(round.critic_rubric_version.is_none());
+    assert!(round.critic_verdict.is_none());
+    assert!(round.critic_verdict_source.is_none());
+    let json = serde_json::to_value(&round).unwrap();
+    assert!(json.get("critic_rubric_version").is_none(), "{json}");
+    assert!(json.get("critic_verdict").is_none(), "{json}");
+    assert!(json.get("critic_verdict_source").is_none(), "{json}");
+    // And the check never runs for a non-McKee project.
+    assert!(
+        verify_scene(
+            &svc,
+            &project.project_id,
+            1,
+            &["critic_report_disagreement"]
+        )
+        .await
+        .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn an_agreeing_critic_verdict_passes_and_a_disagreeing_one_is_a_finding() {
+    // Agreement: the writer's report matches the plan and the critic agrees
+    // that the prose realizes it — no finding.
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    let scene_id = save_mckee_scene(&svc, &fixture, 1, Some(matching_report(&fixture))).await;
+    review_with_route_critic_output(
+        &svc,
+        &fixture.project_id,
+        &scene_id,
+        fixed_critic_output("agree", "agree"),
+    )
+    .await;
+    let agreement = verify_scene(
+        &svc,
+        &fixture.project_id,
+        1,
+        &["critic_report_disagreement"],
+    )
+    .await;
+    assert!(
+        findings_of(&agreement, "critic_report_disagreement").is_empty(),
+        "{agreement:?}"
+    );
+
+    // Disagreement: the same matching report, but the critic judged the prose
+    // does NOT realize the planned turn. One error-severity, scene-attributed
+    // finding.
+    let (_tmp2, svc2) = fresh_service_local().await;
+    let fixture2 = mckee_fixture(&svc2).await;
+    let scene2 = save_mckee_scene(&svc2, &fixture2, 1, Some(matching_report(&fixture2))).await;
+    review_with_route_critic_output(
+        &svc2,
+        &fixture2.project_id,
+        &scene2,
+        fixed_critic_output("mismatch", "agree"),
+    )
+    .await;
+    let disagreement = verify_scene(
+        &svc2,
+        &fixture2.project_id,
+        1,
+        &["critic_report_disagreement"],
+    )
+    .await;
+    let findings = findings_of(&disagreement, "critic_report_disagreement");
+    assert_eq!(findings.len(), 1, "{disagreement:?}");
+    assert_eq!(findings[0].severity, "error");
+    assert!(findings[0].entity_ids.iter().any(|id| id == &scene2));
+    assert!(
+        findings[0].message.contains("critic")
+            && findings[0].message.contains("Value Turn")
+            && findings[0].message.contains("independent"),
+        "{}",
+        findings[0].message
+    );
+}
+
+#[tokio::test]
+async fn a_critic_disagreement_never_duplicates_the_realized_rule() {
+    // Writer report differs from the plan while the critic says the prose
+    // realizes it: the deterministic `realized_value_turn` rule already reports
+    // that root cause, so `critic_report_disagreement` must stay silent.
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    let mut report = matching_report(&fixture);
+    report.value_turns[0].closing = contrary();
+    let scene_id = save_mckee_scene(&svc, &fixture, 1, Some(report)).await;
+    review_with_route_critic_output(
+        &svc,
+        &fixture.project_id,
+        &scene_id,
+        fixed_critic_output("agree", "agree"),
+    )
+    .await;
+    let findings = verify_scene(
+        &svc,
+        &fixture.project_id,
+        1,
+        &[REALIZED_VALUE_TURN_CHECK, "critic_report_disagreement"],
+    )
+    .await;
+    assert!(
+        findings_of(&findings, "critic_report_disagreement").is_empty(),
+        "the same root cause must be reported once: {findings:?}"
+    );
+    assert_eq!(
+        findings_of(&findings, REALIZED_VALUE_TURN_CHECK).len(),
+        1,
+        "the deterministic realized-vs-plan finding still fires: {findings:?}"
+    );
+
+    // Writer report omits a planned promise event while the critic says the
+    // prose delivers it: again the realized rule owns that root cause.
+    let (_tmp2, svc2) = fresh_service_local().await;
+    let fixture2 = mckee_fixture(&svc2).await;
+    let mut report2 = matching_report(&fixture2);
+    report2.promise_events.clear();
+    let scene2 = save_mckee_scene(&svc2, &fixture2, 1, Some(report2)).await;
+    review_with_route_critic_output(
+        &svc2,
+        &fixture2.project_id,
+        &scene2,
+        fixed_critic_output("agree", "agree"),
+    )
+    .await;
+    let findings2 = verify_scene(
+        &svc2,
+        &fixture2.project_id,
+        1,
+        &[REALIZED_PROMISE_EVENT_CHECK, "critic_report_disagreement"],
+    )
+    .await;
+    assert!(
+        findings_of(&findings2, "critic_report_disagreement").is_empty(),
+        "{findings2:?}"
+    );
+    assert_eq!(
+        findings_of(&findings2, REALIZED_PROMISE_EVENT_CHECK).len(),
+        1,
+        "{findings2:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_route_critic_disagreeing_with_a_matching_report_is_a_finding() {
+    // The one direction independence owns: the writer's report matches the plan
+    // and the critic still judges the prose a mismatch (Value Turn and promise
+    // events each).
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    let scene_id = save_mckee_scene(&svc, &fixture, 1, Some(matching_report(&fixture))).await;
+    review_with_route_critic_output(
+        &svc,
+        &fixture.project_id,
+        &scene_id,
+        fixed_critic_output("mismatch", "agree"),
+    )
+    .await;
+    let findings = verify_scene(
+        &svc,
+        &fixture.project_id,
+        1,
+        &["critic_report_disagreement"],
+    )
+    .await;
+    let value_turn = findings_of(&findings, "critic_report_disagreement");
+    assert_eq!(value_turn.len(), 1, "{findings:?}");
+    assert!(
+        value_turn[0]
+            .message
+            .contains("does not realize the planned Value Turn"),
+        "{}",
+        value_turn[0].message
+    );
+
+    // Promise events: the plan demands the setup and the writer reports it,
+    // while the critic says the prose does not deliver it.
+    let (_tmp2, svc2) = fresh_service_local().await;
+    let fixture2 = mckee_fixture(&svc2).await;
+    let scene2 = save_mckee_scene(&svc2, &fixture2, 1, Some(matching_report(&fixture2))).await;
+    review_with_route_critic_output(
+        &svc2,
+        &fixture2.project_id,
+        &scene2,
+        fixed_critic_output("agree", "mismatch"),
+    )
+    .await;
+    let findings = verify_scene(
+        &svc2,
+        &fixture2.project_id,
+        1,
+        &["critic_report_disagreement"],
+    )
+    .await;
+    let promises = findings_of(&findings, "critic_report_disagreement");
+    assert_eq!(promises.len(), 1, "{findings:?}");
+    assert!(
+        promises[0].message.contains("Narrative Promise"),
+        "{}",
+        promises[0].message
+    );
+}
+
+#[tokio::test]
+async fn a_host_supplied_critic_verdict_never_gates_independence() {
+    // ADR 0005: a verdict submitted through `critic_output` is a host/offline
+    // verdict. Even a mismatch verdict must not produce a finding, and the
+    // checkpoint gate must ignore it.
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    let scene_id = save_mckee_scene(&svc, &fixture, 1, Some(matching_report(&fixture))).await;
+    let round = review_with_fixed_critic_output(
+        &svc,
+        &fixture.project_id,
+        &scene_id,
+        fixed_critic_output("mismatch", "mismatch"),
+    )
+    .await;
+    assert_eq!(
+        round.critic_verdict_source,
+        Some(spindle_core::drafting::critic::CriticVerdictSource::Host)
+    );
+    assert!(
+        round.route_critic_verdict().is_none(),
+        "a host verdict must not satisfy the independence check"
+    );
+    assert!(
+        findings_of(
+            &verify_scene(
+                &svc,
+                &fixture.project_id,
+                1,
+                &["critic_report_disagreement"]
+            )
+            .await,
+            "critic_report_disagreement"
+        )
+        .is_empty(),
+        "a host-supplied mismatch must not gate"
+    );
+    let branch_id = svc.repository.get_scene(&scene_id).await.unwrap().branch_id;
+    assert!(
+        svc.critic_disagreement_scene_ids(
+            &fixture.project_id,
+            &branch_id,
+            std::slice::from_ref(&scene_id)
+        )
+        .await
+        .unwrap()
+        .is_empty(),
+        "the checkpoint gate must ignore a host verdict"
+    );
+
+    // The same fixed verdict re-stamped as route-produced does gate.
+    restamp_review_as_route(&svc, &branch_id, &scene_id).await;
+    let gated = svc
+        .critic_disagreement_scene_ids(
+            &fixture.project_id,
+            &branch_id,
+            std::slice::from_ref(&scene_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(gated, vec![scene_id.clone()]);
+}
+
+#[tokio::test]
+async fn the_checkpoint_critic_gate_is_route_only_and_agreement_is_clean() {
+    // Agreement (route) → no disagreement to gate.
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    let scene_id = save_mckee_scene(&svc, &fixture, 1, Some(matching_report(&fixture))).await;
+    review_with_route_critic_output(
+        &svc,
+        &fixture.project_id,
+        &scene_id,
+        fixed_critic_output("agree", "agree"),
+    )
+    .await;
+    let branch_id = svc.repository.get_scene(&scene_id).await.unwrap().branch_id;
+    assert!(
+        svc.critic_disagreement_scene_ids(
+            &fixture.project_id,
+            &branch_id,
+            std::slice::from_ref(&scene_id)
+        )
+        .await
+        .unwrap()
+        .is_empty(),
+        "an agreeing route verdict must not block checkpoint approval"
+    );
+
+    // A non-McKee project never gates, even with a persisted verdict.
+    let project = svc
+        .create_project(CreateProjectInput {
+            name: "Legacy".into(),
+            project_type: "novel".into(),
+            genre: "mystery".into(),
+            reader_contract: ReaderContract {
+                promise: "Unchanged".into(),
+                style_notes: Vec::new(),
+                boundaries: Vec::new(),
+            },
+        })
+        .await
+        .unwrap();
+    assert!(
+        svc.critic_disagreement_scene_ids(
+            &project.project_id,
+            &branch_id,
+            std::slice::from_ref(&scene_id)
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_missing_or_stale_critic_verdict_is_not_a_mismatch() {
+    // No review at all: unavailable, not a disagreement.
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    save_mckee_scene(&svc, &fixture, 1, Some(matching_report(&fixture))).await;
+    assert!(
+        findings_of(
+            &verify_scene(
+                &svc,
+                &fixture.project_id,
+                1,
+                &["critic_report_disagreement"]
+            )
+            .await,
+            "critic_report_disagreement"
+        )
+        .is_empty()
+    );
+
+    // A critic verdict for an OLD prose version must not be compared against
+    // the new prose either.
+    let (_tmp2, svc2) = fresh_service_local().await;
+    let fixture2 = mckee_fixture(&svc2).await;
+    let scene2 = save_mckee_scene(&svc2, &fixture2, 1, Some(matching_report(&fixture2))).await;
+    review_with_route_critic_output(
+        &svc2,
+        &fixture2.project_id,
+        &scene2,
+        fixed_critic_output("mismatch", "mismatch"),
+    )
+    .await;
+    svc2.save_scene_draft(SaveSceneDraftInput {
+        project_id: fixture2.project_id.clone(),
+        book_number: 1,
+        chapter_number: 1,
+        chapter_id: None,
+        scene_order: 1,
+        full_text: "A wholly rewritten gate scene with new prose.".into(),
+        summary: "rewritten".into(),
+        content_rating: spindle_core::models::ContentRating::General,
+        realized_report: Some(matching_report(&fixture2)),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert!(
+        findings_of(
+            &verify_scene(
+                &svc2,
+                &fixture2.project_id,
+                1,
+                &["critic_report_disagreement"]
+            )
+            .await,
+            "critic_report_disagreement"
+        )
+        .is_empty(),
+        "a verdict for superseded prose must never be used"
+    );
+}
+
+#[tokio::test]
+async fn the_critic_check_is_opt_in_by_requested_check_name() {
+    // Asking only for another realized rule must never surface a critic
+    // finding, even when a disagreeing verdict exists.
+    let (_tmp, svc) = fresh_service_local().await;
+    let fixture = mckee_fixture(&svc).await;
+    let scene_id = save_mckee_scene(&svc, &fixture, 1, Some(matching_report(&fixture))).await;
+    review_with_route_critic_output(
+        &svc,
+        &fixture.project_id,
+        &scene_id,
+        fixed_critic_output("mismatch", "mismatch"),
+    )
+    .await;
+    let issues = verify_scene(
+        &svc,
+        &fixture.project_id,
+        1,
+        &[spindle_core::realized::REALIZED_VALUE_TURN_CHECK],
+    )
+    .await;
+    assert!(findings_of(&issues, "critic_report_disagreement").is_empty());
+}

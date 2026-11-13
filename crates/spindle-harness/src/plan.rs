@@ -8,6 +8,11 @@ pub struct ProjectSnapshot {
     pub active_branch_name: String,
     pub chapters: BTreeMap<i32, ChapterSnapshot>,
     pub summarized_chapters: BTreeSet<i32>,
+    /// Whether the project is McKee-structured (`projects.mckee_structured`).
+    /// Reconcile copies this onto the state so the scheduler and executor never
+    /// trust a stale persisted flag; snapshots that cannot read the marker
+    /// report `false`, which preserves every existing run's behaviour.
+    pub mckee_structured: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -246,6 +251,9 @@ impl ReconcileOutcome {
 
 pub fn reconcile_state(mut state: HarnessState, snapshot: &ProjectSnapshot) -> ReconcileOutcome {
     state.normalize();
+    // The live project marker is authoritative; a state file is never trusted
+    // for it (a copied run directory must not turn McKee parking on/off).
+    state.mckee_structured = snapshot.mckee_structured;
     let mut findings = validate_state_shape(&state);
 
     if state.active_branch_id != snapshot.active_branch_id {
@@ -281,7 +289,12 @@ pub fn reconcile_state(mut state: HarnessState, snapshot: &ProjectSnapshot) -> R
         }
 
         reconcile_chapter_plan(chapter, chapter_snapshot, &mut findings);
-        reconcile_persisted_scenes(chapter, chapter_snapshot, &mut findings);
+        reconcile_persisted_scenes(
+            chapter,
+            chapter_snapshot,
+            state.mckee_structured,
+            &mut findings,
+        );
         reconcile_summary_state(
             chapter,
             snapshot
@@ -547,11 +560,39 @@ fn reconcile_chapter_plan(
 fn reconcile_persisted_scenes(
     chapter: &mut crate::state::ChapterState,
     snapshot: &ChapterSnapshot,
+    mckee_structured: bool,
     findings: &mut Vec<Finding>,
 ) {
     for scene in &mut chapter.scenes {
         match snapshot.scenes.get(&scene.scene_order) {
             Some(persisted) => {
+                // A deliberate operator redraft must not be undone by the
+                // residue rule: the old prose still exists in Spindle, but the
+                // run's intent is a fresh draft. Such a Scene stays Pending and
+                // must NOT capture the old scene_id either, or the next pass
+                // would trip the "pending with a scene_id" invariant.
+                //
+                // McKee only: a non-McKee redraft keeps the pre-#33 behaviour
+                // (promote straight back to draft_saved), because that project
+                // has no checkpoint-review clearance step and the marker is
+                // never installed there.
+                let redraft_requested = mckee_structured
+                    && scene.phase == ScenePhase::Pending
+                    && scene
+                        .draft_diagnostics
+                        .as_ref()
+                        .is_some_and(|diagnostics| diagnostics.redraft_requested);
+                if redraft_requested {
+                    findings.push(Finding::info(
+                        "redraft_pending",
+                        format!(
+                            "chapter {} scene {} is pending a deliberate redraft; keeping it pending",
+                            chapter.chapter_number, scene.scene_order
+                        ),
+                    ));
+                    continue;
+                }
+
                 if let Some(existing_scene_id) = scene.scene_id.as_ref() {
                     if existing_scene_id != &persisted.scene_id {
                         findings.push(Finding::error(
@@ -701,16 +742,30 @@ fn reconcile_summary_state(
 
 fn validate_checkpoint_history(state: &HarnessState, findings: &mut Vec<Finding>) {
     let mut seen = BTreeSet::new();
-    for checkpoint in &state.checkpoint_history {
+    for (index, checkpoint) in state.checkpoint_history.iter().enumerate() {
         let key = (checkpoint.start_chapter, checkpoint.end_chapter);
         if !seen.insert(key) {
-            findings.push(Finding::error(
-                "duplicate_checkpoint_history",
-                format!(
-                    "duplicate checkpoint history entry for chapters {}-{}",
-                    checkpoint.start_chapter, checkpoint.end_chapter
-                ),
-            ));
+            // A repeated range is legitimate when every EARLIER checkpoint for
+            // that range was already reviewed: a McKee Scene that parks again
+            // after a redraft needs a NEW checkpoint for the same chapter range,
+            // and only the last one may be awaiting review. A repeat while an
+            // earlier checkpoint for the range is still pending is corruption.
+            let earlier_all_reviewed = state.checkpoint_history[..index]
+                .iter()
+                .filter(|other| {
+                    other.start_chapter == checkpoint.start_chapter
+                        && other.end_chapter == checkpoint.end_chapter
+                })
+                .all(|other| other.status == CheckpointStatus::Reviewed);
+            if !earlier_all_reviewed {
+                findings.push(Finding::error(
+                    "duplicate_checkpoint_history",
+                    format!(
+                        "duplicate checkpoint history entry for chapters {}-{}",
+                        checkpoint.start_chapter, checkpoint.end_chapter
+                    ),
+                ));
+            }
         }
         if checkpoint.start_chapter > checkpoint.end_chapter {
             findings.push(Finding::error(
@@ -897,6 +952,34 @@ fn determine_next_action(state: &HarnessState) -> NextAction {
                             .unwrap_or_else(|| "<missing-scene-id>".to_string()),
                     };
                 }
+                ScenePhase::ParkedForCheckpoint => {
+                    // McKee only: a Scene whose verify never became clean parks
+                    // for checkpoint review and must NEVER commit. Only a
+                    // checkpoint that is still AWAITING review can be awaited:
+                    // a reviewed/approved checkpoint already had its decision,
+                    // so waiting on it again would deadlock the run after a
+                    // second park in the same range (park -> review -> redraft
+                    // -> park). A pending checkpoint covering the Scene wins;
+                    // otherwise a fresh checkpoint is started for the parked
+                    // Scene's chapter.
+                    let pending = state
+                        .checkpoint_history
+                        .iter()
+                        .find(|checkpoint| {
+                            checkpoint.status == CheckpointStatus::PendingReview
+                                && checkpoint.start_chapter <= chapter.chapter_number
+                                && chapter.chapter_number <= checkpoint.end_chapter
+                        })
+                        .map(|checkpoint| NextAction::AwaitCheckpointReview {
+                            start_chapter: checkpoint.start_chapter,
+                            end_chapter: checkpoint.end_chapter,
+                            save_point_id: checkpoint.save_point_id.clone(),
+                        });
+                    return pending.unwrap_or(NextAction::RunCheckpoint {
+                        start_chapter: chapter.chapter_number,
+                        end_chapter: chapter.chapter_number,
+                    });
+                }
                 ScenePhase::ChangesCommitted => {
                     // Opt-in canon mining sits between commit and beats
                     // (evolution §3.1, I7). Only when the run opted into
@@ -998,7 +1081,7 @@ mod tests {
     use spindle_core::models::ContentRating;
 
     use super::*;
-    use crate::state::{ChapterSeed, HarnessSeed, SceneSeed};
+    use crate::state::{ChapterSeed, CheckpointRecord, HarnessSeed, SceneSeed};
 
     fn seed() -> HarnessSeed {
         HarnessSeed {
@@ -1096,6 +1179,15 @@ mod tests {
                 ),
             ]),
             summarized_chapters: BTreeSet::new(),
+            mckee_structured: false,
+        }
+    }
+
+    /// The same fixture, marked as a McKee-structured project.
+    fn mckee_snapshot() -> ProjectSnapshot {
+        ProjectSnapshot {
+            mckee_structured: true,
+            ..snapshot()
         }
     }
 
@@ -1639,5 +1731,356 @@ mod tests {
                 }
             ));
         }
+    }
+
+    // ── McKee parking: mismatch → revise → parked, never commit (issue #33) ──
+
+    /// A draft-saved Scene in a McKee project at the verify/revise fork.
+    fn mckee_draft_saved_state(
+        max_revise_attempts: Option<i32>,
+        verify_status: Option<&str>,
+        revise_attempts: i32,
+    ) -> HarnessState {
+        let mut state = draft_saved_state(max_revise_attempts, verify_status, revise_attempts);
+        state.mckee_structured = true;
+        state
+    }
+
+    #[test]
+    fn mckee_mismatch_revises_then_parks_for_checkpoint_and_never_commits() {
+        // 1. Draft saved, no verify yet → verify.
+        let mut state = mckee_draft_saved_state(Some(1), None, 0);
+        assert_eq!(
+            determine_next_action(&state),
+            NextAction::VerifyScene {
+                chapter_number: 1,
+                scene_order: 1,
+            }
+        );
+
+        // 2. Deterministic mismatch with budget left → revise.
+        state.chapters[0].scenes[0].verify_status = Some("findings".to_string());
+        assert_eq!(
+            determine_next_action(&state),
+            NextAction::ReviseScene {
+                chapter_number: 1,
+                scene_order: 1,
+                attempt: 1,
+            }
+        );
+
+        // 3. Budget spent: the executor re-verifies, parks the Scene, and the
+        //    scheduler starts the park checkpoint — it NEVER commits.
+        let scene = &mut state.chapters[0].scenes[0];
+        scene.verify_status = Some("parked_findings".to_string());
+        scene.phase = ScenePhase::ParkedForCheckpoint;
+        scene.scene_id = Some("scene:1".to_string());
+        scene.revise_attempts = 1;
+        let action = determine_next_action(&state);
+        assert_eq!(
+            action,
+            NextAction::RunCheckpoint {
+                start_chapter: 1,
+                end_chapter: 1,
+            }
+        );
+        assert!(!matches!(action, NextAction::CommitSceneChanges { .. }));
+    }
+
+    /// Park → review → redraft → park again in the SAME range. The reviewed
+    /// checkpoint must never be awaited a second time (that deadlocked the run
+    /// before the review fix); the second park starts a NEW checkpoint instead, and
+    /// the parked Scene is never committed.
+    #[test]
+    fn mckee_two_parks_get_a_new_checkpoint_and_never_commit() {
+        let mut state = mckee_draft_saved_state(Some(1), Some("parked_findings"), 1);
+        {
+            let scene = &mut state.chapters[0].scenes[0];
+            scene.phase = ScenePhase::ParkedForCheckpoint;
+            scene.scene_id = Some("scene:1".to_string());
+        }
+
+        // Park #1: a checkpoint is created for the Scene's chapter and awaited.
+        assert_eq!(
+            determine_next_action(&state),
+            NextAction::RunCheckpoint {
+                start_chapter: 1,
+                end_chapter: 1,
+            }
+        );
+        state.checkpoint_history.push(CheckpointRecord {
+            start_chapter: 1,
+            end_chapter: 1,
+            save_point_id: "save_point:park-1".to_string(),
+            status: CheckpointStatus::PendingReview,
+            report_artifact_path: Some("checkpoints/chapter-0001-0001.json".to_string()),
+            auto_outcome: None,
+            pending_manual_scene_ids: Vec::new(),
+        });
+        assert_eq!(
+            determine_next_action(&state),
+            NextAction::AwaitCheckpointReview {
+                start_chapter: 1,
+                end_chapter: 1,
+                save_point_id: "save_point:park-1".to_string(),
+            }
+        );
+
+        // The review decides: redraft the parked Scene. That is the only clearance
+        // path, and it puts the Scene back to Pending with the redraft marker.
+        state.checkpoint_history[0].status = CheckpointStatus::Reviewed;
+        {
+            let scene = &mut state.chapters[0].scenes[0];
+            scene.phase = ScenePhase::Pending;
+            scene.scene_id = None;
+            scene.verify_status = None;
+            scene.verify_detail = None;
+            scene.revise_attempts = 0;
+            scene.draft_diagnostics = Some(crate::state::SceneDraftDiagnostics {
+                redraft_requested: true,
+                ..Default::default()
+            });
+        }
+        assert_eq!(
+            determine_next_action(&state),
+            NextAction::DraftScene {
+                chapter_number: 1,
+                scene_order: 1,
+            }
+        );
+
+        // Park #2 in the same range: the Reviewed checkpoint is history, so the run
+        // must NOT await it again — it starts a fresh checkpoint for the Scene.
+        {
+            let scene = &mut state.chapters[0].scenes[0];
+            scene.phase = ScenePhase::ParkedForCheckpoint;
+            scene.scene_id = Some("scene:2".to_string());
+            scene.verify_status = Some("parked_findings".to_string());
+            scene.revise_attempts = 1;
+        }
+        let action = determine_next_action(&state);
+        assert_eq!(
+            action,
+            NextAction::RunCheckpoint {
+                start_chapter: 1,
+                end_chapter: 1,
+            },
+            "a second park must create a new checkpoint, not await the reviewed one"
+        );
+        assert!(!matches!(action, NextAction::CommitSceneChanges { .. }));
+
+        // The fresh checkpoint is a new history record and can be reviewed.
+        state.checkpoint_history.push(CheckpointRecord {
+            start_chapter: 1,
+            end_chapter: 1,
+            save_point_id: "save_point:park-2".to_string(),
+            status: CheckpointStatus::PendingReview,
+            report_artifact_path: Some("checkpoints/chapter-0001-0001.json".to_string()),
+            auto_outcome: None,
+            pending_manual_scene_ids: Vec::new(),
+        });
+        assert_eq!(
+            determine_next_action(&state),
+            NextAction::AwaitCheckpointReview {
+                start_chapter: 1,
+                end_chapter: 1,
+                save_point_id: "save_point:park-2".to_string(),
+            }
+        );
+        // The first checkpoint stays reviewed history, not a second pending review.
+        assert_eq!(
+            state.checkpoint_history[0].status,
+            CheckpointStatus::Reviewed
+        );
+
+        // Nothing in either cycle scheduled the parked Scene for commit.
+        for action in [
+            determine_next_action(&state),
+            NextAction::RunCheckpoint {
+                start_chapter: 1,
+                end_chapter: 1,
+            },
+        ] {
+            assert!(!matches!(action, NextAction::CommitSceneChanges { .. }));
+        }
+    }
+
+    #[test]
+    fn a_repeat_checkpoint_range_after_a_review_is_not_history_corruption() {
+        // The second park checkpoint reuses the chapter range of the first one;
+        // reconcile must allow that (every earlier checkpoint for the range was
+        // reviewed) or the run would be blocked immediately after a legitimate
+        // redraft.
+        let mut state = mckee_draft_saved_state(Some(1), Some("parked_findings"), 1);
+        {
+            let scene = &mut state.chapters[0].scenes[0];
+            scene.phase = ScenePhase::ParkedForCheckpoint;
+            scene.scene_id = Some("scene:1".to_string());
+        }
+        state.checkpoint_history.push(CheckpointRecord {
+            start_chapter: 1,
+            end_chapter: 1,
+            save_point_id: "save_point:park-1".to_string(),
+            status: CheckpointStatus::Reviewed,
+            report_artifact_path: Some("checkpoints/chapter-0001-0001.json".to_string()),
+            auto_outcome: None,
+            pending_manual_scene_ids: Vec::new(),
+        });
+        state.checkpoint_history.push(CheckpointRecord {
+            start_chapter: 1,
+            end_chapter: 1,
+            save_point_id: "save_point:park-2".to_string(),
+            status: CheckpointStatus::PendingReview,
+            report_artifact_path: Some("checkpoints/chapter-0001-0001.json".to_string()),
+            auto_outcome: None,
+            pending_manual_scene_ids: Vec::new(),
+        });
+
+        let mut snapshot = mckee_snapshot();
+        snapshot
+            .chapters
+            .get_mut(&1)
+            .expect("chapter 1")
+            .scenes
+            .insert(
+                1,
+                PersistedScene {
+                    scene_id: "scene:1".to_string(),
+                    scene_order: 1,
+                },
+            );
+        let outcome = reconcile_state(state, &snapshot);
+        assert!(
+            !outcome
+                .findings
+                .iter()
+                .any(|finding| finding.code == "duplicate_checkpoint_history"),
+            "{:?}",
+            outcome.findings
+        );
+        assert_eq!(
+            outcome.next_action,
+            NextAction::AwaitCheckpointReview {
+                start_chapter: 1,
+                end_chapter: 1,
+                save_point_id: "save_point:park-2".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn non_mckee_redraft_still_promotes_to_draft_saved_on_reconcile() {
+        // Pre-#33, a non-McKee redraft was undone by the residue rule: the old
+        // prose exists, so reconcile promoted the Scene straight back to
+        // draft_saved. The deliberate-redraft bypass is McKee-only, so a
+        // non-McKee run keeps that exact behaviour (even if a stray marker were
+        // present).
+        let mut state = draft_saved_state(None, None, 0);
+        {
+            let scene = &mut state.chapters[0].scenes[0];
+            scene.phase = ScenePhase::Pending;
+            scene.scene_id = None;
+            scene.draft_diagnostics = Some(crate::state::SceneDraftDiagnostics {
+                redraft_requested: true,
+                ..Default::default()
+            });
+        }
+        let mut snapshot = snapshot();
+        snapshot
+            .chapters
+            .get_mut(&1)
+            .expect("chapter 1")
+            .scenes
+            .insert(
+                1,
+                PersistedScene {
+                    scene_id: "scene:1".to_string(),
+                    scene_order: 1,
+                },
+            );
+
+        let outcome = reconcile_state(state, &snapshot);
+        assert!(!outcome.has_errors(), "{:?}", outcome.findings);
+        let scene = &outcome.state.chapters[0].scenes[0];
+        assert_eq!(
+            scene.phase,
+            ScenePhase::DraftSaved,
+            "a non-McKee redraft must promote to draft_saved exactly as before #33"
+        );
+        assert_eq!(scene.scene_id.as_deref(), Some("scene:1"));
+        assert!(
+            !outcome
+                .findings
+                .iter()
+                .any(|finding| finding.code == "redraft_pending"),
+            "the deliberate-redraft bypass must not fire on a non-McKee run"
+        );
+    }
+
+    #[test]
+    fn mckee_parked_scene_is_cleared_by_a_redraft_and_resumes_drafting() {
+        // The operator redraft (checkpoint review) puts the Scene back to Pending
+        // with the deliberate-redraft marker. Reconcile must not promote it back to
+        // draft_saved because the old prose still exists in Spindle.
+        let mut state = mckee_draft_saved_state(Some(1), Some("parked_findings"), 1);
+        state.chapters[0].scenes[0].phase = ScenePhase::ParkedForCheckpoint;
+        let mut snapshot = snapshot();
+        snapshot.mckee_structured = true;
+        snapshot
+            .chapters
+            .get_mut(&1)
+            .expect("chapter 1")
+            .scenes
+            .insert(
+                1,
+                PersistedScene {
+                    scene_id: "scene:1".to_string(),
+                    scene_order: 1,
+                },
+            );
+
+        // Simulate the redraft reset the operator performs at checkpoint review.
+        let scene = &mut state.chapters[0].scenes[0];
+        scene.phase = ScenePhase::Pending;
+        scene.scene_id = None;
+        scene.verify_status = None;
+        scene.verify_detail = None;
+        scene.revise_attempts = 0;
+        scene.draft_diagnostics = Some(crate::state::SceneDraftDiagnostics {
+            redraft_requested: true,
+            ..Default::default()
+        });
+
+        let outcome = reconcile_state(state, &snapshot);
+        assert!(!outcome.has_errors(), "{:?}", outcome.findings);
+        assert_eq!(
+            outcome.state.chapters[0].scenes[0].phase,
+            ScenePhase::Pending,
+            "a deliberate redraft must survive reconciliation"
+        );
+        assert!(
+            outcome.state.chapters[0].scenes[0].scene_id.is_none(),
+            "a redrafted Scene must not capture the superseded scene_id"
+        );
+        assert_eq!(
+            outcome.next_action,
+            NextAction::DraftScene {
+                chapter_number: 1,
+                scene_order: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn mckee_marker_is_refreshed_from_the_live_snapshot() {
+        let state = HarnessState::from_seed(seed(), "bible_branch:main".to_string());
+        assert!(!state.mckee_structured);
+        let outcome = reconcile_state(state, &mckee_snapshot());
+        assert!(outcome.state.mckee_structured);
+        // A snapshot that cannot read the marker must not inherit a stale value.
+        let mut stale = outcome.state.clone();
+        stale.mckee_structured = true;
+        let outcome = reconcile_state(stale, &snapshot());
+        assert!(!outcome.state.mckee_structured);
     }
 }

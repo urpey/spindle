@@ -674,6 +674,15 @@
         ],
         "tools": [],
         "trigger": "Load when designing or repairing dialogue as action: tactic, said versus wanted (subtext), Beats inside dialogue, the Turning Beat's line, and Swain labels as optional labels only."
+      },
+      {
+        "name": "story-structure/dialogue-line",
+        "profiles": [
+          "default",
+          "mckee"
+        ],
+        "tools": [],
+        "trigger": "Load when the dialogue tactics are already decided and the line itself needs work: subtext, exposition used as ammunition rather than explanation, over-obvious foreshadowing, and line-level compression."
       }
     ],
     "requires_skills": [

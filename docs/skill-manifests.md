@@ -12,7 +12,7 @@ reference requires both its tools and its owning core's dependency closure.
 The nested units are `spindle/setup`, `editor/style`,
 `story-structure/story-spine`, `story-structure/character-design`,
 `story-structure/value-turns`, `story-structure/scene-design`,
-`story-structure/dialogue-tactics`, and the five
+`story-structure/dialogue-tactics`, `story-structure/dialogue-line`, and the five
 `scene-writer` references
 (`scene-writer/authoring-runs`, `scene-writer/craft-and-voice`,
 `scene-writer/drafting-packets`, `scene-writer/offloaded-generation`, and

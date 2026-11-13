@@ -38,3 +38,10 @@ path = "references/dialogue-tactics.md"
 trigger = "Load when designing or repairing dialogue as action: tactic, said versus wanted (subtext), Beats inside dialogue, the Turning Beat's line, and Swain labels as optional labels only."
 profiles = ["default"]
 tools = []
+
+[[references]]
+name = "dialogue-line"
+path = "references/dialogue-line.md"
+trigger = "Load when the dialogue tactics are already decided and the line itself needs work: subtext, exposition used as ammunition rather than explanation, over-obvious foreshadowing, and line-level compression."
+profiles = ["default"]
+tools = []

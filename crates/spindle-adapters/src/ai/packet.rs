@@ -576,6 +576,7 @@ impl ModelRouter {
         budget: &CriticBudget,
         tokenizer: Option<&dyn DraftTokenizer>,
         max_calls: u32,
+        mckee_structured: bool,
     ) -> anyhow::Result<ShadowCritiqueRunResult> {
         anyhow::ensure!(
             policy == EditorialPolicy::CritiqueV1,
@@ -659,6 +660,7 @@ impl ModelRouter {
             budget,
             t,
             &route_system,
+            mckee_structured,
         )?;
 
         let mut prompt_hashes = vec![initial_hash.clone()];
@@ -763,6 +765,7 @@ impl ModelRouter {
             expected_packet_hash,
             base_text,
             expected_base_text_hash,
+            mckee_structured,
         ) {
             Ok(valid_critique) => Ok(ShadowCritiqueRunResult {
                 ingested_findings,
@@ -912,6 +915,7 @@ impl ModelRouter {
                     expected_packet_hash,
                     base_text,
                     expected_base_text_hash,
+                    mckee_structured,
                 ) {
                     Ok(repaired_critique) => Ok(ShadowCritiqueRunResult {
                         ingested_findings,
@@ -2219,6 +2223,7 @@ max_tokens = 500
                 &critic_budget,
                 Some(&VerifiedFixtureTokenizer),
                 2,
+                false,
             )
             .await
             .unwrap_err();

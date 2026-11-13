@@ -1,7 +1,7 @@
 use super::*;
 use crate::drafting::{
     DraftTokenizer, PacketBudget, artifact,
-    critique::{self, CRITIC_RUBRIC_VERSION, CriticBudget},
+    critique::{self, CriticBudget},
     revision::{
         self, BoundaryCrashPoint, JudgeBudget, RevisionBudget, RevisionBudgetAdmission,
         RevisionBudgetGate, RevisionLoopOptions, RevisionPassUsage, compare_candidate_checks,
@@ -137,6 +137,12 @@ impl SqliteSpindleService {
             anyhow::anyhow!("draft artifact missing prepared_packet; cannot run shadow critique")
         })?;
         let branch = self.repository.get_active_branch(&draft.project_id).await?;
+        // The CritiqueV1 critic path answers under the rubric the project
+        // selects: `scene-critic-mckee-v1` for a McKee project (the four McKee
+        // dimensions are in its rubric text), `scene-critic-v1` byte-identically
+        // for every other project.
+        let project = self.repository.get_project(&draft.project_id).await?;
+        let mckee_structured = project.mckee_structured;
         anyhow::ensure!(
             branch.id == draft.branch_id,
             "draft artifact branch is no longer active"
@@ -180,6 +186,7 @@ impl SqliteSpindleService {
                 budget,
                 tokenizer,
                 max_calls,
+                mckee_structured,
             )
             .await?;
 
@@ -192,7 +199,7 @@ impl SqliteSpindleService {
             scene_id: draft.scene_id.clone(),
             base_text_hash: draft.text_sha256.clone(),
             packet_hash: draft.packet_hash.clone(),
-            rubric_version: CRITIC_RUBRIC_VERSION.into(),
+            rubric_version: critique::critic_rubric_version(mckee_structured).into(),
             rating: draft.rating.clone(),
             ingested_findings: run_result.ingested_findings,
             deduplicated_finding_ids: run_result.deduplicated_finding_ids,
@@ -282,6 +289,11 @@ impl SqliteSpindleService {
         );
 
         let draft = artifact::load_artifact(draft_artifact_path)?;
+        // The critic rubric the loop's critique pass asks for and validates
+        // against is the project's selected version (McKee projects get
+        // `scene-critic-mckee-v1`; everyone else keeps `scene-critic-v1`).
+        let project = self.repository.get_project(&draft.project_id).await?;
+        let mckee_structured = project.mckee_structured;
         anyhow::ensure!(
             !draft.truncated,
             "incomplete/truncated draft artifact cannot enter revision loop"
@@ -636,6 +648,7 @@ impl SqliteSpindleService {
                         critic_budget,
                         tokenizer,
                         critic_max_calls,
+                        mckee_structured,
                     )
                     .await;
                 let critic_res = match critic_result {

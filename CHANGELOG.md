@@ -2,6 +2,70 @@
 
 ## Unreleased
 
+- Add the **independent McKee critic and park-for-checkpoint rule**, with
+  provenance-gated independence (ADR 0005). A McKee project now selects
+  `scene-critic-mckee-v1` (`spindle_core::drafting::critic`) instead of
+  `scene-critic-v1`; it keeps the base rubric and adds four dimensions — Value
+  Turn realized, Gap lands, exposition as ammunition rather than explanation,
+  and over-obvious foreshadowing. The dual-persona review round persists the
+  critic's structured verdict (`agree`/`mismatch` plus notes) on the realized
+  Value Turn and on the realized Narrative Promise events, together with the
+  four dimension scores. The critic prompt carries the plan (axes and Charges,
+  Gap, Turning Beat, planned promise events) and **not** the writer's realized
+  report, so the critic cannot grade the writer's own claim. A verdict produced
+  by the `review` route may gate; a verdict supplied through
+  `run_dual_persona_review`'s additive `critic_output` field is persisted with
+  `critic_verdict_source: "host"` (route rounds omit the marker) and is ignored
+  by gating, so the Scene's own writer can never submit the verdict that gates
+  its commit. The deterministic `critic_report_disagreement` scene-verify check
+  fires only in the direction the realized-vs-plan rules cannot see: the
+  writer's report matches the plan while the critic independently says the prose
+  does not deliver it (the inverse case is already `realized_value_turn` /
+  `realized_promise_event`, so one root cause never produces two errors). A
+  missing, stale, host-produced or malformed verdict is an unavailable pass,
+  never a finding. On a McKee run a Scene whose verify ends `parked_findings` —
+  any actionable deterministic finding after the revise budget — moves to the
+  new `parked_for_checkpoint` phase and the scheduler returns a fresh checkpoint
+  for its chapter, never `commit scene changes`. A checkpoint that is still
+  pending review is awaited; a reviewed checkpoint is history, so a second park
+  in the same range creates a new checkpoint instead of deadlocking on the old
+  save point. At checkpoint review the critic gates approval: a sampled Scene
+  whose persisted **route** verdict disagrees with the writer's report cannot be
+  approved manually or by an auto-checkpoint, the report lists it in
+  `critic_disagreement_scene_ids`, and the operator must redraft it through
+  `authoring_review_checkpoint`'s additive `redraft_scenes` to continue. The
+  live drafting park itself is driven by deterministic findings, because
+  verdicts only exist after the checkpoint-time review. A parked Scene is
+  cleared only by that review: `authoring_resolve_block` now refuses a parked
+  Scene in every target phase. `authoring_status` reports parked Scenes as
+  `parked_scene_refs` and `phase: "parked_for_checkpoint"` (ids only). A plan
+  amendment accepted before the review is honoured by the redraft; automatic
+  amendment detection for a parked Scene is **not implemented** (the harness
+  does not persist the parked plan revision), so the operator still requests the
+  redraft after applying the amendment. The `CritiqueV1` critic path also
+  selects the rubric by project marker now (`critique::critic_rubric_version`),
+  so its prompt and shadow artifact carry `scene-critic-mckee-v1` for a McKee
+  project and `scene-critic-v1` byte-identically otherwise. Non-McKee runs keep
+  `scene-critic-v1`, get no verdict and no check, keep the existing
+  commit-on-parked behaviour, and keep their previous redraft handling (no
+  deliberate-redraft marker, positional checkpoint sampling). Add the
+  `story-structure/dialogue-line` reference (Traditional Chinese) for line-level
+  dialogue work — subtext, exposition as ammunition, over-obvious foreshadowing
+  and compression — registered in the `story-structure` manifest and the
+  `mckee` profile.
+- Raise the **measured compatibility discovery ceilings** for the additive
+  critic/status/checkpoint fields (the provenance marker on the review round,
+  the verdict on the review round, the checkpoint review's `redraft_scenes`, and
+  `authoring_status`'s `parked_scene_refs`). Regenerating the schema inventory
+  does not itself authorize a raise. Measured UTF-8 tools/list bytes before →
+  after this ticket: `default` and `legacy-all` 863,617 → 869,303 (input 191,793
+  → 192,969); `authoring` 431,831 → 437,517 (input 108,425 → 109,601); `write`
+  564,311 → 569,997 (input 135,656 → 136,832); `workflow-authoring` 200,856 →
+  206,122 (input 105,527 → 106,703); `workflow-write` 127,695 → 132,275 (input
+  72,581 → 73,071); `revision` 58,512 → 63,092 (input 23,079 → 23,569); `style`
+  94,402 → 98,982 (input 34,159 → 34,649); `release` 92,241 → 96,821 (input
+  46,791 → 47,281). Tool names and tool counts are untouched, and the unchanged
+  profiles' ceilings stay byte-identical.
 - Add **McKee realized reports and deterministic scene verify**. A written Scene
   now reports what its prose actually did, and the plan is still the law. The
   realized report (`spindle_core::realized`) carries the realized Value Turn per

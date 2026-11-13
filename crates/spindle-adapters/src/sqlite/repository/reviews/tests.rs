@@ -20,6 +20,9 @@ async fn dual_persona_upsert_does_not_clobber_a_newer_fingerprint() {
         },
         genre_reader: PersonaReviewNotes::default(),
         priority_actions: Vec::new(),
+        critic_rubric_version: None,
+        critic_verdict: None,
+        critic_verdict_source: None,
     };
 
     let (_tmp, repo, project, branch, scene_id) = repo_with_scene().await;

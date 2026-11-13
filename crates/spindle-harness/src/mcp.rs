@@ -271,6 +271,11 @@ impl McpHarnessClient {
             active_branch_name: active_branch.name,
             chapters,
             summarized_chapters,
+            // The offline CLI snapshot has no project-marker resource. McKee
+            // authoring runs are started and reconciled through the MCP
+            // authoring tools, whose snapshot carries the live marker; a
+            // CLI-created run therefore behaves exactly as before.
+            mckee_structured: false,
         })
     }
 

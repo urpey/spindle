@@ -253,11 +253,18 @@ impl SqliteSpindleService {
 
         let service = self.clone();
         let project_id = input.project_id.clone();
+        let critic_output = input.critic_output.clone();
         let scene = scene.clone();
         let job_key_owned = job_key.to_string();
         tokio::spawn(async move {
             let outcome = service
-                .drive_review_rounds(&project_id, &scene, target_rounds, prior_rounds)
+                .drive_review_rounds(
+                    &project_id,
+                    &scene,
+                    target_rounds,
+                    prior_rounds,
+                    critic_output,
+                )
                 .await;
             let state = match outcome {
                 Ok(()) => ReviewJobState::Done,
@@ -299,6 +306,7 @@ impl SqliteSpindleService {
         scene: &crate::sqlite::records::Scene,
         target_rounds: usize,
         prior_rounds: Vec<spindle_core::models::DualPersonaReviewRound>,
+        critic_output: Option<String>,
     ) -> Result<()> {
         let branch_id = scene.branch_id.clone();
         let scene_fingerprint = scene_revision_fingerprint(scene);
@@ -327,7 +335,7 @@ impl SqliteSpindleService {
             }
             let round = all_rounds.len() + 1;
             let completed = self
-                .execute_review_round(scene, round, &style_directive)
+                .execute_review_round(scene, round, &style_directive, critic_output.as_deref())
                 .await?;
             all_rounds.push(completed);
 
@@ -368,9 +376,27 @@ impl SqliteSpindleService {
         scene: &crate::sqlite::records::Scene,
         round: usize,
         style_directive: &spindle_core::style::StyleDirective,
+        critic_output: Option<&str>,
     ) -> Result<spindle_core::models::DualPersonaReviewRound> {
         use crate::ai::ModelRequest;
+        use spindle_core::drafting::critic::{
+            CriticVerdictSource, parse_mckee_critic_verdict, render_mckee_critic_prompt,
+            scene_critic_rubric_version,
+        };
         use spindle_core::models::{DualPersonaReviewRound, PersonaReviewNotes};
+
+        // McKee projects select the bumped rubric and get the independent critic
+        // block. The writer's realized report is deliberately NOT part of the
+        // prompt: the critic judges the prose against the plan, never against the
+        // writer's own verdict (ADR 0005).
+        let project = self.repository.get_project(&scene.project_id).await?;
+        let mckee = project.mckee_structured;
+        let mckee_block = if mckee {
+            let context = self.mckee_critic_context(scene).await?;
+            render_mckee_critic_prompt(&context.plan_lines, &context.promise_lines)
+        } else {
+            String::new()
+        };
 
         let run_genre_reader = !style_directive.is_empty();
         let genre_brief = style_directive.render_markdown().unwrap_or_default();
@@ -420,7 +446,7 @@ impl SqliteSpindleService {
                          Format your response as:\n\
                          STRENGTHS:\n- one strength per line\n\n\
                          CONCERNS:\n- one concern per line\n\n\
-                         Be specific to THIS scene. Reference actual lines, images, or moments.{literary_antislop}",
+                         Be specific to THIS scene. Reference actual lines, images, or moments.{literary_antislop}{mckee_block}",
                     scene.summary, scene.full_text
                 ),
                 rating: review_rating.clone(),
@@ -491,18 +517,26 @@ impl SqliteSpindleService {
             };
 
             // The three personas dispatch together; the round costs one model
-            // call of wall time instead of three.
+            // call of wall time instead of three. A host-submitted critic
+            // output (the fixed-output seam) replaces only the literary call:
+            // the parser, validation and persistence below are identical.
+            let literary_call = async {
+                match critic_output {
+                    Some(text) => Ok::<_, anyhow::Error>((text.to_string(), "host".to_string())),
+                    None => router
+                        .complete(&literary_request)
+                        .await
+                        .map(|response| (response.output, response.adapter_kind)),
+                }
+            };
             let genre_call = async {
                 if !run_genre_reader {
                     return Ok(None);
                 }
                 router.complete(&genre_request).await.map(Some)
             };
-            let (literary, craft, genre) = tokio::try_join!(
-                router.complete(&literary_request),
-                router.complete(&craft_request),
-                genre_call
-            )?;
+            let ((literary_output, literary_adapter), craft, genre) =
+                tokio::try_join!(literary_call, router.complete(&craft_request), genre_call)?;
 
             let genre_reader = match genre {
                 Some(genre) => {
@@ -526,13 +560,13 @@ impl SqliteSpindleService {
                 },
             };
 
-            let (literary_strengths, literary_concerns) = if literary.adapter_kind == "local" {
+            let (literary_strengths, literary_concerns) = if literary_adapter == "local" {
                 (
                     vec!["local heuristic pass (no external model configured)".to_string()],
                     derive_literary_concerns(scene),
                 )
             } else {
-                parse_review_sections(&literary.output)
+                parse_review_sections(&literary_output)
             };
             let (craft_strengths, craft_concerns) = if craft.adapter_kind == "local" {
                 (
@@ -544,7 +578,7 @@ impl SqliteSpindleService {
             };
             // Genre delivery is the primary quality metric, so genre-reader
             // concerns lead the priority actions.
-            let priority_actions = if literary.adapter_kind == "local" {
+            let priority_actions = if literary_adapter == "local" {
                 let mut actions: Vec<String> = genre_reader
                     .concerns
                     .iter()
@@ -573,6 +607,27 @@ impl SqliteSpindleService {
                 actions
             };
 
+            // The McKee rubric version is recorded even when no usable verdict
+            // came back: the round was judged under it, and the verify check
+            // treats a missing verdict as an unavailable pass, not a mismatch.
+            // Provenance (ADR 0005): a verdict produced by the dispatched
+            // `review` route may gate independence; one submitted through the
+            // `critic_output` seam is a host/offline verdict and never may.
+            let (critic_rubric_version, critic_verdict, critic_verdict_source) = if mckee {
+                let source = if critic_output.is_some() {
+                    CriticVerdictSource::Host
+                } else {
+                    CriticVerdictSource::Route
+                };
+                (
+                    Some(scene_critic_rubric_version(true).to_string()),
+                    parse_mckee_critic_verdict(&literary_output),
+                    Some(source),
+                )
+            } else {
+                (None, None, None)
+            };
+
             Ok(DualPersonaReviewRound {
                 round,
                 literary_critic: PersonaReviewNotes {
@@ -587,7 +642,96 @@ impl SqliteSpindleService {
                 },
                 genre_reader,
                 priority_actions,
+                critic_rubric_version,
+                critic_verdict,
+                critic_verdict_source,
             })
         }
     }
+
+    /// The plan facts the McKee critic judges the prose against.
+    ///
+    /// Deliberately excludes the writer's realized report: the critic's verdict
+    /// must be independent of it (ADR 0005). Returns empty lists when the
+    /// chapter has no persisted plan, which the prompt renders as "none planned"
+    /// rather than inventing a plan.
+    async fn mckee_critic_context(
+        &self,
+        scene: &crate::sqlite::records::Scene,
+    ) -> Result<McKeeCriticContext> {
+        let plans = self
+            .repository
+            .list_chapter_plans_by_project(&scene.project_id)
+            .await?;
+        let planned = plans
+            .iter()
+            .find(|plan| {
+                plan.branch_id == scene.branch_id
+                    && plan.book_number == scene.book_number
+                    && plan.chapter_number == scene.chapter_number
+            })
+            .and_then(|plan| {
+                plan.scenes
+                    .iter()
+                    .find(|planned| planned.scene_order == scene.scene_order)
+            });
+        let mut plan_lines = Vec::new();
+        if let Some(planned) = planned {
+            for axis in planned
+                .primary_value_axis
+                .iter()
+                .chain(planned.secondary_value_axes.iter())
+            {
+                plan_lines.push(format!(
+                    "Value Axis '{}': {}",
+                    axis.axis.trim(),
+                    spindle_core::realized::format_value_turn(axis.opening, axis.closing)
+                ));
+            }
+            if let Some(gap) = planned.gap.as_ref() {
+                plan_lines.push(format!(
+                    "Gap: expected '{}' but actual '{}'",
+                    gap.expected.trim(),
+                    gap.actual.trim()
+                ));
+            }
+            if let Some(beat) = planned.turning_beat {
+                plan_lines.push(format!("Turning Beat at beat {beat}"));
+            }
+        }
+
+        let promises = self
+            .repository
+            .list_narrative_promises_by_project_and_branch(&scene.project_id, &scene.branch_id)
+            .await?;
+        let names_scene = |placement: &crate::sqlite::records::StoredStoryPlacement| {
+            placement.book_number == scene.book_number
+                && placement.chapter_number == scene.chapter_number
+                && placement.scene_order == Some(scene.scene_order)
+        };
+        let mut promise_lines = Vec::new();
+        for promise in promises
+            .iter()
+            .filter(|promise| promise.archived_at.is_none())
+        {
+            if names_scene(&promise.planted_at) {
+                promise_lines.push(format!("setup (plant): '{}'", promise.description.trim()));
+            }
+            if promise.planned_payoff.as_ref().is_some_and(names_scene) {
+                promise_lines.push(format!("payoff: '{}'", promise.description.trim()));
+            }
+        }
+
+        Ok(McKeeCriticContext {
+            plan_lines,
+            promise_lines,
+        })
+    }
+}
+
+/// Plan facts handed to the McKee critic prompt. Never carries the writer's
+/// realized report.
+struct McKeeCriticContext {
+    plan_lines: Vec<String>,
+    promise_lines: Vec<String>,
 }
