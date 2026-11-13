@@ -995,8 +995,15 @@ fn critique_quarantines_author_lock_prohibited_outcome_and_canon_conflicts_and_c
         scope: DirectiveScope::Chapter,
     });
 
-    let validated =
-        validate_and_normalize_critique(raw, &pkt, "pkt-hash-1", base_text, &base_hash).unwrap();
+    let validated = validate_and_normalize_critique(
+        raw,
+        &pkt,
+        "pkt-hash-1",
+        base_text,
+        &base_hash,
+        critique::CRITIC_RUBRIC_VERSION,
+    )
+    .unwrap();
 
     // All three conflicting/chapter-scoped directives were quarantined into requires_author_decision
     assert_eq!(validated.requires_author_decision.len(), 3);
@@ -1028,6 +1035,130 @@ fn critique_quarantines_author_lock_prohibited_outcome_and_canon_conflicts_and_c
     assert_eq!(
         validated.directives[1].dimension,
         CriticDimension::ScenePurpose
+    );
+}
+
+#[test]
+fn critic_rubric_selection_is_mckee_aware_and_keeps_v1_bytes_identical() {
+    use critique::*;
+
+    // Non-McKee: the historical rubric version and text, byte-identically.
+    assert_eq!(critic_rubric_version(false), "scene-critic-v1");
+    assert_eq!(critic_rubric(false), CRITIC_RUBRIC);
+    assert!(!critic_rubric(false).contains("McKee"));
+
+    // McKee: the bumped version, and a rubric text that carries the four McKee
+    // dimensions after the unchanged base rubric.
+    assert_eq!(critic_rubric_version(true), "scene-critic-mckee-v1");
+    let mckee = critic_rubric(true);
+    assert!(
+        mckee.starts_with(CRITIC_RUBRIC),
+        "the base rubric is a prefix"
+    );
+    for dimension in [
+        "value_turn_realized",
+        "gap_lands",
+        "exposition_as_ammunition",
+        "over_obvious_foreshadowing",
+    ] {
+        assert!(mckee.contains(dimension), "missing {dimension}: {mckee}");
+    }
+
+    // The assembled critic prompt asks for the selected version and carries the
+    // selected rubric text; the output template is stamped with it too.
+    let base_text = "Maë braced against the floodwater as the bridge timber cracked.";
+    let base_hash = sha256_hex(base_text.as_bytes());
+    let pkt = fixture();
+    let budget = CriticBudget::scene_default("fixture".into(), 20_000);
+    let (v1_msgs, _, _) = assemble_critic_messages(
+        &pkt,
+        "pkt-hash-rubric",
+        base_text,
+        &base_hash,
+        &[],
+        &budget,
+        Some(&VerifiedFixtureTokenizer),
+        "",
+        false,
+    )
+    .unwrap();
+    assert!(v1_msgs.user.contains("CRITIC RUBRIC scene-critic-v1"));
+    assert!(
+        v1_msgs
+            .user
+            .contains("\"rubric_version\":\"scene-critic-v1\"")
+    );
+    assert!(!v1_msgs.user.contains("value_turn_realized"));
+
+    let (mckee_msgs, _, _) = assemble_critic_messages(
+        &pkt,
+        "pkt-hash-rubric",
+        base_text,
+        &base_hash,
+        &[],
+        &budget,
+        Some(&VerifiedFixtureTokenizer),
+        "",
+        true,
+    )
+    .unwrap();
+    assert!(
+        mckee_msgs
+            .user
+            .contains("CRITIC RUBRIC scene-critic-mckee-v1")
+    );
+    assert!(
+        mckee_msgs
+            .user
+            .contains("\"rubric_version\":\"scene-critic-mckee-v1\"")
+    );
+    for dimension in [
+        "value_turn_realized",
+        "gap_lands",
+        "exposition_as_ammunition",
+        "over_obvious_foreshadowing",
+    ] {
+        assert!(
+            mckee_msgs.user.contains(dimension),
+            "McKee prompt must carry {dimension}"
+        );
+    }
+}
+
+#[test]
+fn a_critique_answered_under_the_mckee_rubric_validates_only_for_a_mckee_project() {
+    use critique::*;
+
+    let base_text = "Maë braced against the floodwater as the bridge timber cracked.";
+    let base_hash = sha256_hex(base_text.as_bytes());
+    let pkt = fixture();
+    let mut critique = valid_critique_fixture(base_text, &base_hash, "pkt-hash-rubric", None);
+    critique.rubric_version = "scene-critic-mckee-v1".into();
+    let raw = serde_json::to_string(&critique).unwrap();
+
+    let validated = parse_and_validate_critique_output(
+        &raw,
+        &pkt,
+        "pkt-hash-rubric",
+        base_text,
+        &base_hash,
+        true,
+    )
+    .expect("a McKee-rubric critique must validate for a McKee project");
+    assert_eq!(validated.rubric_version, "scene-critic-mckee-v1");
+
+    let error = parse_and_validate_critique_output(
+        &raw,
+        &pkt,
+        "pkt-hash-rubric",
+        base_text,
+        &base_hash,
+        false,
+    )
+    .expect_err("a McKee-rubric critique must be rejected for a non-McKee project");
+    assert!(
+        error.to_string().contains("rubric_version"),
+        "unexpected error: {error}"
     );
 }
 
@@ -1096,6 +1227,7 @@ fn critic_prompt_embeds_complete_json_schema_and_template_that_validates_without
         &critic_budget,
         Some(&VerifiedFixtureTokenizer),
         "Route system framing.",
+        false,
     )
     .unwrap();
 
@@ -1135,6 +1267,7 @@ fn critic_prompt_embeds_complete_json_schema_and_template_that_validates_without
         &tiny_budget,
         Some(&VerifiedFixtureTokenizer),
         "Route system framing.",
+        false,
     )
     .unwrap_err();
     assert!(matches!(overflow_err, CritiqueError::MandatoryOverflow(_)));
@@ -1230,6 +1363,7 @@ fn critic_prompt_embeds_complete_json_schema_and_template_that_validates_without
         "pkt-hash-contract",
         base_text,
         &base_hash,
+        false,
     )
     .expect("response synthesized purely from prompt template must validate");
     assert_eq!(validated.dimensions.len(), 10);

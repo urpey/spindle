@@ -692,6 +692,9 @@ impl ToolRouter {
         // forward advance is allowed even on a scene with no blocked_reason.
         let run_level_blocked = {
             let snapshot = self.authoring_project_snapshot(&harness_state).await?;
+            // The live marker is authoritative (a copied run directory must not
+            // turn McKee redraft semantics on/off).
+            harness_state.mckee_structured = snapshot.mckee_structured;
             reconcile_state(harness_state.clone(), &snapshot).has_errors()
         };
 
@@ -704,7 +707,10 @@ impl ToolRouter {
                 phase,
                 run_level_blocked,
             ),
-            None => spindle_harness::operator::redraft_scene_block(
+            // A parked Scene is refused here (fix #33 review): a park is a
+            // checkpoint decision and is cleared only by the checkpoint review's
+            // redraft_scenes path, never by a bare manual reset.
+            None => spindle_harness::operator::operator_redraft_scene_block(
                 &mut harness_state,
                 &state_path,
                 input.chapter_number,

@@ -757,21 +757,47 @@ The critic emits it after its strengths/concerns sections as one
 `CRITIC VERDICT:` line; `parse_mckee_critic_verdict` salvages the trailing JSON
 object, then validates the rubric, all four dimensions, scores `1..=5` and
 non-empty rationales. Malformed output yields no verdict, which is an
-**unavailable pass**, never a disagreement. A caller can supply fixed critic
-output through `run_dual_persona_review`'s additive `critic_output` field; it
-goes through the same parse/validate/persist path and skips only the literary
-critic model call, so tests and offline hosts drive the real contract without a
-model.
+**unavailable pass**, never a disagreement.
+
+`critic_output` is the **host/offline seam**, not a production critic path: the
+text goes through the same parse/validate/persist path, skips only the literary
+critic model call, and the persisted round is tagged
+`critic_verdict_source: "host"`. Only a route-produced verdict may gate
+independence — the verify check and checkpoint approval ignore host/fixture
+verdicts, so the Scene's own writer cannot submit the verdict that gates its
+commit (ADR 0005). Route-produced rounds omit the marker.
 
 The deterministic `critic_report_disagreement` scene-verify check compares that
 persisted verdict with the writer's realized report, only when the report makes a
-definite claim on every planned axis (and on every planned promise event) and
-only for the prose version the review's fingerprint names. The check is part of
-`SCENE_VERIFY_CHECKS`, is gated on `project.mckee_structured`, and emits an
-`error` finding attributed to the Scene. On a McKee run those findings — and any
-other actionable finding after the revise budget — park the Scene for checkpoint
-review instead of committing it. Non-McKee projects keep the current
-`scene-critic-v1` rubric and see none of this.
+definite claim on every planned axis (and on every planned promise event), only
+when that claim **matches the plan**, and only for the prose version the review's
+fingerprint names. (The inverse case — the writer's report already differs from
+the plan — is the `realized_value_turn` / `realized_promise_event` finding; the
+critic check stays silent so one root cause never produces two errors.) The
+check is part of `SCENE_VERIFY_CHECKS`, is gated on `project.mckee_structured`,
+and emits an `error` finding attributed to the Scene. On a McKee run those
+findings — and any other actionable finding after the revise budget — park the
+Scene for checkpoint review instead of committing it. Verdicts only exist after
+the checkpoint-time dual-persona review, so a **route** disagreement also blocks
+checkpoint approval (manual and auto) and makes the sampled Scene
+redraft-required even though the live drafting loop never saw the verdict.
+Non-McKee projects keep the current `scene-critic-v1` rubric and see none of
+this.
+
+### The `CritiqueV1` critic path selects the same rubric
+
+The separate `CritiqueV1` packet/critique path (`critique_artifact_shadow`,
+`revise_artifact_loop`) answers under the rubric the project selects too:
+`critique::critic_rubric_version(mckee_structured)` returns
+`scene-critic-mckee-v1` for a McKee project and `scene-critic-v1` byte-identically
+for every other project. The McKee rubric text is the unchanged base rubric plus
+the four McKee assessment criteria (Value Turn realized, Gap lands, exposition as
+ammunition, over-obvious foreshadowing). They are assessment criteria only: the
+closed ten-dimension `CritiqueV1` output contract and its schema are unchanged,
+and the shadow artifact is stamped with the selected version so the artifact can
+never claim a rubric the prompt did not ask for. `context.rs`'s packet
+`craft_rubric` is the drafting craft rubric (`scene-craft-v1`), not the critic
+rubric, and is deliberately unchanged.
 
 ### `CritiqueV1` DTO, anchor validation, and feedback ingestion
 

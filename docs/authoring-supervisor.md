@@ -18,7 +18,7 @@ The tables defined in migration `V0007__authoring_runs.sql` are:
 
 1. **`authoring_run`**: Stores metadata for the overall multi-chapter drafting run, including the project, active branch, start/end chapters, checkpoint intervals, editorial directives, status, and timestamps.
 2. **`authoring_run_chapter`**: Tracks chapter-level progress, plans, synopses, POV character assignments, status, and summary artifacts.
-3. **`authoring_run_scene`**: Tracks scene-level progress, including the participating characters, location, content rating, phase (`pending`, `draft_saved`, `changes_committed`, `beats_annotated`), scene ID, and artifact paths.
+3. **`authoring_run_scene`**: Tracks scene-level progress, including the participating characters, location, content rating, phase (`pending`, `draft_saved`, `changes_committed`, `beats_annotated`, `parked_for_checkpoint`; the last is McKee-only and means the Scene awaits checkpoint review and must never be committed as-is), scene ID, and artifact paths.
 4. **`authoring_checkpoint`**: Tracks checkpoint ranges, statuses (`pending_review`, `reviewed`), and report artifact paths.
 
 ### McKee-structured projects
@@ -123,8 +123,8 @@ The supervisor exposes 9 MCP tools through the `spindle-mcp` server:
 | `authoring_execute_next` | Advances exactly one bounded drafting/commit/checkpoint action. Default mode is interactive/hybrid: non-explicit draft steps return host-draft instructions instead of calling the draft route. | `project_id`, `run_id`, `mode` (optional; use `"agent"` only for intentional full offload) | `run_id`, `executed_action`, `next_action`, `status` |
 | `authoring_save_scene_draft` | Saves host-drafted prose plus its required structured continuity package. On a McKee project the package may carry (or consist of) a `realized_report`: the realized Value Turns, Character Effects, realized promise events and dramatised planned Key Facts, which persists with the Scene and satisfies the package on its own. Re-saving a scene in a chapter whose summary is already persisted invalidates that summary (row + artifact + `summary_saved`) so the pipeline regenerates it after the scene recommits. | `project_id`, `run_id`, scene placement, `full_text`, `summary`, `character_states`, `canonical_facts`, `relationship_updates`, `beats`, `continuity_notes`, `realized_report` (McKee) | `run_id`, `scene_id`, `scene_artifact_path`, `structured_update_count` |
 | `authoring_record_checkpoint_audit` | Attaches the deep consistency result returned by a separate `check_consistency(deep_check=true)` call to a pending checkpoint. | `project_id`, `run_id`, `start_chapter`, `end_chapter`, `deep_consistency` | `run_id`, `status` |
-| `authoring_review_checkpoint` | Marks a checkpoint reviewed and appends directives to resume. On a McKee run, `redraft_scenes` clears the parked Scenes that review exists to decide; a review that would leave one parked is refused. | `project_id`, `run_id`, `start_chapter`, `end_chapter`, `directives`, `redraft_scenes` (optional; `[{chapter_number, scene_order}]`) | `run_id`, `status` |
-| `authoring_resolve_block` | Clears a blocked scene after operator inspection and advances it to the next safe phase, or resets a poisoned scene to pending-draft with `target_phase: "redraft"`. Forward advances also apply to scenes in a run blocked at RUN level (reconcile findings) even when the scene itself carries no block; only a truly unblocked scene in an unblocked run is refused. | `project_id`, `run_id`, `chapter_number`, `scene_order`, `target_phase` | `run_id`, `status` |
+| `authoring_review_checkpoint` | Marks a checkpoint reviewed and appends directives to resume. On a McKee run, `redraft_scenes` clears the parked Scenes that review exists to decide — and any sampled Scene whose persisted route critic verdict disagrees with the writer's report (listed in the report's `critic_disagreement_scene_ids`). A review that would leave a parked Scene, or a disagreed Scene unredrafted, is refused. | `project_id`, `run_id`, `start_chapter`, `end_chapter`, `directives`, `redraft_scenes` (optional; `[{chapter_number, scene_order}]`) | `run_id`, `status` |
+| `authoring_resolve_block` | Clears a blocked scene after operator inspection and advances it to the next safe phase, or resets a poisoned scene to pending-draft with `target_phase: "redraft"`. Forward advances also apply to scenes in a run blocked at RUN level (reconcile findings) even when the scene itself carries no block; only a truly unblocked scene in an unblocked run is refused. A Scene parked for checkpoint review is refused here in every direction — its park is cleared only by `authoring_review_checkpoint`'s `redraft_scenes`. | `project_id`, `run_id`, `chapter_number`, `scene_order`, `target_phase` | `run_id`, `status` |
 | `authoring_cancel_run` | Pauses or cancels the active run without deleting progress. | `project_id`, `run_id` | `run_id`, `status` |
 
 Chapter plans are the source of truth for pre-draft scene requirements. Each
@@ -254,29 +254,64 @@ structured verdict — agree/mismatch with notes on the realized **Value Turn** 
 on the realized **promise events**, plus the four dimension scores — on the
 review round. The critic prompt receives the plan (axes and Charges, Gap,
 Turning Beat, planned promise events) and the prose; it never receives the
-writer's realized report, so it cannot grade the writer's own claim. A
-disagreement between that verdict and a definite writer claim is the
-`critic_report_disagreement` error finding. A missing verdict, a verdict for an
-older prose version, or a report that claims nothing about the compared axis is
-an **unavailable pass**: the check stays silent rather than inventing a
-disagreement. Non-McKee projects keep `scene-critic-v1` byte-identically and
-never get a verdict or the check.
+writer's realized report, so it cannot grade the writer's own claim.
+
+A disagreement between that verdict and the writer's report is the
+`critic_report_disagreement` error finding, and it fires only in the direction
+the deterministic realized-vs-plan rule cannot see: the writer's report **matches
+the plan** while the critic independently says the prose does not deliver it. If
+the writer's report already differs from the plan, the realized rule owns that
+root cause and the critic check stays silent (one finding per root cause). A
+missing verdict, a verdict for an older prose version, or a report that claims
+nothing about the compared axis is an **unavailable pass**: the check stays
+silent rather than inventing a disagreement.
+
+**Provenance gates independence.** `run_dual_persona_review`'s additive
+`critic_output` field is an **offline/test seam**, not a production critic path:
+a verdict supplied through it is persisted with `critic_verdict_source: "host"`
+(route-produced verdicts omit the marker). Only route-produced verdicts may gate
+anything; host/fixture verdicts are displayable and testable but never satisfy or
+block the independence check.
+
+**A critic disagreement blocks checkpoint approval.** Verdicts only exist after
+the dual-persona review that runs at checkpoint review time, so the live drafting
+loop cannot see one. A park during drafting is therefore driven by the
+deterministic findings above; if a sampled Scene's persisted **route** verdict
+disagrees with the writer's report when the checkpoint is reviewed, the
+checkpoint cannot be approved (manually or by the auto-checkpoint), the report
+lists the Scene in `critic_disagreement_scene_ids`, and the operator must pass it
+in `redraft_scenes` to continue. The verify finding still appears for whatever
+path does have a persisted verdict. Non-McKee projects keep `scene-critic-v1`
+byte-identically and never get a verdict or the check.
 
 **Parking a mismatch (McKee only).** When verify ends `parked_findings` on a
 McKee run, the Scene moves to `parked_for_checkpoint` and the scheduler returns a
-checkpoint for its chapter, never a commit. `authoring_status` exposes the
-parked Scenes as `parked_scene_refs` (`chapter.scene`) and `phase:
-"parked_for_checkpoint"`, ids only, and the run reports `blocked` while the
-checkpoint awaits review. Checkpoint review clears a park by **redrafting** the
-Scene: pass it in `authoring_review_checkpoint`'s `redraft_scenes` (or use
-`authoring_resolve_block` with `target_phase="redraft"`). A review that leaves a
-parked Scene in place is refused — an auto-checkpoint cannot self-approve a
-mismatch — so the run cannot commit it by marking the checkpoint reviewed. A
-**plan amendment** accepted before the review is the other legitimate route: the
-amended plan is what the redrafted Scene will be held to. Automatic detection of
-an amendment for a parked Scene is not wired: the harness does not persist the
-parked plan revision, so the operator still has to request the redraft after the
-amendment is applied.
+fresh checkpoint for its chapter, never a commit. A checkpoint that is still
+`pending_review` is awaited; a `reviewed` checkpoint is history and is never
+awaited again, so a second park in the same chapter range starts a NEW checkpoint
+(the shell keeps both records) instead of deadlocking on the old save point.
+`authoring_status` exposes parked Scenes as `parked_scene_refs`
+(`chapter.scene`) and `phase: "parked_for_checkpoint"`, ids only, and the run
+reports `blocked` while the checkpoint awaits review.
+
+Checkpoint review clears a park by **redrafting** the Scene: pass it in
+`authoring_review_checkpoint`'s `redraft_scenes`. This is the only clearance
+path: `authoring_resolve_block` refuses a parked Scene (in every target phase),
+so a park can never be cleared by a bare manual reset outside the review. A
+review that leaves a parked Scene in place is refused — an auto-checkpoint
+cannot self-approve a mismatch — so the run cannot commit it by marking the
+checkpoint reviewed. At checkpoint time a sampled Scene is usually already
+committed; such a Scene is **redraft-required** (listed in the report and in the
+review refusal) rather than forced backwards a phase, because a saved chapter
+summary and completed beats make `parked_for_checkpoint` contradictory.
+
+A **plan amendment** accepted before the review is the legitimate way to change
+what the redraft is held to: the amended plan is what the new draft is judged
+against. Automatic detection of an amendment for a parked Scene is **not
+implemented** — the harness does not persist the plan revision the park was based
+on, so the operator still has to request the redraft after the amendment is
+applied. The redraft itself is implemented; only the automatic detection is
+future work.
 
 Promise status is **system-written** on a McKee project: after a confirmed
 realized promise event saves, Spindle advances that promise's status with the
@@ -471,8 +506,11 @@ next `authoring_execute_next` re-dispatches a fresh draft rather than re-parsing
 the cached output forever. If you want to force a clean re-draft explicitly —
 e.g. after fixing agent config — call `authoring_resolve_block` with
 `target_phase: "redraft"`. That resets the scene to pending-draft (clearing the
-stored generation, deleting the stale scene artifact, and clearing verify state)
-so the next execute re-drafts it from scratch. The forward-advance phases
+stored generation, deleting the stale scene artifact, clearing verify state, and
+— on a McKee run only — installing the deliberate-redraft marker that reconcile
+must respect) so the next execute re-drafts it from scratch. A Scene parked for
+checkpoint review is refused here in every target phase and must be cleared by
+`authoring_review_checkpoint`'s `redraft_scenes`. The forward-advance phases
 (`draft_saved`, `changes_committed`, `beats_annotated`) are unchanged.
 
 ### Draft Routing Semantics

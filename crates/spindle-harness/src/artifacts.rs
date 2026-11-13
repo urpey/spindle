@@ -319,6 +319,14 @@ pub struct CheckpointReportArtifact {
     pub narrative_promises: serde_json::Value,
     #[serde(default)]
     pub sampled_scene_ids: Vec<String>,
+    /// Samples whose persisted **route-produced** McKee critic verdict
+    /// disagrees with the writer's realized report on the current prose
+    /// (ADR 0005). Non-empty means `authoring_review_checkpoint` refused to
+    /// approve: those Scenes are parked for checkpoint review and must be
+    /// redrafted. Additive and serde-default, so a report written before the
+    /// gate (or by a non-McKee run) round-trips byte-identically.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub critic_disagreement_scene_ids: Vec<String>,
     /// Cumulative reader-simulation section (evolution §3.6, R3). Additive,
     /// serde-default so a pre-reader-sim report round-trips unchanged. Populated
     /// by the auto-checkpoint automation after the sampled reviews and before the

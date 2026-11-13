@@ -6212,16 +6212,14 @@ pub struct RunDualPersonaReviewInput {
     pub branch_id: Option<String>,
     pub scene_id: String,
     pub rounds: Option<usize>,
-    /// Optional host-submitted critic output used instead of dispatching the
+    /// Optional host/offline critic output used instead of dispatching the
     /// literary-critic model call for this review.
     ///
-    /// This is the fixed-critic-output seam: the same parser, validation and
-    /// persistence path a live critic goes through, with the text supplied by
-    /// the caller (fixtures and offline hosts). It is never the writer's
-    /// realized report — the critic contract judges the prose against the plan,
-    /// and the verdict is parsed and validated exactly as a model reply is.
-    /// Additive and skipped when unset, so existing callers serialize
-    /// byte-identically.
+    /// This is the **offline/test seam**, not a production critic path: a
+    /// verdict persisted through it is tagged `host` and is ignored by
+    /// independence gating (it can neither satisfy nor block
+    /// `critic_report_disagreement` or checkpoint approval). Additive and
+    /// skipped when unset, so existing callers serialize byte-identically.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub critic_output: Option<String>,
 }
@@ -6259,6 +6257,31 @@ pub struct DualPersonaReviewRound {
     /// pass, never a disagreement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub critic_verdict: Option<crate::drafting::critic::McKeeCriticVerdict>,
+    /// Provenance of [`Self::critic_verdict`]. Omitted for the historical
+    /// `review` route producer; `host` marks a verdict submitted through
+    /// `critic_output`, which never gates independence.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::drafting::critic::CriticVerdictSource::skip_if_route"
+    )]
+    pub critic_verdict_source: Option<crate::drafting::critic::CriticVerdictSource>,
+}
+
+impl DualPersonaReviewRound {
+    /// The critic verdict, only when the `review` route produced it.
+    ///
+    /// This is the single gate every independence consumer must go through
+    /// (ADR 0005): a host/fixture verdict may be displayed and tested against
+    /// offline, but it can never satisfy or block the independence check.
+    pub fn route_critic_verdict(&self) -> Option<&crate::drafting::critic::McKeeCriticVerdict> {
+        let source = self
+            .critic_verdict_source
+            .unwrap_or(crate::drafting::critic::CriticVerdictSource::Route);
+        if !source.is_route() {
+            return None;
+        }
+        self.critic_verdict.as_ref()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

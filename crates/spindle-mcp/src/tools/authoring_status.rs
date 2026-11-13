@@ -285,18 +285,10 @@ impl ToolRouter {
         // Parked scenes are surfaced as ids/counts only, never prose: a McKee
         // Scene whose verify never became clean is waiting for a human decision
         // at its checkpoint, and the status must say so.
-        let parked_scene_refs = outcome
-            .state
-            .chapters
-            .iter()
-            .flat_map(|chapter| {
-                chapter
-                    .scenes
-                    .iter()
-                    .filter(|scene| {
-                        scene.phase == spindle_harness::state::ScenePhase::ParkedForCheckpoint
-                    })
-                    .map(|scene| format!("{}.{}", chapter.chapter_number, scene.scene_order))
+        let parked_scene_refs = spindle_harness::operator::parked_scene_refs(&outcome.state)
+            .into_iter()
+            .map(|(chapter_number, scene_order)| {
+                spindle_harness::operator::parked_scene_ref(chapter_number, scene_order)
             })
             .collect();
 

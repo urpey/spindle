@@ -4459,6 +4459,11 @@ async fn verify_shutdown(fx: VerifyRunFixture) {
 /// charges match the mock report exactly, so a clean verify proves the
 /// agent-mode package carries the report instead of parking on "no report".
 async fn mckee_agent_fixture() -> VerifyRunFixture {
+    mckee_agent_fixture_with_policy(None).await
+}
+
+/// Same fixture, optionally started under an auto-checkpoint policy.
+async fn mckee_agent_fixture_with_policy(policy: Option<&str>) -> VerifyRunFixture {
     use crate::tools::{ToolRouter, ToolSerializationState};
     use spindle_core::charge::{Charge, ChargeDepth, ChargeSign};
     use spindle_core::models::ConfigureAgentsInput;
@@ -4577,23 +4582,20 @@ agent = "cli-agent-draft"
         Some("write".to_string()),
         Arc::new(ToolSerializationState::default()),
     );
+    let mut start_args = serde_json::json!({
+        "project_id": project.id.clone(),
+        "book_number": 1,
+        "start_chapter": 1,
+        "end_chapter": 1,
+        "checkpoint_interval": 1,
+        "mode": "agent",
+        "max_revise_attempts": 1,
+    });
+    if let Some(policy) = policy {
+        start_args["checkpoint_policy"] = serde_json::json!(policy);
+    }
     let start_res = router
-        .call_tool(
-            "authoring_start_run",
-            Some(
-                serde_json::json!({
-                    "project_id": project.id.clone(),
-                    "book_number": 1,
-                    "start_chapter": 1,
-                    "end_chapter": 1,
-                    "checkpoint_interval": 1,
-                    "mode": "agent",
-                    "max_revise_attempts": 1,
-                })
-                .as_object()
-                .unwrap(),
-            ),
-        )
+        .call_tool("authoring_start_run", Some(start_args.as_object().unwrap()))
         .await
         .unwrap();
     let start_val = start_res.structured_content.unwrap();
@@ -4690,6 +4692,382 @@ async fn mckee_agent_mode_realized_report_verifies_clean_instead_of_parking() {
             .unwrap()
             .contains("commit scene changes"),
         "clean verify must proceed to commit, got {commit:?}"
+    );
+
+    verify_shutdown(fx).await;
+}
+
+// ── Checkpoint critic gate (issue #33 review, ADR 0005) ─────────────────────
+
+/// Drive an agent-mode McKee run until a checkpoint is awaiting review and
+/// return its report artifact.
+async fn mckee_pending_checkpoint_report(fx: &VerifyRunFixture) -> serde_json::Value {
+    for _ in 0..12 {
+        let status = verify_status(fx).await;
+        if let Some(cp) = status["checkpoint_reports"].as_array().and_then(|reports| {
+            reports
+                .iter()
+                .find(|cp| cp["status"].as_str() == Some("pending_review"))
+        }) {
+            let rel = cp["report_artifact_path"]
+                .as_str()
+                .expect("checkpoint report artifact path");
+            let path = fx.data_dir.join("artifacts").join(rel);
+            return serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        }
+        let _ = verify_execute_next(fx).await;
+    }
+    panic!("the run never reached a pending checkpoint");
+}
+
+/// A fixed McKee critic verdict the mock/offline flow can persist.
+fn fixed_mckee_critic_output(value_turn: &str, promise_events: &str) -> String {
+    let verdict = serde_json::json!({
+        "rubric_version": "scene-critic-mckee-v1",
+        "value_turn": {"verdict": value_turn, "notes": "the gate refuses the log"},
+        "promise_events": {"verdict": promise_events, "notes": "no promise planned here"},
+        "dimensions": [
+            {"dimension": "value_turn_realized", "score_1_to_5": 4, "rationale": "the vow turns"},
+            {"dimension": "gap_lands", "score_1_to_5": 3, "rationale": "the refusal lands"},
+            {"dimension": "exposition_as_ammunition", "score_1_to_5": 3, "rationale": "used in conflict"},
+            {"dimension": "over_obvious_foreshadowing", "score_1_to_5": 2, "rationale": "slightly telegraphed"}
+        ]
+    });
+    format!("STRENGTHS:\n- the gate has pressure\n\nCONCERNS:\n- none\n\nCRITIC VERDICT: {verdict}")
+}
+
+/// Persist a dual-persona review for one sampled Scene and, when asked, re-stamp
+/// its verdict as ROUTE-produced (ADR 0005).
+///
+/// The fixed output is submitted through the public `critic_output` seam, which
+/// is exactly what a host/offline caller does; the provenance marker is then
+/// rewritten because this test cannot dispatch a real `review` route. The
+/// marker is the single field the independence gate keys on, which is what the
+/// checkpoint test needs to exercise.
+async fn review_checkpoint_scene(
+    fx: &VerifyRunFixture,
+    scene_id: &str,
+    critic_output: String,
+    route_produced: bool,
+) {
+    use spindle_adapters::sqlite::json_records::StoredDualPersonaReviewRound;
+    use spindle_adapters::sqlite::repository::UpsertDualPersonaReviewParams;
+
+    let args = serde_json::json!({
+        "project_id": fx.project_id,
+        "scene_id": scene_id,
+        "rounds": 2,
+        "critic_output": critic_output,
+    });
+    let result = fx
+        .router
+        .call_tool("run_dual_persona_review", Some(args.as_object().unwrap()))
+        .await
+        .unwrap();
+    assert_ne!(
+        result.is_error,
+        Some(true),
+        "dual-persona review failed: {result:?}"
+    );
+
+    if !route_produced {
+        return;
+    }
+    let scene = fx.svc.repository().get_scene(scene_id).await.unwrap();
+    let branch_id = scene.branch_id.clone();
+    let review = fx
+        .svc
+        .repository()
+        .get_dual_persona_review(&branch_id, scene_id)
+        .await
+        .unwrap()
+        .expect("review persisted");
+    // The row was just written for the live prose, so its fingerprint is the
+    // current one (the tests cannot call the crate-private helper to recompute).
+    let fingerprint = review.scene_revision_fingerprint.clone();
+    let stored: Vec<StoredDualPersonaReviewRound> =
+        serde_json::from_value(review.review_rounds["rounds"].clone()).unwrap();
+    let mut rounds: Vec<spindle_core::models::DualPersonaReviewRound> = Vec::new();
+    for round in stored {
+        let mut round = round.into_core();
+        round.critic_verdict_source = None;
+        rounds.push(round);
+    }
+    let rounds_completed = rounds.len();
+    fx.svc
+        .repository()
+        .upsert_dual_persona_review(UpsertDualPersonaReviewParams {
+            project_id: fx.project_id.clone(),
+            branch_id,
+            scene_id: scene_id.to_string(),
+            rounds_completed,
+            review_rounds: rounds,
+            scene_revision_fingerprint: fingerprint,
+            status: "current".to_string(),
+        })
+        .await
+        .unwrap();
+}
+
+/// Record the checkpoint's required deep audit (the review refuses without it).
+async fn record_checkpoint_deep_audit(fx: &VerifyRunFixture) {
+    let deep_args = serde_json::json!({
+        "project_id": fx.project_id,
+        "scope": {
+            "scope_type": "chapter_range",
+            "start_book_number": 1, "start_chapter_number": 1,
+            "end_book_number": 1, "end_chapter_number": 1
+        },
+        "checks": [], "severity_filter": [], "deep_check": true, "subjects": []
+    });
+    let deep = fx
+        .router
+        .call_tool("check_consistency", Some(deep_args.as_object().unwrap()))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    let audit_args = serde_json::json!({
+        "project_id": fx.project_id, "run_id": fx.run_id,
+        "start_chapter": 1, "end_chapter": 1, "deep_consistency": deep
+    });
+    fx.router
+        .call_tool(
+            "authoring_record_checkpoint_audit",
+            Some(audit_args.as_object().unwrap()),
+        )
+        .await
+        .unwrap();
+}
+
+/// Call `authoring_review_checkpoint` for the fixture's single 1.1 Scene,
+/// optionally passing the redraft directive for it.
+async fn review_checkpoint_tool(fx: &VerifyRunFixture, redraft: bool) -> (bool, String) {
+    let mut args = serde_json::json!({
+        "project_id": fx.project_id, "run_id": fx.run_id,
+        "start_chapter": 1, "end_chapter": 1,
+        "directives": ["Operator reviewed the checkpoint."]
+    });
+    if redraft {
+        args["redraft_scenes"] = serde_json::json!([
+            {"chapter_number": 1, "scene_order": 1}
+        ]);
+    }
+    let result = fx
+        .router
+        .call_tool(
+            "authoring_review_checkpoint",
+            Some(args.as_object().unwrap()),
+        )
+        .await
+        .unwrap();
+    let is_error = result.is_error == Some(true);
+    let message = result
+        .content
+        .iter()
+        .map(|content| format!("{content:?}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (is_error, message)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_review_blocks_a_route_critic_disagreement_and_requires_redraft() {
+    let fx = mckee_agent_fixture().await;
+    let report = mckee_pending_checkpoint_report(&fx).await;
+    let sampled: Vec<String> = report["sampled_scene_ids"]
+        .as_array()
+        .expect("sampled scene ids")
+        .iter()
+        .map(|id| id.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(sampled.len(), 1, "{report:?}");
+    record_checkpoint_deep_audit(&fx).await;
+    review_checkpoint_scene(
+        &fx,
+        &sampled[0],
+        fixed_mckee_critic_output("mismatch", "agree"),
+        true,
+    )
+    .await;
+
+    // Approval is refused: the persisted route verdict disagrees with the
+    // writer's report, which matches the plan.
+    let (refused, message) = review_checkpoint_tool(&fx, false).await;
+    assert!(
+        refused,
+        "a route critic disagreement must block approval: {message}"
+    );
+    assert!(
+        message.contains("critic") && message.contains("redraft_scenes"),
+        "the refusal must name the critic and the redraft path: {message}"
+    );
+
+    // The Scene is redraft-required (its phase is untouched: it is already
+    // committed) and the checkpoint is still pending review.
+    let status = verify_status(&fx).await;
+    assert_eq!(
+        status["chapters"][0]["scenes"][0]["phase"].as_str(),
+        Some("beats_annotated"),
+        "a committed Scene is not forced backwards to parked: {status:?}"
+    );
+    assert_eq!(
+        status["checkpoint_reports"][0]["status"].as_str(),
+        Some("pending_review"),
+        "the checkpoint must stay pending: {status:?}"
+    );
+    let report_rel = status["checkpoint_reports"][0]["report_artifact_path"]
+        .as_str()
+        .unwrap();
+    let report_json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fx.data_dir.join("artifacts").join(report_rel)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        report_json["critic_disagreement_scene_ids"],
+        serde_json::json!([sampled[0]]),
+        "the review report must list the disagreed Scene: {report_json:?}"
+    );
+
+    // The redraft path clears the park and completes the review.
+    let (reviewed, message) = review_checkpoint_tool(&fx, true).await;
+    assert!(
+        !reviewed,
+        "a review that redrafts the parked Scene must succeed: {message}"
+    );
+    let status = verify_status(&fx).await;
+    assert_eq!(
+        status["chapters"][0]["scenes"][0]["phase"].as_str(),
+        Some("pending"),
+        "the redraft must return the Scene to pending: {status:?}"
+    );
+    assert_eq!(
+        status["checkpoint_reports"][0]["status"].as_str(),
+        Some("reviewed"),
+        "{status:?}"
+    );
+
+    verify_shutdown(fx).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_checkpoint_refuses_a_route_critic_disagreement() {
+    // An auto policy must never self-approve a checkpoint whose sampled Scene
+    // carries a route-produced critic disagreement: it blocks with a prose-free
+    // reason and parks the Scene so the manual review must redraft it.
+    let fx = mckee_agent_fixture_with_policy(Some("auto_advisory")).await;
+    // Draft → verify → commit → beats → summary. The review is seeded AFTER the
+    // Scene's last write, so its prose fingerprint still matches when the
+    // auto-checkpoint reuses the banked rounds instead of dispatching again.
+    let mut reached_summary = false;
+    for _ in 0..6 {
+        let out = verify_execute_next(&fx).await;
+        if out["executed_action"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("save summary")
+        {
+            reached_summary = true;
+            break;
+        }
+    }
+    assert!(reached_summary, "the run never reached the chapter summary");
+    let branch_id = branch_of(&fx).await;
+    let scenes = fx
+        .svc
+        .repository()
+        .list_scenes_by_project_and_branch(&fx.project_id, &branch_id)
+        .await
+        .unwrap();
+    assert_eq!(scenes.len(), 1, "{scenes:?}");
+    review_checkpoint_scene(
+        &fx,
+        &scenes[0].id,
+        fixed_mckee_critic_output("mismatch", "agree"),
+        true,
+    )
+    .await;
+
+    // The checkpoint is created by the `run checkpoint` step; the NEXT execute
+    // is the one that runs the auto-checkpoint automation, so drive until the
+    // automation itself reports.
+    let mut blocked = serde_json::Value::Null;
+    for _ in 0..10 {
+        let out = verify_execute_next(&fx).await;
+        if out["executed_action"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("auto-checkpoint")
+        {
+            blocked = out;
+            break;
+        }
+    }
+    assert_eq!(blocked["status"].as_str(), Some("blocked"), "{blocked:?}");
+    assert!(
+        blocked["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("critic_disagreement_review_required"),
+        "auto-checkpoint must block on the critic disagreement: {blocked:?}"
+    );
+    let status = verify_status(&fx).await;
+    assert_eq!(status["status"].as_str(), Some("blocked"), "{status:?}");
+    // The checkpoint report lists the disagreed Scene for the operator.
+    let report_rel = status["checkpoint_reports"][0]["report_artifact_path"]
+        .as_str()
+        .unwrap();
+    let report_json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fx.data_dir.join("artifacts").join(report_rel)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        report_json["critic_disagreement_scene_ids"],
+        serde_json::json!([scenes[0].id.clone()]),
+        "{report_json:?}"
+    );
+    assert_eq!(
+        status["checkpoint_reports"][0]["auto_outcome"].as_str(),
+        Some("blocked"),
+        "{status:?}"
+    );
+    assert_eq!(
+        status["checkpoint_reports"][0]["status"].as_str(),
+        Some("pending_review"),
+        "{status:?}"
+    );
+
+    verify_shutdown(fx).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_review_approves_a_host_verdict_and_a_route_agreement() {
+    // Host verdicts never gate: even a host-supplied mismatch must not block.
+    let fx = mckee_agent_fixture().await;
+    let report = mckee_pending_checkpoint_report(&fx).await;
+    let sampled: Vec<String> = report["sampled_scene_ids"]
+        .as_array()
+        .expect("sampled scene ids")
+        .iter()
+        .map(|id| id.as_str().unwrap().to_string())
+        .collect();
+    record_checkpoint_deep_audit(&fx).await;
+    review_checkpoint_scene(
+        &fx,
+        &sampled[0],
+        fixed_mckee_critic_output("mismatch", "mismatch"),
+        false,
+    )
+    .await;
+
+    let (reviewed, message) = review_checkpoint_tool(&fx, false).await;
+    assert!(
+        !reviewed,
+        "a host-supplied verdict must never gate checkpoint approval: {message}"
+    );
+    assert_eq!(
+        verify_status(&fx).await["checkpoint_reports"][0]["status"].as_str(),
+        Some("reviewed")
     );
 
     verify_shutdown(fx).await;

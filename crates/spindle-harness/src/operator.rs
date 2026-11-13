@@ -226,7 +226,6 @@ pub fn review_checkpoint(
                 .iter()
                 .any(|target| target == &(*chapter_number, *scene_order))
         })
-        .map(|(chapter_number, scene_order)| format!("{chapter_number}.{scene_order}"))
         .collect::<Vec<_>>();
     if !unaddressed.is_empty() {
         anyhow::bail!(
@@ -235,7 +234,7 @@ pub fn review_checkpoint(
              plan first and then redraft it",
             start_chapter,
             end_chapter,
-            unaddressed.join(", ")
+            format_scene_refs(&unaddressed)
         );
     }
 
@@ -271,6 +270,43 @@ pub fn review_checkpoint(
     ))
 }
 
+/// True when a Scene is parked for checkpoint review (McKee only).
+///
+/// The single predicate the operator, status and checkpoint layers share, so a
+/// future phase change cannot leave one of them disagreeing about what "parked"
+/// means.
+pub fn is_parked_for_checkpoint(scene: &crate::state::SceneState) -> bool {
+    scene.phase == ScenePhase::ParkedForCheckpoint
+}
+
+/// `chapter.scene` label for one parked-Scene reference.
+pub fn parked_scene_ref(chapter_number: i32, scene_order: i32) -> String {
+    format!("{chapter_number}.{scene_order}")
+}
+
+/// Comma-joined `chapter.scene` labels for operator-facing messages.
+pub fn format_scene_refs(refs: &[(i32, i32)]) -> String {
+    refs.iter()
+        .map(|(chapter_number, scene_order)| parked_scene_ref(*chapter_number, *scene_order))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Every parked Scene in the run, as `(chapter, scene)` pairs in spine order.
+pub fn parked_scene_refs(state: &HarnessState) -> Vec<(i32, i32)> {
+    state
+        .chapters
+        .iter()
+        .flat_map(|chapter| {
+            chapter
+                .scenes
+                .iter()
+                .filter(|scene| is_parked_for_checkpoint(scene))
+                .map(|scene| (chapter.chapter_number, scene.scene_order))
+        })
+        .collect()
+}
+
 /// Scenes in `[start_chapter, end_chapter]` currently parked for checkpoint
 /// review, as `(chapter, scene)` pairs.
 pub fn parked_scene_refs_in_range(
@@ -278,18 +314,78 @@ pub fn parked_scene_refs_in_range(
     start_chapter: i32,
     end_chapter: i32,
 ) -> Vec<(i32, i32)> {
-    state
-        .chapters
-        .iter()
-        .filter(|chapter| (start_chapter..=end_chapter).contains(&chapter.chapter_number))
-        .flat_map(|chapter| {
-            chapter
-                .scenes
-                .iter()
-                .filter(|scene| scene.phase == ScenePhase::ParkedForCheckpoint)
-                .map(|scene| (chapter.chapter_number, scene.scene_order))
-        })
+    parked_scene_refs(state)
+        .into_iter()
+        .filter(|(chapter_number, _)| (start_chapter..=end_chapter).contains(chapter_number))
         .collect()
+}
+
+/// The checkpoint's sampled scene ids, used by the report, the MCP checkpoint
+/// payload and the auto-checkpoint automation.
+///
+/// The range's start chapter samples its first Scene and the end chapter its
+/// last, with the midpoint chapter included for a wider range. On a McKee run
+/// the pick is **save-aware**: a park checkpoint covers a chapter that is still
+/// mid-draft, so "first/last" means the first/last Scene that actually has a
+/// persisted `scene_id`. A non-McKee run keeps the pre-#33 positional rule
+/// byte-identically (the selected Scene must already have a `scene_id`, and a
+/// missing one is an error).
+pub fn sample_checkpoint_scene_ids(
+    state: &HarnessState,
+    start_chapter: i32,
+    end_chapter: i32,
+) -> Result<Vec<String>> {
+    let selected_chapters = [
+        start_chapter,
+        start_chapter + ((end_chapter - start_chapter) / 2),
+        end_chapter,
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+    let mut candidates = Vec::new();
+    for chapter_number in selected_chapters {
+        if !seen.insert(chapter_number) {
+            continue;
+        }
+        let chapter = state
+            .chapters
+            .iter()
+            .find(|chapter| chapter.chapter_number == chapter_number)
+            .with_context(|| format!("checkpoint chapter {chapter_number} missing from state"))?;
+        if state.mckee_structured {
+            let scene = if chapter_number == end_chapter {
+                chapter
+                    .scenes
+                    .iter()
+                    .rev()
+                    .find(|scene| scene.scene_id.is_some())
+            } else {
+                chapter.scenes.iter().find(|scene| scene.scene_id.is_some())
+            }
+            .with_context(|| {
+                format!("checkpoint chapter {chapter_number} has no saved scene to sample")
+            })?;
+            let scene_id = scene
+                .scene_id
+                .clone()
+                .context("sampled checkpoint scene lost its scene_id")?;
+            candidates.push(scene_id);
+        } else {
+            let scene = if chapter_number == end_chapter {
+                chapter.scenes.last()
+            } else {
+                chapter.scenes.first()
+            }
+            .with_context(|| format!("checkpoint chapter {chapter_number} has no scenes"))?;
+            let scene_id = scene.scene_id.clone().with_context(|| {
+                format!(
+                    "checkpoint chapter {} scene {} has no scene_id",
+                    chapter_number, scene.scene_order
+                )
+            })?;
+            candidates.push(scene_id);
+        }
+    }
+    Ok(candidates)
 }
 
 /// Advance a blocked scene one phase forward after operator review.
@@ -331,11 +427,11 @@ pub fn resolve_scene_block(
 
     // A parked Scene is not a forward-advance: the operator must decide whether
     // to re-draft it (which clears the park) rather than push it to committed.
-    if scene.phase == ScenePhase::ParkedForCheckpoint {
+    if is_parked_for_checkpoint(scene) {
         anyhow::bail!(
             "scene {}.{} is parked for checkpoint review and cannot be advanced manually; \
-             re-draft it at checkpoint review (redraft_scenes) or with authoring_resolve_block \
-             target_phase='redraft'",
+             clear the park at checkpoint review by passing the Scene in \
+             authoring_review_checkpoint's redraft_scenes",
             chapter_number,
             scene_order
         );
@@ -420,8 +516,11 @@ pub fn resolve_scene_block(
 /// (e.g. the operator wants a clean re-draft after editing config).
 ///
 /// Semantics:
-/// - phase → `Pending`, `blocked_reason`, `scene_id`, and `draft_diagnostics`
-///   cleared;
+/// - phase → `Pending`, `blocked_reason` and `scene_id` cleared;
+/// - on a McKee run only, `draft_diagnostics` is REPLACED with the deliberate
+///   redraft marker (`redraft_requested: true`) so reconcile cannot promote the
+///   Scene back to `draft_saved` from the superseded prose; a non-McKee run
+///   keeps the pre-#33 behaviour and clears `draft_diagnostics` entirely;
 /// - the on-disk scene artifact is deleted so `load_or_create_scene_artifact`
 ///   rebuilds it fresh (a stale artifact would otherwise resurrect the poisoned
 ///   generation or a stale save-draft output on reuse);
@@ -432,6 +531,13 @@ pub fn resolve_scene_block(
 /// Unlike [`resolve_scene_block`], this does NOT require the scene to be
 /// currently blocked (a parse-failed scene stays `Pending` with no block set)
 /// and it moves the scene BACKWARD rather than one phase forward.
+///
+/// `state.mckee_structured` must reflect the LIVE project marker: the caller
+/// refreshes it from the project snapshot (`reconcile_state` does exactly
+/// that), and only a McKee run installs the deliberate-redraft marker. The
+/// checkpoint review calls this directly (the park decision is the review);
+/// `authoring_resolve_block` must go through
+/// [`operator_redraft_scene_block`], which refuses a parked Scene.
 pub fn redraft_scene_block(
     state: &mut HarnessState,
     state_path: &Path,
@@ -481,16 +587,22 @@ pub fn redraft_scene_block(
     }
 
     let previous_phase = phase_label(scene.phase);
+    let mckee_structured = state.mckee_structured;
     scene.phase = ScenePhase::Pending;
     scene.blocked_reason = None;
     scene.scene_id = None;
-    // Keep an explicit "this Pending is a deliberate redraft" marker: the old
-    // prose still exists in Spindle, and reconcile must not promote the Scene
-    // back to `draft_saved` because of it.
-    scene.draft_diagnostics = Some(SceneDraftDiagnostics {
-        redraft_requested: true,
-        ..Default::default()
-    });
+    if mckee_structured {
+        // Keep an explicit "this Pending is a deliberate redraft" marker: the
+        // old prose still exists in Spindle, and reconcile must not promote the
+        // Scene back to `draft_saved` because of it. McKee only — a non-McKee
+        // redraft has always cleared diagnostics and promotes as before.
+        scene.draft_diagnostics = Some(SceneDraftDiagnostics {
+            redraft_requested: true,
+            ..Default::default()
+        });
+    } else {
+        scene.draft_diagnostics = None;
+    }
     // Verify state no longer applies to a scene being re-drafted from scratch.
     scene.verify_status = None;
     scene.verify_detail = None;
@@ -504,6 +616,43 @@ pub fn redraft_scene_block(
         "Reset scene {}.{} (was {}) to pending-draft; the next execute will re-draft it.",
         chapter_number, scene_order, previous_phase
     ))
+}
+
+/// Operator entry point for `authoring_resolve_block` with
+/// `target_phase="redraft"`.
+///
+/// A Scene parked for checkpoint review is refused: a park **is** a checkpoint
+/// decision, so it is cleared only through `authoring_review_checkpoint`'s
+/// `redraft_scenes` path, which records the operator's decision and directives.
+/// A bare manual reset would bypass the review the park exists to force. Every
+/// other Scene keeps the [`redraft_scene_block`] recovery path unchanged.
+pub fn operator_redraft_scene_block(
+    state: &mut HarnessState,
+    state_path: &Path,
+    chapter_number: i32,
+    scene_order: i32,
+) -> Result<String> {
+    let parked = state
+        .chapters
+        .iter()
+        .find(|chapter| chapter.chapter_number == chapter_number)
+        .and_then(|chapter| {
+            chapter
+                .scenes
+                .iter()
+                .find(|scene| scene.scene_order == scene_order)
+        })
+        .is_some_and(is_parked_for_checkpoint);
+    if parked {
+        anyhow::bail!(
+            "scene {chapter_number}.{scene_order} is parked for checkpoint review and cannot be \
+             reset with authoring_resolve_block target_phase='redraft'; a park is cleared only \
+             through checkpoint review — call authoring_review_checkpoint for its checkpoint with \
+             redraft_scenes=[{{\"chapter_number\": {chapter_number}, \"scene_order\": {scene_order}}}] \
+             (apply any plan amendment first) and the Scene is redrafted"
+        );
+    }
+    redraft_scene_block(state, state_path, chapter_number, scene_order)
 }
 
 fn append_directives(existing: &mut Vec<String>, directives: &[String]) -> usize {
@@ -831,6 +980,7 @@ mod tests {
     fn review_checkpoint_requires_parked_scenes_to_be_redrafted() {
         let state_path = temp_state_path("parked-review");
         let mut state = HarnessState::from_seed(seed(), "branch:main".to_string());
+        state.mckee_structured = true;
         let report_rel = "checkpoints/chapter-0001-0001.json".to_string();
         let report_path = artifacts_root(&state_path, &state).join(&report_rel);
         fs::create_dir_all(report_path.parent().expect("report parent")).expect("mkdirs");
@@ -906,6 +1056,103 @@ mod tests {
         assert!(
             format!("{err:#}").contains("parked for checkpoint review"),
             "{err:#}"
+        );
+    }
+
+    #[test]
+    fn non_mckee_redraft_clears_diagnostics_and_does_not_install_the_marker() {
+        let state_path = temp_state_path("redraft-non-mckee");
+        let mut state = HarnessState::from_seed(seed(), "branch:main".to_string());
+        assert!(!state.mckee_structured);
+        state.chapters[0].scenes[0].draft_diagnostics = Some(SceneDraftDiagnostics::default());
+
+        redraft_scene_block(&mut state, &state_path, 1, 1).expect("redraft");
+        assert!(
+            state.chapters[0].scenes[0].draft_diagnostics.is_none(),
+            "a non-McKee redraft keeps the pre-#33 diagnostics-cleared behaviour"
+        );
+    }
+
+    #[test]
+    fn mckee_redraft_installs_the_deliberate_redraft_marker() {
+        let state_path = temp_state_path("redraft-mckee");
+        let mut state = HarnessState::from_seed(seed(), "branch:main".to_string());
+        state.mckee_structured = true;
+        redraft_scene_block(&mut state, &state_path, 1, 1).expect("redraft");
+        assert!(
+            state.chapters[0].scenes[0]
+                .draft_diagnostics
+                .as_ref()
+                .is_some_and(|diagnostics| diagnostics.redraft_requested)
+        );
+    }
+
+    #[test]
+    fn operator_redraft_refuses_a_parked_scene() {
+        let state_path = temp_state_path("parked-operator-redraft");
+        let mut state = HarnessState::from_seed(seed(), "branch:main".to_string());
+        state.mckee_structured = true;
+        state.chapters[0].scenes[0].phase = ScenePhase::ParkedForCheckpoint;
+        state.chapters[0].scenes[0].scene_id = Some("scene:1".to_string());
+
+        let err = operator_redraft_scene_block(&mut state, &state_path, 1, 1)
+            .expect_err("a park is cleared only through checkpoint review");
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("checkpoint review") && text.contains("redraft_scenes"),
+            "{text}"
+        );
+        assert_eq!(
+            state.chapters[0].scenes[0].phase,
+            ScenePhase::ParkedForCheckpoint,
+            "the refused reset must not touch the parked Scene"
+        );
+    }
+
+    #[test]
+    fn operator_redraft_still_recovers_a_non_parked_scene() {
+        let state_path = temp_state_path("operator-redraft-plain");
+        let mut state = HarnessState::from_seed(seed(), "branch:main".to_string());
+        state.chapters[0].scenes[0].phase = ScenePhase::Pending;
+        state.chapters[0].scenes[0].scene_id = Some("scene:1".to_string());
+
+        let message = operator_redraft_scene_block(&mut state, &state_path, 1, 1)
+            .expect("the operator recovery path stays available");
+        assert!(message.contains("Reset scene 1.1"), "{message}");
+    }
+
+    #[test]
+    fn checkpoint_sampling_keeps_the_positional_rule_on_a_non_mckee_run() {
+        let mut state = HarnessState::from_seed(seed(), "branch:main".to_string());
+        state.chapters[0].scenes[0].scene_id = Some("scene:1".to_string());
+        assert_eq!(
+            sample_checkpoint_scene_ids(&state, 1, 1).unwrap(),
+            vec!["scene:1".to_string()]
+        );
+
+        // The last Scene has no scene_id: exactly the pre-#33 error, never a
+        // silent pick of an earlier Scene.
+        state.chapters[0].scenes[0].scene_id = None;
+        let err = sample_checkpoint_scene_ids(&state, 1, 1)
+            .expect_err("a non-McKee checkpoint samples positionally");
+        assert!(format!("{err:#}").contains("has no scene_id"), "{err:#}");
+    }
+
+    #[test]
+    fn checkpoint_sampling_skips_unsaved_scenes_on_a_mckee_run() {
+        let mut state = HarnessState::from_seed(seed(), "branch:main".to_string());
+        state.mckee_structured = true;
+        state.chapters[0].scenes[0].scene_id = Some("scene:1".to_string());
+        state.chapters[0].scenes.push(SceneState {
+            scene_order: 2,
+            phase: ScenePhase::Pending,
+            ..Default::default()
+        });
+        // The end chapter's last Scene is unsaved (a park checkpoint covers a
+        // chapter still mid-draft), so the last SAVED Scene is sampled.
+        assert_eq!(
+            sample_checkpoint_scene_ids(&state, 1, 1).unwrap(),
+            vec!["scene:1".to_string()]
         );
     }
 }

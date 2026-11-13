@@ -1390,6 +1390,10 @@ async fn run_checkpoint(
             chapter_summaries,
             narrative_promises,
             sampled_scene_ids,
+            // The critic gate writes this when a sampled Scene's persisted
+            // route-produced verdict disagrees with the writer's report; a
+            // freshly created checkpoint has not been reviewed yet.
+            critic_disagreement_scene_ids: Vec::new(),
             // Reader-sim runs later, inside the auto-checkpoint automation
             // (evolution §3.6). The report is created with no section; the
             // automation adds it after the sampled reviews and before the
@@ -2624,48 +2628,9 @@ fn sample_checkpoint_scene_ids(
     start_chapter: i32,
     end_chapter: i32,
 ) -> Result<Vec<String>> {
-    let mut candidates = Vec::new();
-    let selected_chapters = [
-        start_chapter,
-        start_chapter + ((end_chapter - start_chapter) / 2),
-        end_chapter,
-    ];
-    let mut seen = BTreeSet::new();
-    for chapter_number in selected_chapters {
-        if !seen.insert(chapter_number) {
-            continue;
-        }
-        let chapter = state
-            .chapters
-            .iter()
-            .find(|chapter| chapter.chapter_number == chapter_number)
-            .with_context(|| format!("checkpoint chapter {} missing from state", chapter_number))?;
-        // Pick a scene that has actually been saved. A park checkpoint covers a
-        // chapter that is still mid-draft (later scenes may be Pending), so the
-        // "last scene" rule must mean the last SAVED scene, not a placeholder
-        // that has no scene_id yet.
-        let scene = if chapter_number == end_chapter {
-            chapter
-                .scenes
-                .iter()
-                .rev()
-                .find(|scene| scene.scene_id.is_some())
-        } else {
-            chapter.scenes.iter().find(|scene| scene.scene_id.is_some())
-        }
-        .with_context(|| {
-            format!(
-                "checkpoint chapter {} has no saved scene to sample",
-                chapter_number
-            )
-        })?;
-        let scene_id = scene
-            .scene_id
-            .clone()
-            .context("sampled checkpoint scene lost its scene_id")?;
-        candidates.push(scene_id);
-    }
-    Ok(candidates)
+    // One shared implementation for the harness executor and the MCP checkpoint
+    // payload/automation; the McKee save-aware rule lives there.
+    crate::operator::sample_checkpoint_scene_ids(state, start_chapter, end_chapter)
 }
 
 #[cfg(test)]

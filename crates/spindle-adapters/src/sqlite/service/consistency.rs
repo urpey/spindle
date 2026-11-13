@@ -2508,16 +2508,19 @@ impl SqliteSpindleService {
                     Vec::new()
                 };
                 // Independent judgement (ADR 0005): read the critic's persisted
-                // verdict for THIS prose version. A missing or stale verdict is
-                // an unavailable pass — `critic_report_disagreement` stays
-                // silent rather than inventing a disagreement.
+                // verdict for THIS prose version. Only a route-produced verdict
+                // counts — a host/fixture verdict submitted through
+                // `run_dual_persona_review.critic_output` never gates
+                // independence. A missing or stale verdict is an unavailable
+                // pass, so `critic_report_disagreement` stays silent rather
+                // than inventing a disagreement.
                 let critic_verdict = if realized_checks.critic_disagreement {
                     let fingerprint = scene_revision_fingerprint(scene);
                     self.persisted_review_rounds(&active_branch.id, &scene.id, &fingerprint)
                         .await?
                         .iter()
                         .rev()
-                        .find_map(|round| round.critic_verdict.clone())
+                        .find_map(|round| round.route_critic_verdict().cloned())
                 } else {
                     None
                 };

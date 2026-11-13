@@ -265,10 +265,15 @@ fn planned_promise_events<'a>(
 /// The independent-judgement rule (ADR 0005): compare the critic's persisted
 /// verdict with the writer's realized report.
 ///
-/// A finding fires only when both sides make a definite claim and those claims
-/// disagree. A missing verdict, a stale/foreign rubric, a report that is absent
-/// or that does not report a planned axis, and a Scene with nothing planned are
-/// all **unavailable passes** — no finding is invented.
+/// A finding fires only in the one direction the deterministic realized-vs-plan
+/// rule cannot see: the writer's report **matches the plan** on that dimension
+/// while the critic independently says the prose does not deliver it. The
+/// inverse case (the writer's report already differs from the plan, so a
+/// `realized_value_turn` / `realized_promise_event` finding exists) is never
+/// reported here too — the same root cause must not produce two errors. A
+/// missing verdict, a stale/foreign rubric, a report that is absent or that does
+/// not report a planned axis, and a Scene with nothing planned are all
+/// **unavailable passes** — no finding is invented.
 fn critic_report_disagreement_findings(
     issues: &mut Vec<ConsistencyIssue>,
     scene: &Scene,
@@ -320,8 +325,11 @@ fn critic_report_disagreement_findings(
             }
         }
         // Only compare when the report makes a definite claim on every planned
-        // axis; a missing axis is the `realized_value_turn` rule's finding.
-        if complete && writer_matches != verdict.value_turn.is_agreement() {
+        // axis AND that claim matches the plan. A missing axis, or an axis whose
+        // realized turn differs from the plan, is already the
+        // `realized_value_turn` rule's finding: reporting it here as well would
+        // be the same root cause twice.
+        if complete && writer_matches && !verdict.value_turn.is_agreement() {
             let planned = planned_axes
                 .iter()
                 .map(|axis| {
@@ -333,23 +341,13 @@ fn critic_report_disagreement_findings(
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            let message = if writer_matches {
-                format!(
-                    "{scene_ref}: the critic judged that the prose does not realize the planned \
-                     Value Turn ({planned}) but the writer's realized report matches the plan. \
-                     The critic judges independently of the writer's report (ADR 0005); revise \
-                     the scene so the prose turns the planned value, or re-plan it{}",
-                    note_suffix(verdict.value_turn.notes.as_deref())
-                )
-            } else {
-                format!(
-                    "{scene_ref}: the critic judged that the prose realizes the planned Value \
-                     Turn ({planned}) but the writer's realized report records a different turn. \
-                     The critic judges independently of the writer's report (ADR 0005); revise \
-                     the scene or re-plan it{}",
-                    note_suffix(verdict.value_turn.notes.as_deref())
-                )
-            };
+            let message = format!(
+                "{scene_ref}: the critic judged that the prose does not realize the planned \
+                 Value Turn ({planned}) but the writer's realized report matches the plan. \
+                 The critic judges independently of the writer's report (ADR 0005); revise \
+                 the scene so the prose turns the planned value, or re-plan it{}",
+                note_suffix(verdict.value_turn.notes.as_deref())
+            );
             issues.push(realized_issue(
                 RealizedCheck::CriticReportDisagreement,
                 &scene.id,
@@ -364,7 +362,9 @@ fn critic_report_disagreement_findings(
         let writer_reports_all = expected
             .iter()
             .all(|(kind, promise)| report.reports_promise_event(&promise.id, *kind));
-        if writer_reports_all != verdict.promise_events.is_agreement() {
+        // Same dedupe rule as the Value Turn: a writer report that omits a
+        // planned event is already `realized_promise_event`'s finding.
+        if writer_reports_all && !verdict.promise_events.is_agreement() {
             let planned = expected
                 .iter()
                 .map(|(kind, promise)| {
@@ -372,23 +372,13 @@ fn critic_report_disagreement_findings(
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            let message = if writer_reports_all {
-                format!(
-                    "{scene_ref}: the critic judged that the prose does not deliver the planned \
-                     Narrative Promise event(s) ({planned}) but the writer's realized report \
-                     lists every one of them. The critic judges independently of the writer's \
-                     report (ADR 0005); revise the scene or re-plan the promise placement{}",
-                    note_suffix(verdict.promise_events.notes.as_deref())
-                )
-            } else {
-                format!(
-                    "{scene_ref}: the critic judged that the prose delivers the planned Narrative \
-                     Promise event(s) ({planned}) but the writer's realized report does not list \
-                     every one of them. The critic judges independently of the writer's report \
-                     (ADR 0005); revise the scene or re-plan the promise placement{}",
-                    note_suffix(verdict.promise_events.notes.as_deref())
-                )
-            };
+            let message = format!(
+                "{scene_ref}: the critic judged that the prose does not deliver the planned \
+                 Narrative Promise event(s) ({planned}) but the writer's realized report \
+                 lists every one of them. The critic judges independently of the writer's \
+                 report (ADR 0005); revise the scene or re-plan the promise placement{}",
+                note_suffix(verdict.promise_events.notes.as_deref())
+            );
             issues.push(realized_issue(
                 RealizedCheck::CriticReportDisagreement,
                 &scene.id,
@@ -711,5 +701,83 @@ fn realized_character_effect_findings(
             ),
             vec![effect.character_id.clone()],
         ));
+    }
+}
+
+impl SqliteSpindleService {
+    /// Scene ids among `scene_ids` whose persisted **route-produced** McKee
+    /// critic verdict disagrees with the writer's realized report on the current
+    /// prose.
+    ///
+    /// This is the checkpoint-review gate (McKee only). Verdicts only exist
+    /// after the dual-persona review that runs at checkpoint review time, so a
+    /// live drafting loop cannot see one; the review must refuse to approve a
+    /// Scene whose independent critic judged the prose a mismatch. Host/fixture
+    /// verdicts (the `critic_output` seam) are ignored: only a verdict the
+    /// `review` route produced may gate (ADR 0005). Every unavailable input —
+    /// no review, a stale review, no verdict, no realized report, no plan —
+    /// is a pass, never a disagreement.
+    pub async fn critic_disagreement_scene_ids(
+        &self,
+        project_id: &str,
+        branch_id: &str,
+        scene_ids: &[String],
+    ) -> Result<Vec<String>> {
+        let project = self.repository.get_project(project_id).await?;
+        if !project.mckee_structured || scene_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let plans = self
+            .repository
+            .list_chapter_plans_by_project(project_id)
+            .await?;
+        let promises = self
+            .repository
+            .list_narrative_promises_by_project_and_branch(project_id, branch_id)
+            .await?;
+
+        let mut disagreements = Vec::new();
+        for scene_id in scene_ids {
+            let scene = self.repository.get_scene(scene_id).await?;
+            if scene.branch_id != branch_id {
+                continue;
+            }
+            let fingerprint = scene_revision_fingerprint(&scene);
+            let verdict = self
+                .persisted_review_rounds(branch_id, scene_id, &fingerprint)
+                .await?
+                .iter()
+                .rev()
+                .find_map(|round| round.route_critic_verdict().cloned());
+            let Some(verdict) = verdict else {
+                continue;
+            };
+            let planned_scene = plans
+                .iter()
+                .find(|plan| {
+                    plan.branch_id == branch_id
+                        && plan.book_number == scene.book_number
+                        && plan.chapter_number == scene.chapter_number
+                })
+                .and_then(|plan| {
+                    plan.scenes
+                        .iter()
+                        .find(|planned| planned.scene_order == scene.scene_order)
+                });
+            let mut issues = Vec::new();
+            critic_report_disagreement_findings(
+                &mut issues,
+                &scene,
+                planned_scene,
+                scene.realized_report.as_ref(),
+                &promises,
+                Some(&verdict),
+                "",
+            );
+            if !issues.is_empty() {
+                disagreements.push(scene.id.clone());
+            }
+        }
+        Ok(disagreements)
     }
 }

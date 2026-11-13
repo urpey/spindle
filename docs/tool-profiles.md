@@ -22,17 +22,17 @@ generated profiles are opt-in:
 
 | Profile | Enabled work | Tools | Input bytes | Full bytes |
 | --- | --- | ---: | ---: | ---: |
-| workflow-write | Scene-writer core + craft/packet/research refs + setup | 44 | 73,187 | 131,828 |
-| workflow-authoring | Scene-writer (all refs) + authoring-supervisor + setup | 74 | 106,819 | 205,675 |
+| workflow-write | Scene-writer core + craft/packet/research refs + setup | 44 | 73,071 | 132,275 |
+| workflow-authoring | Scene-writer (all refs) + authoring-supervisor + setup | 74 | 106,703 | 206,122 |
 | workflow-import | Manuscript importer and source sync | 20 | 12,306 | 30,943 |
-| revision | Branch/revision/history workflow | 34 | 23,685 | 62,645 |
+| revision | Branch/revision/history workflow | 34 | 23,569 | 63,092 |
 | worldbuilding | Worldbuilder + character creator | 50 | 49,431 | 85,116 |
 | planning | Plot architect | 38 | 41,078 | 72,472 |
 | new-book | New-book entry: planning sessions, human gates and handoff | 14 | 20,204 | 26,730 |
 | mckee | Story-structure core + Story Spine, Character Design, Value Turns, Scene Design, Dialogue Tactics and Dialogue Line references | 11 | 18,462 | 22,860 |
 | research | Researcher | 15 | 7,584 | 20,247 |
-| style | Editor core + style reference | 43 | 34,765 | 98,535 |
-| release | Editor + bible librarian + canon steward | 62 | 47,397 | 96,374 |
+| style | Editor core + style reference | 43 | 34,649 | 98,982 |
+| release | Editor + bible librarian + canon steward | 62 | 47,281 | 96,821 |
 | setup | New-book setup reference | 9 | 4,180 | 9,270 |
 
 Every generated profile includes the shared entry core (`spindle`, 6 entry tools).

@@ -34,6 +34,44 @@ continuity and author intent over stylistic polish. Never propose new canon, alt
 outcomes/value shifts, or override author_lock constraints; place any such conflict in \
 requires_author_decision.";
 
+/// The four McKee dimensions appended to the rubric for a McKee project.
+///
+/// They are **assessment criteria**, not new `CriticDimension` enum values: the
+/// `CritiqueV1` output contract keeps its closed ten-dimension set, so the bump
+/// cannot change the schema or the stored artifact shape. A non-McKee project
+/// never sees this text, so `scene-critic-v1` stays byte-identical.
+const MCKEE_CRITIC_RUBRIC_ADDENDUM: &str = "\
+Additionally apply the four McKee craft dimensions when scoring the ten dimensions above. They \
+are assessment criteria for this rubric version, not additional CritiqueV1 dimension values: \
+(1) value_turn_realized: did the Scene turn the planned Value Axis from its planned opening \
+Charge to its planned closing Charge, or does the prose only report the turn? \
+(2) gap_lands: does the character's expectation break against reality, so the Gap is dramatised \
+rather than summarised? \
+(3) exposition_as_ammunition: is exposition used as ammunition inside conflict, rather than \
+explained to the reader? \
+(4) over_obvious_foreshadowing: is any setup so obvious that the reader sees the payoff coming? \
+Score each of the four in your rationale where it bears on a CritiqueV1 dimension, and flag any \
+McKee dimension failure you find in the matching dimension's rationale or directives.";
+
+/// The critic rubric version this critique run must ask for and accept.
+///
+/// The single selector shared by the prompt, the output template and the
+/// artifact stamp, so the rubric version can never drift between them.
+pub const fn critic_rubric_version(mckee_structured: bool) -> &'static str {
+    spindle_core::drafting::critic::scene_critic_rubric_version(mckee_structured)
+}
+
+/// The critic rubric text for this project: the base rubric byte-identically for
+/// a non-McKee project, or the base rubric plus the four McKee dimensions for a
+/// McKee project.
+pub fn critic_rubric(mckee_structured: bool) -> String {
+    if mckee_structured {
+        format!("{CRITIC_RUBRIC} {MCKEE_CRITIC_RUBRIC_ADDENDUM}")
+    } else {
+        CRITIC_RUBRIC.to_string()
+    }
+}
+
 const CRITIC_SYSTEM: &str = "\
 You are a precise developmental and line critic for long-form fiction. Evaluate the supplied \
 base draft against the scene card, hard constraints, continuity packet, ingested findings, and \
@@ -444,6 +482,7 @@ pub fn validate_and_normalize_critique(
     expected_packet_hash: &str,
     base_text: &str,
     expected_base_text_hash: &str,
+    expected_rubric_version: &str,
 ) -> Result<CritiqueV1, CritiqueError> {
     if critique.schema_version != CRITIQUE_SCHEMA_VERSION {
         return Err(CritiqueError::SchemaMismatch(format!(
@@ -463,10 +502,10 @@ pub fn validate_and_normalize_critique(
             expected_packet_hash, critique.packet_hash
         )));
     }
-    if critique.rubric_version != CRITIC_RUBRIC_VERSION {
+    if critique.rubric_version != expected_rubric_version {
         return Err(CritiqueError::SchemaMismatch(format!(
             "expected rubric_version '{}', got '{}'",
-            CRITIC_RUBRIC_VERSION, critique.rubric_version
+            expected_rubric_version, critique.rubric_version
         )));
     }
 
@@ -611,6 +650,7 @@ pub fn parse_and_validate_critique_output(
     expected_packet_hash: &str,
     base_text: &str,
     expected_base_text_hash: &str,
+    mckee_structured: bool,
 ) -> Result<CritiqueV1, CritiqueError> {
     let stripped = strip_thinking_and_fences(raw_output);
     let parsed: CritiqueV1 =
@@ -621,6 +661,7 @@ pub fn parse_and_validate_critique_output(
         expected_packet_hash,
         base_text,
         expected_base_text_hash,
+        critic_rubric_version(mckee_structured),
     )
 }
 
@@ -665,6 +706,7 @@ pub fn critique_v1_output_template(
     expected_packet_hash: &str,
     expected_base_text_hash: &str,
     scene_id: Option<&str>,
+    rubric_version: &str,
 ) -> serde_json::Value {
     let dimensions: Vec<serde_json::Value> = CriticDimension::ALL
         .iter()
@@ -681,7 +723,7 @@ pub fn critique_v1_output_template(
         "schema_version": CRITIQUE_SCHEMA_VERSION,
         "base_text_hash": expected_base_text_hash,
         "packet_hash": expected_packet_hash,
-        "rubric_version": CRITIC_RUBRIC_VERSION,
+        "rubric_version": rubric_version,
         "dimensions": dimensions,
         "directives": [
             {
@@ -733,6 +775,7 @@ pub fn assemble_critic_messages(
     budget: &CriticBudget,
     tokenizer: Option<&dyn DraftTokenizer>,
     route_system: &str,
+    mckee_structured: bool,
 ) -> Result<(DraftMessages, String, usize), CritiqueError> {
     let t =
         tokenizer.ok_or_else(|| CritiqueError::BudgetUnknown("no tokenizer configured".into()))?;
@@ -756,10 +799,13 @@ pub fn assemble_critic_messages(
         .map_err(|e| CritiqueError::MalformedJson(e.to_string()))?;
     let findings_json = serde_json::to_string(ingested_findings)
         .map_err(|e| CritiqueError::MalformedJson(e.to_string()))?;
+    let rubric_version = critic_rubric_version(mckee_structured);
+    let rubric_text = critic_rubric(mckee_structured);
     let output_template_json = serde_json::to_string(&critique_v1_output_template(
         expected_packet_hash,
         expected_base_text_hash,
         packet.scene_id.as_deref(),
+        rubric_version,
     ))
     .map_err(|e| CritiqueError::MalformedJson(e.to_string()))?;
     let schema_json = serde_json::to_string(&critique_v1_json_schema())
@@ -772,13 +818,13 @@ pub fn assemble_critic_messages(
         format!(
             "CRITIC CONTRACT\n\
                  schema_version: {CRITIQUE_SCHEMA_VERSION}\n\
-                 rubric_version: {CRITIC_RUBRIC_VERSION}\n\
+                 rubric_version: {rubric_version}\n\
                  packet_hash: {expected_packet_hash}\n\
                  base_text_hash: {expected_base_text_hash}\n\
                  scene_id: {:?}\n\
                  base_text_utf8_byte_len: {}\n\n\
                  CRITIQUE_V1 FIELD & ENUM REQUIREMENTS\n\
-                 - Top-level required fields: schema_version (\"critique_v1\"), base_text_hash, packet_hash, rubric_version (\"scene-critic-v1\"), dimensions (array of all 10 CriticDimensionScore objects), directives (0..=5 CritiqueDirective objects), strengths_to_preserve (array of strings), requires_author_decision (array of AuthorDecisionItem objects), no_edit_reason (string or null; required when directives is empty).\n\
+                 - Top-level required fields: schema_version (\"critique_v1\"), base_text_hash, packet_hash, rubric_version (\"{rubric_version}\"), dimensions (array of all 10 CriticDimensionScore objects), directives (0..=5 CritiqueDirective objects), strengths_to_preserve (array of strings), requires_author_decision (array of AuthorDecisionItem objects), no_edit_reason (string or null; required when directives is empty).\n\
                  - dimensions[] required fields: dimension (one of: scene_purpose | tension_turn | pov | voice | dialogue | freshness | continuity | length | entry_exit_emotion | chapter_role), score_1_to_5 (integer 1..=5), evidence_spans (array of CritiqueAnchor), rationale (non-empty string).\n\
                  - directives[] required fields: id (non-empty string), dimension (CriticDimension enum), severity (one of: blocker | major | minor | polish), priority (integer 1..=5), anchor (CritiqueAnchor object), diagnosis (non-empty string), requested_change (non-empty string), preserve (array of strings), success_test (non-empty string), source_finding_ids (array of strings), scope (one of: span | scene | chapter).\n\
                  - CritiqueAnchor required fields: scene_id (matching scene_id above), base_text_hash (matching base_text_hash above), start_byte (usize), end_byte (usize), exact_quote (verbatim UTF-8 substring base_text[start_byte..end_byte]; empty string only when start_byte == end_byte), context_before (optional string; required if start_byte == end_byte and context_after is null), context_after (optional string; required if start_byte == end_byte and context_before is null).\n\
@@ -787,8 +833,8 @@ pub fn assemble_critic_messages(
                  {output_template_json}\n\n\
                  CRITIQUE_V1 JSON SCHEMA\n\
                  {schema_json}\n\n\
-                 CRITIC RUBRIC {CRITIC_RUBRIC_VERSION}\n\
-                 {CRITIC_RUBRIC}\n\n\
+                 CRITIC RUBRIC {rubric_version}\n\
+                 {rubric_text}\n\n\
                  SCENE CARD\n\
                  {scene_card_json}\n\n\
                  HARD CONSTRAINTS\n\
@@ -1072,7 +1118,9 @@ pub fn validate_shadow_critique_artifact(
         "shadow critique requires base_text_hash and packet_hash"
     );
     anyhow::ensure!(
-        artifact.rubric_version == CRITIC_RUBRIC_VERSION,
+        artifact.rubric_version == spindle_core::drafting::critic::SCENE_CRITIC_RUBRIC_VERSION
+            || artifact.rubric_version
+                == spindle_core::drafting::critic::MCKEE_SCENE_CRITIC_RUBRIC_VERSION,
         "shadow critique rubric_version mismatch"
     );
     if let ShadowCritiqueOutcome::Critiqued { critique, .. } = &artifact.outcome {

@@ -380,7 +380,8 @@ impl SqliteSpindleService {
     ) -> Result<spindle_core::models::DualPersonaReviewRound> {
         use crate::ai::ModelRequest;
         use spindle_core::drafting::critic::{
-            parse_mckee_critic_verdict, render_mckee_critic_prompt, scene_critic_rubric_version,
+            CriticVerdictSource, parse_mckee_critic_verdict, render_mckee_critic_prompt,
+            scene_critic_rubric_version,
         };
         use spindle_core::models::{DualPersonaReviewRound, PersonaReviewNotes};
 
@@ -609,13 +610,22 @@ impl SqliteSpindleService {
             // The McKee rubric version is recorded even when no usable verdict
             // came back: the round was judged under it, and the verify check
             // treats a missing verdict as an unavailable pass, not a mismatch.
-            let (critic_rubric_version, critic_verdict) = if mckee {
+            // Provenance (ADR 0005): a verdict produced by the dispatched
+            // `review` route may gate independence; one submitted through the
+            // `critic_output` seam is a host/offline verdict and never may.
+            let (critic_rubric_version, critic_verdict, critic_verdict_source) = if mckee {
+                let source = if critic_output.is_some() {
+                    CriticVerdictSource::Host
+                } else {
+                    CriticVerdictSource::Route
+                };
                 (
                     Some(scene_critic_rubric_version(true).to_string()),
                     parse_mckee_critic_verdict(&literary_output),
+                    Some(source),
                 )
             } else {
-                (None, None)
+                (None, None, None)
             };
 
             Ok(DualPersonaReviewRound {
@@ -634,6 +644,7 @@ impl SqliteSpindleService {
                 priority_actions,
                 critic_rubric_version,
                 critic_verdict,
+                critic_verdict_source,
             })
         }
     }

@@ -128,6 +128,39 @@ impl CriticVerdictKind {
     }
 }
 
+/// Where a persisted critic verdict came from. Only `route` may gate
+/// independence; `host` is the `critic_output` offline/test seam (which also
+/// carries fixed fixtures) and is ignored by gating.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CriticVerdictSource {
+    #[default]
+    Route,
+    Host,
+}
+
+impl CriticVerdictSource {
+    /// The wire spelling, matching the serialized form.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Route => "route",
+            Self::Host => "host",
+        }
+    }
+
+    /// True for the only source that may gate independence.
+    pub const fn is_route(self) -> bool {
+        matches!(self, Self::Route)
+    }
+
+    /// `serde` skip predicate: a route-produced verdict is the historical
+    /// default, so its marker is never serialized (existing payloads and route
+    /// rounds keep their exact bytes). A host verdict is serialized.
+    pub fn skip_if_route(value: &Option<Self>) -> bool {
+        value.is_none_or(|source| source.is_route())
+    }
+}
+
 /// One structured critic judgement with optional notes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -412,6 +445,51 @@ mod tests {
             );
         }
         assert!(!prompt.to_ascii_lowercase().contains("realized report:"));
+    }
+
+    #[test]
+    fn verdict_source_defaults_to_route_and_skips_its_marker() {
+        use crate::models::DualPersonaReviewRound;
+
+        assert_eq!(CriticVerdictSource::default(), CriticVerdictSource::Route);
+        assert!(CriticVerdictSource::Route.is_route());
+        assert!(!CriticVerdictSource::Host.is_route());
+        assert_eq!(CriticVerdictSource::Route.as_str(), "route");
+        assert_eq!(CriticVerdictSource::Host.as_str(), "host");
+
+        let round = |source| DualPersonaReviewRound {
+            round: 1,
+            literary_critic: default_notes(),
+            craft_technician: default_notes(),
+            genre_reader: default_notes(),
+            priority_actions: Vec::new(),
+            critic_rubric_version: Some(MCKEE_SCENE_CRITIC_RUBRIC_VERSION.into()),
+            critic_verdict: Some(verdict(CriticVerdictKind::Agree, CriticVerdictKind::Agree)),
+            critic_verdict_source: source,
+        };
+        // A route-produced verdict omits the marker entirely, so pre-existing
+        // rounds and route payloads keep their exact bytes.
+        let route_json = serde_json::to_value(round(Some(CriticVerdictSource::Route))).unwrap();
+        assert!(
+            route_json.get("critic_verdict_source").is_none(),
+            "{route_json}"
+        );
+        let legacy_json = serde_json::to_value(round(None)).unwrap();
+        assert_eq!(legacy_json, route_json);
+        // A host-supplied verdict is tagged, and never satisfies gating.
+        let host_json = serde_json::to_value(round(Some(CriticVerdictSource::Host))).unwrap();
+        assert_eq!(host_json["critic_verdict_source"], "host");
+        let host: DualPersonaReviewRound = serde_json::from_value(host_json).unwrap();
+        assert!(host.route_critic_verdict().is_none());
+        let route: DualPersonaReviewRound = serde_json::from_value(legacy_json).unwrap();
+        assert!(route.route_critic_verdict().is_some());
+    }
+
+    fn default_notes() -> crate::models::PersonaReviewNotes {
+        crate::models::PersonaReviewNotes {
+            persona: "literary_critic".into(),
+            ..Default::default()
+        }
     }
 
     #[test]
